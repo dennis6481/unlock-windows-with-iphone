@@ -1,4 +1,5 @@
 // Modified by Codex on 26 Sep 2026
+// Modified by Rui MA on 26 Sep 2026
 
 @preconcurrency import CoreBluetooth
 import Foundation
@@ -43,6 +44,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
     private let keyStore: SecureEnclaveKeyStore
     private(set) var lastError: String?
     var onError: ((String) -> Void)?
+    var onResult: ((String) -> Void)?
     private lazy var centralManager = CBCentralManager(
         delegate: self,
         queue: nil,
@@ -55,6 +57,15 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
     private var challengeCharacteristic: CBCharacteristic?
     private var assertionCharacteristic: CBCharacteristic?
     private var resultCharacteristic: CBCharacteristic?
+    private var requestMode: RequestMode = .authenticate
+    private var challengeNotificationsReady = false
+    private var resultNotificationsReady = false
+    private var requestSent = false
+
+    private enum RequestMode {
+        case authenticate
+        case enrollment
+    }
 
     init(keyStore: SecureEnclaveKeyStore = SecureEnclaveKeyStore()) {
         self.keyStore = keyStore
@@ -63,7 +74,19 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
     }
 
     func start() throws {
+        try begin(mode: .authenticate)
+    }
+
+    func startEnrollment() throws {
+        try begin(mode: .enrollment)
+    }
+
+    private func begin(mode: RequestMode) throws {
         lastError = nil
+        requestMode = mode
+        requestSent = false
+        challengeNotificationsReady = false
+        resultNotificationsReady = false
         wantsToScan = true
         guard centralManager.state == .poweredOn else {
             throw BluetoothUnlockError.bluetoothUnavailable(centralManager.state)
@@ -199,12 +222,13 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
                 }
             }
 
-            guard let requestCharacteristic, challengeCharacteristic != nil, assertionCharacteristic != nil else {
-                record(error: BluetoothUnlockError.characteristicMissing("request/challenge/assertion"))
+            guard requestCharacteristic != nil,
+                  challengeCharacteristic != nil,
+                  assertionCharacteristic != nil,
+                  resultCharacteristic != nil else {
+                record(error: BluetoothUnlockError.characteristicMissing("request/challenge/assertion/result"))
                 return
             }
-
-            peripheral.writeValue(Data([0x01]), for: requestCharacteristic, type: .withResponse)
             return
         }
         record(error: BluetoothUnlockError.connectionFailed(error.localizedDescription))
@@ -216,6 +240,16 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
         error: Error?
     ) {
         guard let error else {
+            if characteristic.uuid == Self.resultCharacteristicUUID {
+                guard let value = characteristic.value,
+                      let result = String(data: value, encoding: .utf8) else {
+                    record(error: BluetoothUnlockError.transportEncodingFailed("Windows result 不是 UTF-8 文本。"))
+                    return
+                }
+                onResult?(result)
+                return
+            }
+
             guard characteristic.uuid == Self.challengeCharacteristicUUID,
                   let value = characteristic.value else {
                 return
@@ -267,9 +301,52 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
             record(error: BluetoothUnlockError.connectionFailed(error.localizedDescription))
             return
         }
-        guard characteristic.isNotifying else {
-            record(error: BluetoothUnlockError.connectionFailed("Windows challenge characteristic 没有成功订阅。"))
+
+        if characteristic.uuid == Self.challengeCharacteristicUUID {
+            challengeNotificationsReady = characteristic.isNotifying
+            if requestMode == .authenticate && !characteristic.isNotifying {
+                record(error: BluetoothUnlockError.connectionFailed("Windows challenge characteristic 没有成功订阅。"))
+                return
+            }
+        } else if characteristic.uuid == Self.resultCharacteristicUUID {
+            resultNotificationsReady = characteristic.isNotifying
+            if !characteristic.isNotifying {
+                record(error: BluetoothUnlockError.connectionFailed("Windows result characteristic 没有成功订阅。"))
+                return
+            }
+        }
+
+        sendPendingRequestIfReady(to: peripheral)
+    }
+
+    private func sendPendingRequestIfReady(to peripheral: CBPeripheral) {
+        guard !requestSent, let requestCharacteristic else {
             return
+        }
+        guard resultNotificationsReady else {
+            return
+        }
+        if requestMode == .authenticate && !challengeNotificationsReady {
+            return
+        }
+
+        do {
+            var request: Data
+            switch requestMode {
+            case .authenticate:
+                request = Data([0x01])
+            case .enrollment:
+                let publicKey = try keyStore.publicKeyRawRepresentation()
+                guard publicKey.count == 65 else {
+                    throw BluetoothUnlockError.transportEncodingFailed("登记公钥必须是 65 字节。")
+                }
+                request = Data([0x02])
+                request.append(publicKey)
+            }
+            peripheral.writeValue(request, for: requestCharacteristic, type: .withResponse)
+            requestSent = true
+        } catch {
+            record(error: error)
         }
     }
 
@@ -283,5 +360,8 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
         challengeCharacteristic = nil
         assertionCharacteristic = nil
         resultCharacteristic = nil
+        challengeNotificationsReady = false
+        resultNotificationsReady = false
+        requestSent = false
     }
 }

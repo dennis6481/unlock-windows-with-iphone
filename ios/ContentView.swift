@@ -1,4 +1,5 @@
 // Modified by Codex on 26 Sep 2026
+// Modified by Rui MA on 26 Sep 2026
 
 import SwiftUI
 
@@ -18,12 +19,15 @@ struct ContentView: View {
                     )
                     ActionSection(
                         prepareKey: model.prepareKey,
-                        signTestChallenge: model.signTestChallenge
+                        signTestChallenge: model.signTestChallenge,
+                        copyPublicKey: model.copyPublicKey,
+                        copyStatus: model.publicKeyCopyStatus
                     )
                     BluetoothSection(
                         status: model.bluetoothStatus,
                         errorMessage: model.bluetoothError,
                         start: model.startBluetooth,
+                        enroll: model.startEnrollment,
                         stop: model.stopBluetooth
                     )
                     ScopeSection()
@@ -90,6 +94,8 @@ private struct KeyStatusSection: View {
 private struct ActionSection: View {
     let prepareKey: () -> Void
     let signTestChallenge: () -> Void
+    let copyPublicKey: () -> Void
+    let copyStatus: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -97,6 +103,13 @@ private struct ActionSection: View {
                 .buttonStyle(.borderedProminent)
             Button("执行本地签名测试", action: signTestChallenge)
                 .buttonStyle(.bordered)
+            Button("复制原始公钥（Windows 登记用）", action: copyPublicKey)
+                .buttonStyle(.bordered)
+            if let copyStatus {
+                Text(copyStatus)
+                    .font(.footnote)
+                    .foregroundStyle(.green)
+            }
         }
     }
 }
@@ -116,6 +129,7 @@ private struct BluetoothSection: View {
     let status: String
     let errorMessage: String?
     let start: () -> Void
+    let enroll: () -> Void
     let stop: () -> Void
 
     var body: some View {
@@ -132,6 +146,8 @@ private struct BluetoothSection: View {
             HStack {
                 Button("开始连接", action: start)
                     .buttonStyle(.borderedProminent)
+                Button("登记到 Windows", action: enroll)
+                    .buttonStyle(.bordered)
                 Button("停止", action: stop)
                     .buttonStyle(.bordered)
             }

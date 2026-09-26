@@ -1,9 +1,11 @@
 // Modified by Rui MA on 26 Sep 2026
 // Modified by Codex on 26 Sep 2026
+// Modified by Rui MA on 26 Sep 2026
 
 import CryptoKit
 import Foundation
 import Observation
+import UIKit
 
 @MainActor
 @Observable
@@ -30,6 +32,7 @@ final class UnlockSetupModel {
 
     var state: State = .idle
     var publicKeyFingerprint: String?
+    var publicKeyCopyStatus: String?
     var lastError: String?
     var lastTestResult: String?
     var bluetoothStatus = "未启动"
@@ -44,6 +47,10 @@ final class UnlockSetupModel {
         self.bluetoothAuthenticator.onError = { [weak self] message in
             self?.bluetoothStatus = "连接失败"
             self?.bluetoothError = message
+        }
+        self.bluetoothAuthenticator.onResult = { [weak self] result in
+            self?.bluetoothStatus = "Windows 返回：\(result)"
+            self?.bluetoothError = nil
         }
     }
 
@@ -84,6 +91,18 @@ final class UnlockSetupModel {
         }
     }
 
+    func copyPublicKey() {
+        lastError = nil
+        publicKeyCopyStatus = nil
+
+        do {
+            UIPasteboard.general.string = try keyStore.publicKeyHexRepresentation()
+            publicKeyCopyStatus = "原始公钥已复制，可在 Windows PairingTool 中读取。"
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
     func startBluetooth() {
         bluetoothError = nil
         do {
@@ -91,6 +110,17 @@ final class UnlockSetupModel {
             bluetoothStatus = "正在扫描 Windows GATT host"
         } catch {
             bluetoothStatus = "连接失败"
+            bluetoothError = error.localizedDescription
+        }
+    }
+
+    func startEnrollment() {
+        bluetoothError = nil
+        do {
+            try bluetoothAuthenticator.startEnrollment()
+            bluetoothStatus = "正在向 Windows 发送登记请求，请确认 Windows 通知"
+        } catch {
+            bluetoothStatus = "登记失败"
             bluetoothError = error.localizedDescription
         }
     }

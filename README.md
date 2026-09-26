@@ -11,25 +11,26 @@
 
 ## 当前状态
 
-当前已经完成协议、安全密钥存储、iOS BLE Central 骨架，以及 Windows 侧的协议/CNG 验证代码：
+当前已经完成协议、安全密钥存储、iOS BLE Central 骨架，以及 Windows 侧的协议/CNG 验证、前台 GATT 传输和首次登记原型：
 
 - iOS App 的 Secure Enclave P-256 密钥生成与 Keychain 持久化。
 - Keychain 使用 `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`；这允许设备重启后完成第一次解锁之后，在 iPhone 再次锁屏时读取密钥并签名。
 - 明确的 challenge/签名数据结构和跨平台固定二进制签名载荷，JSON 只作传输外壳，见 [`protocol/README.md`](protocol/README.md)。
 - App 内的本地签名和本地公钥验证测试，以及可见的错误信息。
-- iOS CoreBluetooth Central 状态机：扫描、连接、状态恢复、challenge notify、签名和 assertion 回写；Windows GATT host 尚未实现。
+- iOS CoreBluetooth Central 状态机：扫描、连接、状态恢复、challenge notify、签名和 assertion 回写；Windows 已有可运行的前台 GATT host。
 - iOS 后台蓝牙中心角色所需的 Info.plist 声明。
 - Windows CNG/BCrypt P-256 公钥导入、SHA-256 和原始 `r || s` 签名验证代码。
 - Windows 与 iOS 一致的签名载荷构造代码，以及供未来 LSA 使用的无密码提交缓冲区定义。
 
 当前还没有完成：
 
-- Windows GATT Server、配对工具和完整的跨平台 BLE 传输。
+- Windows GATT host 的后台/锁屏生命周期、package identity 和完整安装流程。
+- Windows `PairingTool` 的公钥确认通知和受保护登记存储已经有原型，iOS UI 已支持通过 GATT 发送登记公钥；剪贴板复制仅作为备用调试路径。
 - Windows Credential Provider 的生产实现。
 - 无密码的 LSA Authentication Package。
 - “检测到 iPhone 后自动解锁”的端到端流程。
 
-Windows 侧当前没有可安装的服务、Credential Provider 或 LSA 包；现有 CNG/protocol 源码需要在 Windows SDK 环境中编译验证。
+Windows 侧当前没有可安装的服务、Credential Provider 或 LSA 包；前台 GATT、IPC、受保护公钥登记和配对确认工具可以在 Windows SDK 环境中编译验证。
 
 不会用软件私钥、密码硬编码、静默重试或吞掉异常来伪造这些功能。某个阶段未实现或系统拒绝访问时，App/服务应报告明确错误。
 
@@ -137,7 +138,7 @@ Windows Hello / WebAuthn 可以作为交互式登录或凭据能力的研究方�
 
 ## Windows：安装方式
 
-完整 Windows 组件尚未实现，因此现在没有可安装的 Windows MSI、服务或 Credential Provider，也不应把空目录注册为系统组件。当前仓库已经有协议/CNG 库源码，但只能在 Windows SDK 环境中构建。
+完整 Windows 组件尚未实现，因此现在没有可安装的 Windows MSI、服务或 Credential Provider，也不应把原型注册为系统组件。当前仓库已经有协议/CNG 库、前台 GATT host、IPC host 和 PairingTool，但仍只能在 Windows SDK 环境中构建验证。
 
 下一阶段的开发环境预期为：
 
@@ -154,26 +155,45 @@ cmake -S windows -B windows/build -A x64
 cmake --build windows/build --config Debug
 ```
 
-Windows SDK 目标仍需要在 Windows 开发环境中完成实际构建验证；没有把跨平台语法检查结果写成 Windows 构建成功的事实。
+也可以使用 `windows/Makefile` 简化命令：
 
-在 Windows 端可以运行的第一个里程碑应是协议验证工具和 GATT host，而不是直接注册 LSA 包。当前先加入协议自测目标，验证固定签名载荷、CNG 验签成功路径和篡改签名拒绝路径；随后再实现 GATT host。完整里程碑仍必须证明：公钥登记、challenge 新鲜度、签名验证、超时、重放拒绝以及锁屏时 GATT host 的生命周期都正确。
+```powershell
+cd windows
+make                 # 构建并运行测试
+make build           # 只构建
+make test            # 构建并运行测试
+```
+
+如果没有 GNU Make，在 Visual Studio Developer PowerShell/Command Prompt 中使用原生命令：
+
+```powershell
+nmake /f Makefile build
+nmake /f Makefile test
+```
+
+Windows SDK 目标已在当前 Windows 环境完成构建和本机 CTest 验证；这仍不等于后台锁屏生命周期、Credential Provider 或 LSA 已经实现。
+
+在 Windows 端可以运行的当前里程碑是协议验证工具、前台 GATT host、UnlockService IPC host 和 PairingTool，而不是直接注册 LSA 包。PairingTool 通过 Windows 通知要求用户确认后写入 DPAPI 保护的公钥；GATT host 不会自动登记公钥。完整里程碑仍必须证明：公钥到 Windows SID 的映射、challenge 新鲜度、签名验证、超时、重放拒绝以及锁屏时 GATT host 的生命周期都正确。
 
 ## Windows：使用方法（当前阶段）
 
-当前还不能完成端到端自动解锁，因为 Windows 认证组件尚未实现。实现后会把下面的流程补成可复制的命令和安装脚本：
+当前还不能完成端到端自动解锁，因为 Windows 认证组件尚未实现。当前原型可以先按下面的流程登记公钥并验证 BLE/IPC 链路：
 
-1. 用 `PairingTool` 完成一次性配对并人工确认公钥指纹。
-2. 安装并启动带 package identity 的 `GattHost`，再以受保护的 Windows Service 身份运行 `UnlockService`。
-3. 锁屏时由认证链路生成 challenge，iPhone 返回签名 assertion。
-4. `UnlockService` 和 `LSAAuthenticationPackage` 独立验证 assertion，并将公钥映射到指定 Windows 用户。
-5. 认证包返回 Windows 登录 Token；Windows Hello/PIN/密码仍可作为用户主动选择的 fallback。
-6. 任一验证、超时、权限或系统 API 错误都停止本次自动解锁并保留明确日志。
+1. 启动 `unlock_service_host` 和前台 `unlock_gatt_host`。
+2. 在 iPhone 点击“准备密钥”，再点击“登记到 Windows”；Windows 通知显示候选公钥指纹，确认与 iPhone 指纹一致后点击 Confirm enrollment。
+3. iPhone 再点击“开始连接”；它通过 GATT 发送 assertion，UnlockService 从受保护登记存储加载公钥并返回验证结果。
+4. 后续再安装带 package identity 的 `GattHost`，并将 `UnlockService` 转换为受保护的 Windows Service。
+5. 锁屏时由认证链路生成 challenge，iPhone 返回签名 assertion。
+6. `UnlockService` 和 `LSAAuthenticationPackage` 独立验证 assertion，并将公钥映射到指定 Windows 用户。
+7. 认证包返回 Windows 登录 Token；Windows Hello/PIN/密码仍可作为用户主动选择的 fallback。
+8. 任一验证、超时、权限或系统 API 错误都停止本次自动解锁并保留明确日志。
 
 ## 当前验证状态
 
 - `ios/App/Info.plist` 已通过 `plutil -lint`。
 - iOS 核心安全、协议和 BLE 源码已通过 Swift 类型检查。
 - `windows/Protocol/SigningPayload.cpp` 已通过 macOS 上的 C++20 语法检查。
+- 当前 Windows SDK 构建已通过全部目标，3 个 CTest 均通过；PairingTool 的帮助命令 smoke test 通过。
 - Xcode 工程可以被 `xcodebuild -list` 正确解析。
 - 完整 Xcode 构建曾被当前环境的 `swift-plugin-server`/sandbox 限制阻断；这属于构建环境限制，不能当作完整构建成功，也不能当作源码已经在真实设备上验证。
 
@@ -194,6 +214,7 @@ LSA 包属于系统级登录组件。未完成隔离测试、签名、账户映�
 ## Windows 当前推进状态
 
 - `windows/GattHost` 已有可编译、可运行的前台 GATT Server 原型：创建项目定义的 service 和四个 characteristic，接收 `0x01` request，发送 challenge，并接收 assertion 传输帧。
-- `windows/UnlockService/UnlockServiceCore` 已独立实现 challenge 新鲜度、单次使用、assertion JSON 解析、P-256 公钥指纹匹配和 CNG 验签；它还没有被提升为真正的 Session 0 Windows Service，也没有接入 IPC。
-- Windows 本机的 `unlock_protocol_tests` 和 `unlock_service_tests` 均已通过；`GattHost` 已通过 Windows SDK/C++/WinRT 编译并完成本机启动烟雾测试。
-- 下一步是把 GATT host 与服务核心通过受保护 IPC 连接起来，再实现 package identity/MSIX、后台/锁屏生命周期和公钥登记；在这些完成前不会接入 Credential Provider 或 LSA 注册。
+- `windows/UnlockService/UnlockServiceCore` 已独立实现 challenge 新鲜度、单次使用、assertion JSON 解析、P-256 公钥指纹匹配和 CNG 验签；`unlock_service_host` 通过同用户 named pipe 使用它，并从 DPAPI/ACL 保护的登记文件加载公钥。
+- `unlock_pairing_tool` 已实现 Windows 通知确认按钮；iOS 可通过 GATT 发送登记候选公钥，但没有点击 Confirm 就不会写入公钥。
+- Windows 本机的 `unlock_protocol_tests`、`unlock_service_tests` 和 `unlock_service_ipc_tests` 均已通过；全部 Windows 目标已完成 SDK 构建。
+- 下一步是把当前前台登记流程提升为 package identity/MSIX、后台/锁屏生命周期、SID 映射和真正的 Windows Service；在这些完成前不会接入 Credential Provider 或 LSA 注册。

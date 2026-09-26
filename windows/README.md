@@ -7,7 +7,7 @@ Windows is being implemented as separate components because they run under diffe
 ## Components
 
 - `GattHost`: C++/WinRT foreground transport prototype is now present in `GattHost/main.cpp`. It creates the service, four characteristics, challenge notifications and assertion/result transport. Packaging and locked-screen/background lifecycle are still pending.
-- `UnlockService`: `UnlockServiceCore` now owns challenge freshness, single-use state, assertion JSON parsing, key fingerprint matching and CNG verification in an isolated library. The Session 0 service process and IPC endpoint are still pending.
+- `UnlockService`: `UnlockServiceCore` now owns challenge freshness, single-use state, assertion JSON parsing, key fingerprint matching and CNG verification in an isolated library. `unlock_service_host` now exercises it through a same-user named-pipe boundary; conversion to a real Session 0 service and enrollment storage are still pending.
 - `CredentialProvider`: LogonUI tile for `CPUS_UNLOCK_WORKSTATION`. It serializes the custom authentication payload; it is not the component that verifies the iPhone signature.
 - `LSAAuthenticationPackage`: LSA-loaded package that validates the custom payload, maps the enrolled public key to a Windows account, and returns the token information required for the logon session.
 - `PairingTool`: one-time enrollment and public-key fingerprint confirmation.
@@ -24,7 +24,7 @@ cmake --build windows/build --config Debug
 ctest --test-dir windows/build -C Debug --output-on-failure
 ```
 
-The current Windows build has three targets: `unlock_protocol_tests`, `unlock_service_tests` and the foreground `unlock_gatt_host`. The local NMake/SDK setup can run the same checks with `ctest --test-dir windows/build --output-on-failure`.
+The current Windows build has four runnable targets: `unlock_protocol_tests`, `unlock_service_tests`, `unlock_service_host` and the foreground `unlock_gatt_host`. The local NMake/SDK setup can run the tests with `ctest --test-dir windows/build --output-on-failure`.
 
 The current macOS workspace cannot compile Windows SDK code. A Windows build is required before any LSA registration is considered.
 

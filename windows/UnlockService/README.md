@@ -2,7 +2,7 @@
 
 # UnlockService core
 
-`UnlockServiceCore` is the security-state library that will be hosted by the future Session 0 Windows Service. It currently:
+`UnlockServiceCore` is the security-state library that is now exercised through the foreground `unlock_service_host` named-pipe prototype and will later be hosted by the Session 0 Windows Service. It currently:
 
 - issues version-1 challenges with a fresh request ID and 32-byte nonce;
 - serializes the challenge using the protocol JSON envelope;
@@ -12,4 +12,4 @@
 - requires the raw public key to match the explicitly installed enrollment key;
 - rebuilds the fixed signing payload and verifies the raw 64-byte ECDSA signature through CNG.
 
-It does not yet persist enrolled keys, map a key to a Windows SID, expose IPC, or create a Windows Service. Those boundaries remain deliberately outside the GATT transport process and must be added before any unlock decision is connected to LogonUI or LSA.
+The IPC prototype uses a local named pipe, checks that the connecting process belongs to the same Windows user, and supports issue-challenge and verify-assertion requests. It does not yet persist enrolled keys, map a key to a Windows SID, or create a Windows Service. The prototype intentionally starts without an enrollment key, so a valid iPhone assertion returns `key_not_enrolled` until the pairing flow is implemented.

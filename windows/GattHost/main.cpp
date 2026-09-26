@@ -1,8 +1,8 @@
 // Created by Rui MA on 26 Sep 2026
 
+#include "UnlockServiceIpc.h"
+
 #include <Windows.h>
-#include <objbase.h>
-#include <bcrypt.h>
 
 #include <winrt/Windows.Devices.Bluetooth.GenericAttributeProfile.h>
 #include <winrt/Windows.Foundation.h>
@@ -10,13 +10,9 @@
 #include <winrt/Windows.Storage.Streams.h>
 #include <winrt/base.h>
 
-#include <array>
 #include <cstdint>
 #include <functional>
-#include <iomanip>
 #include <iostream>
-#include <memory>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -34,99 +30,10 @@ constexpr std::wstring_view kChallengeCharacteristicUuid = L"F1E2D3C4-B5A6-4789-
 constexpr std::wstring_view kAssertionCharacteristicUuid = L"F1E2D3C4-B5A6-4789-8012-3456789ABCD3";
 constexpr std::wstring_view kResultCharacteristicUuid = L"F1E2D3C4-B5A6-4789-8012-3456789ABCD4";
 
-constexpr std::string_view kAudience = "windows-unlock";
 constexpr std::size_t kMaxTransportFrameSize = 4096;
 
 std::string narrow(const hstring& value) {
     return to_string(value);
-}
-
-std::string guidToString(const GUID& value) {
-    wchar_t buffer[40]{};
-    if (StringFromGUID2(value, buffer, static_cast<int>(std::size(buffer))) == 0) {
-        throw std::runtime_error("StringFromGUID2 failed");
-    }
-
-    std::wstring result(buffer);
-    if (!result.empty() && result.front() == L'{') {
-        result.erase(result.begin());
-    }
-    if (!result.empty() && result.back() == L'}') {
-        result.pop_back();
-    }
-
-    return to_string(result);
-}
-
-void fillRandom(std::uint8_t* output, const ULONG size) {
-    const auto status = BCryptGenRandom(
-        nullptr,
-        output,
-        size,
-        BCRYPT_USE_SYSTEM_PREFERRED_RNG
-    );
-    if (status < 0) {
-        throw winrt::hresult_error(HRESULT_FROM_NT(status));
-    }
-}
-
-std::string base64Encode(const std::uint8_t* bytes, const std::size_t size) {
-    constexpr char alphabet[] =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-    std::string result;
-    result.reserve(((size + 2) / 3) * 4);
-    for (std::size_t index = 0; index < size; index += 3) {
-        const auto remaining = size - index;
-        const auto first = bytes[index];
-        const auto second = remaining > 1 ? bytes[index + 1] : 0;
-        const auto third = remaining > 2 ? bytes[index + 2] : 0;
-
-        result.push_back(alphabet[first >> 2]);
-        result.push_back(alphabet[((first & 0x03) << 4) | (second >> 4)]);
-        result.push_back(remaining > 1 ? alphabet[((second & 0x0f) << 2) | (third >> 6)] : '=');
-        result.push_back(remaining > 2 ? alphabet[third & 0x3f] : '=');
-    }
-    return result;
-}
-
-struct ChallengeFrame final {
-    std::string requestId;
-    std::array<std::uint8_t, 32> nonce{};
-    std::int64_t issuedAtMilliseconds = 0;
-
-    [[nodiscard]] std::string toJson() const {
-        const auto nonceBase64 = base64Encode(nonce.data(), nonce.size());
-        std::ostringstream output;
-        output << "{\"audience\":\"" << kAudience
-               << "\",\"issuedAtMilliseconds\":" << issuedAtMilliseconds
-               << ",\"nonce\":\"" << nonceBase64
-               << "\",\"requestID\":\"" << requestId
-               << "\",\"version\":1}";
-        return output.str();
-    }
-};
-
-ChallengeFrame makeChallenge() {
-    GUID requestId{};
-    const auto guidStatus = CoCreateGuid(&requestId);
-    if (FAILED(guidStatus)) {
-        throw winrt::hresult_error(guidStatus);
-    }
-
-    ChallengeFrame result;
-    result.requestId = guidToString(requestId);
-    fillRandom(result.nonce.data(), static_cast<ULONG>(result.nonce.size()));
-
-    FILETIME now{};
-    GetSystemTimeAsFileTime(&now);
-    ULARGE_INTEGER ticks{};
-    ticks.LowPart = now.dwLowDateTime;
-    ticks.HighPart = now.dwHighDateTime;
-    constexpr std::uint64_t kUnixEpochOffset100Nanoseconds = 116444736000000000ULL;
-    const auto unixTicks = ticks.QuadPart - kUnixEpochOffset100Nanoseconds;
-    result.issuedAtMilliseconds = static_cast<std::int64_t>(unixTicks / 10000ULL);
-    return result;
 }
 
 IBuffer makeBuffer(const std::string& value) {
@@ -280,10 +187,10 @@ private:
         try {
             auto request = co_await args.GetRequestAsync();
             if (request) {
-                handler(request);
                 if (request.Option() == GattWriteOption::WriteWithResponse) {
                     request.Respond();
                 }
+                handler(request);
             }
         } catch (const hresult_error& error) {
             std::cerr << "[GattHost] GATT write handler failed: "
@@ -304,12 +211,21 @@ private:
                 return;
             }
 
-            const auto challenge = makeChallenge();
-            const auto json = challenge.toJson();
-            std::cout << "[GattHost] request accepted; requestID=" << challenge.requestId << "\n";
-            std::cout << "[GattHost] challenge notification length=" << json.size() << "\n";
+            std::cout << "[GattHost] request frame received; asking UnlockService for challenge\n";
+            const auto response = unlock_windows::service::ipc::call(
+                unlock_windows::service::ipc::Operation::issueChallenge,
+                {}
+            );
+            if (response.status != unlock_windows::service::ipc::Status::success) {
+                throw std::runtime_error(
+                    "UnlockService challenge request failed: " + response.payload
+                );
+            }
+
+            std::cout << "[GattHost] request accepted; challenge issued by UnlockService\n";
+            std::cout << "[GattHost] challenge notification length=" << response.payload.size() << "\n";
             logNotificationResults(
-                challengeCharacteristic_.NotifyValueAsync(makeBuffer(json)).get(),
+                challengeCharacteristic_.NotifyValueAsync(makeBuffer(response.payload)).get(),
                 "challenge"
             );
         });
@@ -323,17 +239,25 @@ private:
                 return;
             }
 
-            const auto text = bytesAsText(bytes);
             std::cout << "[GattHost] assertion frame received, length=" << bytes.size() << "\n";
-            std::cout << "[GattHost] assertion JSON is intentionally not trusted by GattHost\n";
+            const auto response = unlock_windows::service::ipc::call(
+                unlock_windows::service::ipc::Operation::verifyAssertion,
+                bytesAsText(bytes)
+            );
+            if (response.status != unlock_windows::service::ipc::Status::success) {
+                std::cerr << "[GattHost] UnlockService verification failed: "
+                          << response.payload << "\n";
+            } else {
+                std::cout << "[GattHost] UnlockService verification result received\n";
+            }
 
-            const std::string result =
-                "{\"authenticated\":false,\"status\":\"transport-received\"}";
+            const std::string result = response.status == unlock_windows::service::ipc::Status::success
+                ? response.payload
+                : "{\"authenticated\":false,\"status\":\"service_unavailable\"}";
             logNotificationResults(
                 resultCharacteristic_.NotifyValueAsync(makeBuffer(result)).get(),
                 "result"
             );
-            (void)text;
         });
     }
 

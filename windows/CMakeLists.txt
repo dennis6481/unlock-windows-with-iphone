@@ -24,6 +24,19 @@ target_compile_features(unlock_protocol_crypto PUBLIC cxx_std_20)
 target_compile_definitions(unlock_protocol_crypto PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(unlock_protocol_crypto PUBLIC bcrypt)
 
+add_library(unlock_service_ipc STATIC
+    UnlockService/UnlockServiceIpc.cpp
+)
+
+target_include_directories(unlock_service_ipc
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/UnlockService
+)
+
+target_compile_features(unlock_service_ipc PUBLIC cxx_std_20)
+target_compile_definitions(unlock_service_ipc PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(unlock_service_ipc PUBLIC advapi32)
+
 add_library(unlock_service_core STATIC
     UnlockService/UnlockServiceCore.cpp
 )
@@ -58,6 +71,16 @@ if(BUILD_TESTING)
     target_link_libraries(unlock_service_tests PRIVATE unlock_service_core unlock_protocol_crypto windowsapp bcrypt)
 
     add_test(NAME unlock_service_tests COMMAND unlock_service_tests)
+
+    add_executable(unlock_service_ipc_tests
+        UnlockServiceIpcTests/main.cpp
+    )
+
+    target_compile_features(unlock_service_ipc_tests PRIVATE cxx_std_20)
+    target_compile_definitions(unlock_service_ipc_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_link_libraries(unlock_service_ipc_tests PRIVATE unlock_service_ipc advapi32)
+
+    add_test(NAME unlock_service_ipc_tests COMMAND unlock_service_ipc_tests)
 endif()
 
 add_executable(unlock_gatt_host
@@ -66,7 +89,15 @@ add_executable(unlock_gatt_host
 
 target_compile_features(unlock_gatt_host PRIVATE cxx_std_20)
 target_compile_definitions(unlock_gatt_host PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_libraries(unlock_gatt_host PRIVATE windowsapp bcrypt)
+target_link_libraries(unlock_gatt_host PRIVATE unlock_service_ipc windowsapp bcrypt)
+
+add_executable(unlock_service_host
+    UnlockService/main.cpp
+)
+
+target_compile_features(unlock_service_host PRIVATE cxx_std_20)
+target_compile_definitions(unlock_service_host PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(unlock_service_host PRIVATE unlock_service_core unlock_service_ipc windowsapp bcrypt advapi32)
 
 # UnlockService, CredentialProvider and LSAAuthenticationPackage remain
 # intentionally separate targets. They will be added only when each target

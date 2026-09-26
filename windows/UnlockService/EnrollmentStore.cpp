@@ -1,5 +1,6 @@
 // Created by Rui MA on 26 Sep 2026
 // Modified by Rui MA on 26 Sep 2026
+// Modified by Codex on 26 Sep 2026
 
 #include "EnrollmentStore.h"
 
@@ -21,9 +22,12 @@
 namespace unlock_windows::service {
 namespace {
 
-constexpr std::uint32_t kFileMagic = 0x314B4E45; // "ENK1" in little-endian memory
+constexpr std::uint32_t kFileMagic = 0x324B4E45; // "ENK2" in little-endian memory
 constexpr std::uint16_t kFileVersion = 1;
 constexpr std::size_t kRawPublicKeySize = 65;
+constexpr std::uint32_t kRecordMagic = 0x31434E45; // "ENC1" in little-endian memory
+constexpr std::uint16_t kRecordVersion = 1;
+constexpr std::size_t kMaxAccountSidBytes = 1024;
 
 #pragma pack(push, 1)
 struct FileHeader final {
@@ -31,9 +35,17 @@ struct FileHeader final {
     std::uint16_t version;
     std::uint16_t encryptedSize;
 };
+
+struct RecordHeader final {
+    std::uint32_t magic;
+    std::uint16_t version;
+    std::uint16_t publicKeySize;
+    std::uint16_t accountSidBytes;
+};
 #pragma pack(pop)
 
 static_assert(sizeof(FileHeader) == 8);
+static_assert(sizeof(RecordHeader) == 10);
 
 [[nodiscard]] std::string win32Error(const char* operation) {
     const DWORD error = GetLastError();
@@ -91,7 +103,7 @@ void ensureParentDirectory(const std::wstring& path) {
     }
 }
 
-std::wstring currentUserSid() {
+std::wstring currentProcessUserSid() {
     HANDLE token = nullptr;
     requireWin32(
         OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token),
@@ -132,7 +144,7 @@ SECURITY_ATTRIBUTES protectedFileAttributes(PSECURITY_DESCRIPTOR& descriptor) {
     // decrypt it. The user SID must be explicit; OW means Owner Rights and
     // does not reliably grant the creating process read access.
     const std::wstring sddl =
-        L"D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;" + currentUserSid() + L")";
+        L"D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;" + currentProcessUserSid() + L")";
     requireWin32(
         ConvertStringSecurityDescriptorToSecurityDescriptorW(
             sddl.c_str(),
@@ -151,11 +163,11 @@ SECURITY_ATTRIBUTES protectedFileAttributes(PSECURITY_DESCRIPTOR& descriptor) {
 }
 
 std::vector<std::uint8_t> protect(
-    const std::vector<std::uint8_t>& rawPublicKey
+    const std::vector<std::uint8_t>& plaintext
 ) {
     DATA_BLOB input{
-        static_cast<DWORD>(rawPublicKey.size()),
-        const_cast<BYTE*>(reinterpret_cast<const BYTE*>(rawPublicKey.data()))
+        static_cast<DWORD>(plaintext.size()),
+        const_cast<BYTE*>(reinterpret_cast<const BYTE*>(plaintext.data()))
     };
     DATA_BLOB output{};
     constexpr wchar_t description[] = L"Unlock Windows with iPhone enrollment key v1";
@@ -202,7 +214,80 @@ std::vector<std::uint8_t> unprotect(
 
     std::vector<std::uint8_t> result(output.pbData, output.pbData + output.cbData);
     LocalFree(output.pbData);
-    validatePublicKey(result);
+    return result;
+}
+
+std::vector<std::uint8_t> serializeRecord(const EnrollmentRecord& record) {
+    validatePublicKey(record.publicKey);
+    if (record.accountSid.empty() ||
+        record.accountSid.size() * sizeof(wchar_t) > kMaxAccountSidBytes ||
+        record.accountSid.size() * sizeof(wchar_t) > UINT16_MAX) {
+        throw std::invalid_argument("enrollment account SID has an invalid size");
+    }
+
+    PSID parsedSid = nullptr;
+    requireWin32(
+        ConvertStringSidToSidW(record.accountSid.c_str(), &parsedSid),
+        "ConvertStringSidToSidW"
+    );
+    LocalFree(parsedSid);
+
+    const auto sidBytes = record.accountSid.size() * sizeof(wchar_t);
+    RecordHeader header{
+        kRecordMagic,
+        kRecordVersion,
+        static_cast<std::uint16_t>(record.publicKey.size()),
+        static_cast<std::uint16_t>(sidBytes)
+    };
+    std::vector<std::uint8_t> result(sizeof(header) + record.publicKey.size() + sidBytes);
+    std::memcpy(result.data(), &header, sizeof(header));
+    std::memcpy(
+        result.data() + sizeof(header),
+        record.publicKey.data(),
+        record.publicKey.size()
+    );
+    std::memcpy(
+        result.data() + sizeof(header) + record.publicKey.size(),
+        record.accountSid.data(),
+        sidBytes
+    );
+    return result;
+}
+
+EnrollmentRecord parseRecord(const std::vector<std::uint8_t>& plaintext) {
+    if (plaintext.size() < sizeof(RecordHeader)) {
+        throw std::runtime_error("enrollment record is too small");
+    }
+
+    RecordHeader header{};
+    std::memcpy(&header, plaintext.data(), sizeof(header));
+    if (header.magic != kRecordMagic || header.version != kRecordVersion ||
+        header.publicKeySize != kRawPublicKeySize ||
+        header.accountSidBytes == 0 || header.accountSidBytes > kMaxAccountSidBytes ||
+        header.accountSidBytes % sizeof(wchar_t) != 0 ||
+        plaintext.size() != sizeof(header) + header.publicKeySize + header.accountSidBytes) {
+        throw std::runtime_error("enrollment record header is invalid");
+    }
+
+    EnrollmentRecord result;
+    result.publicKey.assign(
+        plaintext.begin() + sizeof(header),
+        plaintext.begin() + sizeof(header) + header.publicKeySize
+    );
+    validatePublicKey(result.publicKey);
+    result.accountSid.resize(header.accountSidBytes / sizeof(wchar_t));
+    std::memcpy(
+        result.accountSid.data(),
+        plaintext.data() + sizeof(header) + header.publicKeySize,
+        header.accountSidBytes
+    );
+
+    PSID parsedSid = nullptr;
+    requireWin32(
+        ConvertStringSidToSidW(result.accountSid.c_str(), &parsedSid),
+        "ConvertStringSidToSidW"
+    );
+    LocalFree(parsedSid);
     return result;
 }
 
@@ -291,7 +376,11 @@ EnrollmentStore::EnrollmentStore(std::wstring path) : path_(std::move(path)) {
     }
 }
 
-std::optional<std::vector<std::uint8_t>> EnrollmentStore::load() const {
+std::wstring EnrollmentStore::currentUserSid() {
+    return currentProcessUserSid();
+}
+
+std::optional<EnrollmentRecord> EnrollmentStore::load() const {
     const HANDLE file = CreateFileW(
         path_.c_str(),
         GENERIC_READ,
@@ -335,13 +424,12 @@ std::optional<std::vector<std::uint8_t>> EnrollmentStore::load() const {
         throw std::runtime_error("enrollment file header is invalid");
     }
 
-    return unprotect(bytes.data() + sizeof(header), header.encryptedSize);
+    return parseRecord(unprotect(bytes.data() + sizeof(header), header.encryptedSize));
 }
 
-void EnrollmentStore::save(const std::vector<std::uint8_t>& rawPublicKey) const {
-    validatePublicKey(rawPublicKey);
+void EnrollmentStore::save(const EnrollmentRecord& record) const {
     ensureParentDirectory(path_);
-    const auto encrypted = protect(rawPublicKey);
+    const auto encrypted = protect(serializeRecord(record));
     if (encrypted.empty() || encrypted.size() > UINT16_MAX) {
         throw std::runtime_error("protected enrollment key has an invalid size");
     }
@@ -388,7 +476,11 @@ void EnrollmentStore::save(const std::vector<std::uint8_t>& rawPublicKey) const 
 }
 
 void EnrollmentStore::remove() const {
-    if (DeleteFileW(path_.c_str()) == FALSE && GetLastError() != ERROR_FILE_NOT_FOUND) {
+    if (DeleteFileW(path_.c_str()) == FALSE) {
+        const DWORD error = GetLastError();
+        if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) {
+            return;
+        }
         throw std::runtime_error(win32Error("DeleteFile(enrollment)"));
     }
 }

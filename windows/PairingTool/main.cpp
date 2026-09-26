@@ -1,5 +1,5 @@
 // Created by Rui MA on 26 Sep 2026
-// Modified by Rui MA on 26 Sep 2026
+
 
 #include "EnrollmentStore.h"
 #include "UnlockServiceIpc.h"
@@ -310,7 +310,7 @@ int main(int argc, char* argv[]) {
             return 3;
         }
 
-        store.save(publicKey);
+        store.save({publicKey, unlock_windows::service::EnrollmentStore::currentUserSid()});
 
         const auto reload = unlock_windows::service::ipc::call(
             unlock_windows::service::ipc::Operation::reloadEnrollment,

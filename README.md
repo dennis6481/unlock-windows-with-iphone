@@ -1,5 +1,4 @@
 <!-- Modified by Rui MA on 26 Sep 2026 -->
-<!-- Modified by Codex on 26 Sep 2026 -->
 
 # Unlock Windows with iPhone
 
@@ -173,7 +172,7 @@ nmake /f Makefile test
 
 Windows SDK 目标已在当前 Windows 环境完成构建和本机 CTest 验证；这仍不等于后台锁屏生命周期、Credential Provider 或 LSA 已经实现。
 
-在 Windows 端可以运行的当前里程碑是协议验证工具、前台 GATT host、UnlockService IPC host 和 PairingTool，而不是直接注册 LSA 包。PairingTool 通过 Windows 通知要求用户确认后写入 DPAPI 保护的公钥；GATT host 不会自动登记公钥。完整里程碑仍必须证明：公钥到 Windows SID 的映射、challenge 新鲜度、签名验证、超时、重放拒绝以及锁屏时 GATT host 的生命周期都正确。
+在 Windows 端可以运行的当前里程碑是协议验证工具、前台 GATT host、UnlockService IPC host 和 PairingTool，而不是直接注册 LSA 包。PairingTool 通过 Windows 通知要求用户确认后，将公钥和当前 Windows 用户 SID 一起写入 DPAPI 保护的登记记录；GATT host 不会自动登记公钥。完整里程碑仍必须证明：该 SID 映射能被登录组件正确使用、challenge 新鲜度、签名验证、超时、重放拒绝以及锁屏时 GATT host 的生命周期都正确。
 
 ## Windows：使用方法（当前阶段）
 
@@ -193,7 +192,7 @@ Windows SDK 目标已在当前 Windows 环境完成构建和本机 CTest 验证�
 - `ios/App/Info.plist` 已通过 `plutil -lint`。
 - iOS 核心安全、协议和 BLE 源码已通过 Swift 类型检查。
 - `windows/Protocol/SigningPayload.cpp` 已通过 macOS 上的 C++20 语法检查。
-- 当前 Windows SDK 构建已通过全部目标，3 个 CTest 均通过；PairingTool 的帮助命令 smoke test 通过。
+- 当前 Windows SDK 构建已通过全部目标，4 个 CTest 均通过；登记存储测试同时覆盖 DPAPI 往返和 Windows SID 往返；PairingTool 的帮助命令 smoke test 通过。
 - Xcode 工程可以被 `xcodebuild -list` 正确解析。
 - 完整 Xcode 构建曾被当前环境的 `swift-plugin-server`/sandbox 限制阻断；这属于构建环境限制，不能当作完整构建成功，也不能当作源码已经在真实设备上验证。
 
@@ -214,7 +213,7 @@ LSA 包属于系统级登录组件。未完成隔离测试、签名、账户映�
 ## Windows 当前推进状态
 
 - `windows/GattHost` 已有可编译、可运行的前台 GATT Server 原型：创建项目定义的 service 和四个 characteristic，接收 `0x01` request，发送 challenge，并接收 assertion 传输帧。
-- `windows/UnlockService/UnlockServiceCore` 已独立实现 challenge 新鲜度、单次使用、assertion JSON 解析、P-256 公钥指纹匹配和 CNG 验签；`unlock_service_host` 通过同用户 named pipe 使用它，并从 DPAPI/ACL 保护的登记文件加载公钥。
+- `windows/UnlockService/UnlockServiceCore` 已独立实现 challenge 新鲜度、单次使用、assertion JSON 解析、P-256 公钥指纹匹配和 CNG 验签；`unlock_service_host` 通过同用户 named pipe 使用它，并从 DPAPI/ACL 保护的登记文件加载公钥及其当前 Windows 用户 SID。
 - `unlock_pairing_tool` 已实现 Windows 通知确认按钮；iOS 可通过 GATT 发送登记候选公钥，但没有点击 Confirm 就不会写入公钥。
-- Windows 本机的 `unlock_protocol_tests`、`unlock_service_tests` 和 `unlock_service_ipc_tests` 均已通过；全部 Windows 目标已完成 SDK 构建。
-- 下一步是把当前前台登记流程提升为 package identity/MSIX、后台/锁屏生命周期、SID 映射和真正的 Windows Service；在这些完成前不会接入 Credential Provider 或 LSA 注册。
+- Windows 本机的 `unlock_protocol_tests`、`unlock_service_tests`、`unlock_service_ipc_tests` 和 `unlock_enrollment_store_tests` 均已通过；全部 Windows 目标已完成 SDK 构建。
+- SID 记录已经落地，下一步是把当前前台登记流程提升为 package identity/MSIX、后台/锁屏生命周期和真正的 Windows Service；之后再让认证组件实际使用 SID 映射，在这些完成前不会接入 Credential Provider 或 LSA 注册。

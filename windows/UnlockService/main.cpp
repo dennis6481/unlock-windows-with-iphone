@@ -1,5 +1,4 @@
 // Created by Rui MA on 26 Sep 2026
-// Modified by Rui MA on 26 Sep 2026
 
 #include "EnrollmentStore.h"
 #include "UnlockServiceCore.h"
@@ -49,10 +48,17 @@ int main() {
         unlock_windows::service::UnlockServiceCore service;
         unlock_windows::service::EnrollmentStore enrollmentStore;
         const auto reloadEnrollment = [&]() {
-            if (const auto enrolledKey = enrollmentStore.load()) {
-                service.setEnrolledPublicKey(*enrolledKey);
+            if (const auto enrolledRecord = enrollmentStore.load()) {
+                service.setEnrolledPublicKey(enrolledRecord->publicKey);
                 std::cout << "[UnlockService] enrollment key loaded; fingerprint="
-                          << unlock_windows::service::EnrollmentStore::fingerprint(*enrolledKey)
+                          << unlock_windows::service::EnrollmentStore::fingerprint(
+                                 enrolledRecord->publicKey
+                             )
+                          << " accountSID="
+                          << std::string(
+                                 enrolledRecord->accountSid.begin(),
+                                 enrolledRecord->accountSid.end()
+                             )
                           << "\n";
                 return true;
             }

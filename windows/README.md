@@ -15,7 +15,7 @@ Windows is being implemented as separate components because they run under diffe
 
 ## Current code
 
-The CNG P-256 verifier is in [`Protocol/UnlockCrypto.cpp`](Protocol/UnlockCrypto.cpp). `ProtocolTests/main.cpp` tests the fixed payload and raw signature path. `UnlockService/UnlockServiceCore.cpp` adds the in-memory challenge, enrollment-key check and assertion verification boundary; `EnrollmentStore` protects the enrolled raw public key with DPAPI and an administrative ACL; `UnlockServiceTests/main.cpp` covers valid authentication, unenrolled-key rejection, malformed input, request mismatch, expiration and replay rejection. No Windows Service, LSA package, registry registration or system unlock behavior has been installed.
+The CNG P-256 verifier is in [`Protocol/UnlockCrypto.cpp`](Protocol/UnlockCrypto.cpp). `ProtocolTests/main.cpp` tests the fixed payload and raw signature path. `UnlockService/UnlockServiceCore.cpp` adds the in-memory challenge, enrollment-key check and assertion verification boundary; `EnrollmentStore` protects the enrolled raw public key plus the enrolling user's validated Windows SID with DPAPI and an administrative ACL; `UnlockServiceTests/main.cpp` covers valid authentication, unenrolled-key rejection, malformed input, request mismatch, expiration and replay rejection. No Windows Service, LSA package, registry registration or system unlock behavior has been installed.
 
 Build on Windows with Visual Studio 2026 and CMake from a Developer Command Prompt:
 
@@ -25,7 +25,7 @@ cmake --build windows/build --config Debug
 ctest --test-dir windows/build -C Debug --output-on-failure
 ```
 
-The current Windows build has seven runnable targets: `unlock_protocol_tests`, `unlock_service_tests`, `unlock_service_ipc_tests`, `unlock_enrollment_store_tests`, `unlock_service_host`, the foreground `unlock_gatt_host` and the enrollment `unlock_pairing_tool`. The IPC test uses a dedicated test pipe, so it can run while the real `UnlockService` host is active. `unlock_enrollment_store_tests` verifies the DPAPI protect/load round trip. The local NMake/SDK setup can run the tests with `ctest --test-dir windows/build --output-on-failure`.
+The current Windows build has seven runnable targets: `unlock_protocol_tests`, `unlock_service_tests`, `unlock_service_ipc_tests`, `unlock_enrollment_store_tests`, `unlock_service_host`, the foreground `unlock_gatt_host` and the enrollment `unlock_pairing_tool`. The IPC test uses a dedicated test pipe, so it can run while the real `UnlockService` host is active. `unlock_enrollment_store_tests` verifies the DPAPI protect/load round trip and the Windows SID round trip. The Visual Studio/CMake setup can run the tests with `ctest --test-dir windows/build --output-on-failure`.
 
 For a shorter command, use the repository Makefile from this directory:
 
@@ -38,14 +38,14 @@ make run-service     # start UnlockService in the foreground
 make run-gatt        # start GattHost in the foreground
 ```
 
-The Makefile initializes the Visual Studio environment automatically, so the shortcut does not require manually entering a long command or running `nmake` directly:
+The Makefile initializes the Visual Studio environment automatically, uses the NMake Makefiles generator, keeps build outputs in `build`, and redirects compiler/linker temporary files to the repository-root `.tmp` directory when the system drive is low on space. The shortcut does not require manually entering a long command:
 
 ```cmd
 make build
 make test
 ```
 
-The Makefile uses the existing `build` directory and the `Debug` configuration by default. Use `make CONFIG=Release` to select another configuration.
+The Makefile uses the existing `build` directory and the `Debug` configuration by default. Use `make CONFIG=Release` to select another configuration. Build outputs stay in `windows/build`; only tool temporary files go to the root `.tmp` directory.
 
 The current macOS workspace cannot compile Windows SDK code. A Windows build is required before any LSA registration is considered.
 
@@ -53,7 +53,7 @@ The current macOS workspace cannot compile Windows SDK code. A Windows build is 
 
 The LSA DLL will not be registered on a daily-use machine until all of these are true:
 
-1. The public key is enrolled with an explicit notification confirmation, stored with DPAPI/ACL protection, and mapped to one Windows SID.
+1. The public key is enrolled with an explicit notification confirmation, stored with DPAPI/ACL protection, and persisted together with one validated Windows SID.
 2. Challenge freshness, single-use nonces and account mapping are enforced.
 3. The LSA package independently verifies the signature.
 4. A failure returns an explicit logon failure and leaves Windows Hello/PIN/password available.

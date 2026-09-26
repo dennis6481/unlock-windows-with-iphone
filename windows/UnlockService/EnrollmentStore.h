@@ -9,17 +9,23 @@
 
 namespace unlock_windows::service {
 
+struct EnrollmentRecord final {
+    std::vector<std::uint8_t> publicKey;
+    std::wstring accountSid;
+};
+
 class EnrollmentStore final {
 public:
     static std::wstring defaultPath();
+    static std::wstring currentUserSid();
 
     explicit EnrollmentStore(std::wstring path = defaultPath());
 
     EnrollmentStore(const EnrollmentStore&) = delete;
     EnrollmentStore& operator=(const EnrollmentStore&) = delete;
 
-    [[nodiscard]] std::optional<std::vector<std::uint8_t>> load() const;
-    void save(const std::vector<std::uint8_t>& rawPublicKey) const;
+    [[nodiscard]] std::optional<EnrollmentRecord> load() const;
+    void save(const EnrollmentRecord& record) const;
     void remove() const;
 
     [[nodiscard]] const std::wstring& path() const noexcept {

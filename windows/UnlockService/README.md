@@ -1,4 +1,5 @@
 <!-- Created by Rui MA on 26 Sep 2026 -->
+<!-- Modified by Codex on 26 Sep 2026 -->
 
 # UnlockService core
 
@@ -12,4 +13,4 @@
 - requires the raw public key to match the explicitly installed enrollment key;
 - rebuilds the fixed signing payload and verifies the raw 64-byte ECDSA signature through CNG.
 
-The IPC prototype uses a local named pipe, checks that the connecting process belongs to the same Windows user, and supports issue-challenge, verify-assertion and reload-enrollment requests. `EnrollmentStore` persists one 65-byte P-256 public key under `%ProgramData%\UnlockWindowsWithIPhone\enrollment.dat`; the file is protected with DPAPI machine scope and an ACL limited to SYSTEM, Administrators and the current Windows user. `unlock_pairing_tool` is the only current enrollment writer and requires explicit notification confirmation. GATT transports a candidate key to that tool but never writes the enrollment file directly. Mapping a key to a Windows SID and creating a real Windows Service are still pending.
+The IPC prototype uses a local named pipe, checks that the connecting process belongs to the same Windows user, and supports issue-challenge, verify-assertion and reload-enrollment requests. `EnrollmentStore` persists one 65-byte P-256 public key together with the enrolling user's validated Windows SID under `%ProgramData%\UnlockWindowsWithIPhone\enrollment.dat`; the record is protected with DPAPI machine scope and an ACL limited to SYSTEM, Administrators and the current Windows user. `unlock_pairing_tool` is the only current enrollment writer and requires explicit notification confirmation. GATT transports a candidate key to that tool but never writes the enrollment file directly. The SID record is now ready for later account mapping, while creating a real Windows Service and using the mapping during logon are still pending.

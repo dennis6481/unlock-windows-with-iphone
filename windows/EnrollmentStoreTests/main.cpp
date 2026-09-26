@@ -40,11 +40,19 @@ int main() {
         }
 
         unlock_windows::service::EnrollmentStore store(testPath());
+        const unlock_windows::service::EnrollmentRecord expectedRecord{
+            expected,
+            unlock_windows::service::EnrollmentStore::currentUserSid()
+        };
         store.remove();
-        store.save(expected);
+        store.save(expectedRecord);
         const auto loaded = store.load();
-        require(loaded.has_value(), "enrollment store did not load the saved key");
-        require(*loaded == expected, "enrollment store returned a different key");
+        require(loaded.has_value(), "enrollment store did not load the saved record");
+        require(loaded->publicKey == expected, "enrollment store returned a different key");
+        require(
+            loaded->accountSid == expectedRecord.accountSid,
+            "enrollment store returned a different account SID"
+        );
         store.remove();
         std::cout << "EnrollmentStore tests passed\n";
         return 0;

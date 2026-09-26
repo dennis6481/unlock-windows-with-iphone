@@ -1,8 +1,11 @@
 // Modified by Rui MA on 26 Sep 2026
 
+@preconcurrency import AccessorySetupKit
+import CoreBluetooth
 import CryptoKit
 import Foundation
 import Observation
+import UIKit
 
 @MainActor
 @Observable
@@ -36,13 +39,20 @@ final class UnlockSetupModel {
 
     private let keyStore: SecureEnclaveKeyStore
     private let bluetoothAuthenticator: BluetoothAuthenticator
+    private let accessorySession: ASAccessorySession
 
     init(keyStore: SecureEnclaveKeyStore = SecureEnclaveKeyStore()) {
         self.keyStore = keyStore
         self.bluetoothAuthenticator = BluetoothAuthenticator(keyStore: keyStore)
+        self.accessorySession = ASAccessorySession()
         self.bluetoothAuthenticator.onError = { [weak self] message in
             self?.bluetoothStatus = "连接失败"
             self?.bluetoothError = message
+        }
+        accessorySession.activate(on: .main) { [weak self] event in
+            Task { @MainActor [weak self] in
+                self?.handleAccessoryEvent(event)
+            }
         }
     }
 
@@ -85,12 +95,54 @@ final class UnlockSetupModel {
 
     func startBluetooth() {
         bluetoothError = nil
-        do {
-            try bluetoothAuthenticator.start()
-            bluetoothStatus = "正在扫描 Windows GATT host"
-        } catch {
-            bluetoothStatus = "连接失败"
-            bluetoothError = error.localizedDescription
+        showAccessoryPicker()
+    }
+
+    private func showAccessoryPicker() {
+        var descriptor = ASDiscoveryDescriptor()
+        descriptor.bluetoothServiceUUID = BluetoothAuthenticator.serviceUUID
+
+        guard let productImage = UIImage(systemName: "desktopcomputer") else {
+            bluetoothStatus = "Connection failed"
+            bluetoothError = "Could not create the Windows device icon."
+            return
+        }
+
+        let displayItem = ASPickerDisplayItem(
+            name: "Windows PC",
+            productImage: productImage,
+            descriptor: descriptor
+        )
+        bluetoothStatus = "Choose the Windows PC in the system picker"
+        accessorySession.showPicker(for: [displayItem]) { [weak self] error in
+            guard let error else { return }
+            Task { @MainActor [weak self] in
+                self?.bluetoothStatus = "Connection failed"
+                self?.bluetoothError = error.localizedDescription
+            }
+        }
+    }
+
+    private func handleAccessoryEvent(_ event: ASAccessoryEvent) {
+        switch event.eventType {
+        case .accessoryAdded:
+            guard let bluetoothIdentifier = event.accessory?.bluetoothIdentifier else {
+                bluetoothStatus = "Connection failed"
+                bluetoothError = "AccessorySetupKit did not return a Bluetooth identifier."
+                return
+            }
+
+            do {
+                try bluetoothAuthenticator.start(accessoryIdentifier: bluetoothIdentifier)
+                bluetoothStatus = "Connecting to the authorized Windows GATT host"
+            } catch {
+                bluetoothStatus = "Connection failed"
+                bluetoothError = error.localizedDescription
+            }
+        case .pickerDidPresent:
+            bluetoothStatus = "Choose the Windows PC in the system picker"
+        default:
+            break
         }
     }
 

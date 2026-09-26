@@ -1,3 +1,5 @@
+<!-- Modified by Rui MA on 26 Sep 2026 -->
+
 # Windows implementation status
 
 Windows is being implemented as separate components because they run under different security and lifecycle boundaries.

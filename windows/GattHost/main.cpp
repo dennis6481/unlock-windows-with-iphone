@@ -1,3 +1,5 @@
+// Created by Rui MA on 26 Sep 2026
+
 #include <Windows.h>
 #include <objbase.h>
 #include <bcrypt.h>

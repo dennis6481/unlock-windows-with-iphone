@@ -1,3 +1,5 @@
+<!-- Modified by Rui MA on 26 Sep 2026 -->
+
 # Unlock Windows with iPhone
 
 这个项目探索并实现一条明确的认证链路：

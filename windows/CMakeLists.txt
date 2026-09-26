@@ -1,3 +1,5 @@
+# Modified by Rui MA on 26 Sep 2026
+
 cmake_minimum_required(VERSION 3.25)
 
 project(UnlockWindowsWithIPhone LANGUAGES CXX)

@@ -1,8 +1,32 @@
 # Modified by Rui MA on 26 Sep 2026
+# Modified by Codex on 26 Sep 2026
 
 cmake_minimum_required(VERSION 3.25)
 
 project(UnlockWindowsWithIPhone LANGUAGES CXX)
+
+# Keep NMake response files in the build tree instead of using its inline
+# temporary-file syntax. The repository path contains spaces, and compiler /
+# linker temporary files are redirected by windows/Makefile to the root .tmp.
+if(CMAKE_GENERATOR MATCHES "NMake")
+    foreach(lang IN ITEMS C CXX)
+        set(CMAKE_${lang}_USE_RESPONSE_FILE_FOR_INCLUDES 0 FORCE)
+        foreach(command IN ITEMS
+            COMPILE_OBJECT
+            CREATE_SHARED_LIBRARY
+            CREATE_PREPROCESSED_SOURCE
+            CREATE_ASSEMBLY_SOURCE
+            LINK_EXECUTABLE
+        )
+            string(REPLACE "${CMAKE_START_TEMP_FILE}" ""
+                CMAKE_${lang}_${command} "${CMAKE_${lang}_${command}}"
+            )
+            string(REPLACE "${CMAKE_END_TEMP_FILE}" ""
+                CMAKE_${lang}_${command} "${CMAKE_${lang}_${command}}"
+            )
+        endforeach()
+    endforeach()
+endif()
 
 include(CTest)
 

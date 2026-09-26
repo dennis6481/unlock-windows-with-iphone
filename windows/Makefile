@@ -3,6 +3,7 @@
 
 CONFIG = Debug
 BUILD_DIR = build
+TMP_DIR = $(CURDIR)\..\.tmp
 CMAKE = cmake
 CTEST = ctest
 VS_DEV_CMD = P:\Applications\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat
@@ -20,16 +21,16 @@ help:
 	@echo "make CONFIG=Release  use a different CMake configuration"
 
 configure:
-	call "$(VS_DEV_CMD)" -arch=x64 && $(CMAKE) -S . -B "$(BUILD_DIR)" -G "$(CMAKE_GENERATOR)"
+	(if not exist "$(TMP_DIR)" mkdir "$(TMP_DIR)") && set "TEMP=$(TMP_DIR)" && set "TMP=$(TMP_DIR)" && call "$(VS_DEV_CMD)" -arch=x64 && $(CMAKE) -S . -B "$(BUILD_DIR)" -G "$(CMAKE_GENERATOR)"
 
 build: configure
-	call "$(VS_DEV_CMD)" -arch=x64 && $(CMAKE) --build "$(BUILD_DIR)" --config $(CONFIG)
+	set "TEMP=$(TMP_DIR)" && set "TMP=$(TMP_DIR)" && call "$(VS_DEV_CMD)" -arch=x64 && $(CMAKE) --build "$(BUILD_DIR)" --config $(CONFIG)
 
 test: build
 	$(CTEST) --test-dir "$(BUILD_DIR)" -C $(CONFIG) --output-on-failure
 
 clean:
-	call "$(VS_DEV_CMD)" -arch=x64 && $(CMAKE) --build "$(BUILD_DIR)" --target clean --config $(CONFIG)
+	set "TEMP=$(TMP_DIR)" && set "TMP=$(TMP_DIR)" && call "$(VS_DEV_CMD)" -arch=x64 && $(CMAKE) --build "$(BUILD_DIR)" --target clean --config $(CONFIG)
 
 run-service: build
 	"$(BUILD_DIR)\unlock_service_host.exe"

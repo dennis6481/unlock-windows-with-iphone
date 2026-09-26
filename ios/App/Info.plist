@@ -14,5 +14,9 @@
 	<array>
 		<string>bluetooth-central</string>
 	</array>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
 </dict>
 </plist>

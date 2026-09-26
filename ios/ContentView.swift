@@ -1,4 +1,4 @@
-// Modified by Rui MA on 26 Sep 2026
+// Modified by Codex on 26 Sep 2026
 
 import SwiftUI
 
@@ -44,7 +44,7 @@ private struct AppIntroSection: View {
             Text("Windows 解锁 PoC")
                 .font(.title2)
                 .fontWeight(.semibold)
-            Text("此阶段验证 Secure Enclave 私钥、AccessorySetupKit 设备授权、CoreBluetooth GATT 和 challenge 签名链路。")
+            Text("此阶段验证 Secure Enclave 私钥、AfterFirstUnlockThisDeviceOnly 和 challenge 签名链路。BLE 尚未接入。")
                 .foregroundStyle(.secondary)
         }
     }
@@ -106,7 +106,7 @@ private struct ScopeSection: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("当前明确未实现")
                 .font(.headline)
-            Text("Windows GATT 后台/锁屏生命周期、iPhone 后台 BLE 会话、Credential Provider、LSA Authentication Package 和自动解锁。认证失败不会静默退回软件密钥。")
+            Text("Windows GATT Server、iPhone 后台 BLE 会话、Credential Provider、LSA Authentication Package 和自动解锁。认证失败不会静默退回软件密钥。")
                 .foregroundStyle(.secondary)
         }
     }

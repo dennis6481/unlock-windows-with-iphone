@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Modified by Rui MA on 26 Sep 2026 -->
+<!-- Modified by Codex on 26 Sep 2026 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -9,14 +9,6 @@
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
-	<key>NSAccessorySetupKitSupports</key>
-	<array>
-		<string>Bluetooth</string>
-	</array>
-	<key>NSAccessorySetupBluetoothServices</key>
-	<array>
-		<string>F1E2D3C4-B5A6-4789-8012-3456789ABCDE</string>
-	</array>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>用于与已配对的 Windows 电脑建立近距离认证连接。</string>
 	<key>UIBackgroundModes</key>

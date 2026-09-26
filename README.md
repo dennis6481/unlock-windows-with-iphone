@@ -1,4 +1,5 @@
 <!-- Modified by Rui MA on 26 Sep 2026 -->
+<!-- Modified by Codex on 26 Sep 2026 -->
 
 # Unlock Windows with iPhone
 
@@ -10,21 +11,20 @@
 
 ## 当前状态
 
-当前已经完成协议、安全密钥存储、iOS AccessorySetupKit/CoreBluetooth 连接链路，以及 Windows 侧的协议/CNG 验证代码：
+当前已经完成协议、安全密钥存储、iOS BLE Central 骨架，以及 Windows 侧的协议/CNG 验证代码：
 
 - iOS App 的 Secure Enclave P-256 密钥生成与 Keychain 持久化。
 - Keychain 使用 `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`；这允许设备重启后完成第一次解锁之后，在 iPhone 再次锁屏时读取密钥并签名。
 - 明确的 challenge/签名数据结构和跨平台固定二进制签名载荷，JSON 只作传输外壳，见 [`protocol/README.md`](protocol/README.md)。
 - App 内的本地签名和本地公钥验证测试，以及可见的错误信息。
-- iOS 使用 AccessorySetupKit 系统设备选择器发现并授权 Windows，再由 CoreBluetooth 完成 GATT 连接、challenge notify、签名和 assertion 回写；Windows 侧已有前台 GATT host 原型。
+- iOS CoreBluetooth Central 状态机：扫描、连接、状态恢复、challenge notify、签名和 assertion 回写；Windows GATT host 尚未实现。
 - iOS 后台蓝牙中心角色所需的 Info.plist 声明。
-- iOS target 当前为 18.0，已声明 AccessorySetupKit 的 Bluetooth 能力和项目 service UUID。
 - Windows CNG/BCrypt P-256 公钥导入、SHA-256 和原始 `r || s` 签名验证代码。
 - Windows 与 iOS 一致的签名载荷构造代码，以及供未来 LSA 使用的无密码提交缓冲区定义。
 
 当前还没有完成：
 
-- Windows GATT host 的 package identity/MSIX、后台与锁屏生命周期，以及配对/公钥登记工具。
+- Windows GATT Server、配对工具和完整的跨平台 BLE 传输。
 - Windows Credential Provider 的生产实现。
 - 无密码的 LSA Authentication Package。
 - “检测到 iPhone 后自动解锁”的端到端流程。
@@ -33,16 +33,16 @@ Windows 侧当前没有可安装的服务、Credential Provider 或 LSA 包；�
 
 不会用软件私钥、密码硬编码、静默重试或吞掉异常来伪造这些功能。某个阶段未实现或系统拒绝访问时，App/服务应报告明确错误。
 
-### 已知问题（iOS BLE/AccessorySetupKit，暂缓处理）
+### 已知问题（iOS BLE，暂缓处理）
 
-以下问题已经确认，但暂时不作为当前 Windows 主线的阻塞项，后续推进 GATT host 封装和跨平台传输测试时统一处理：
+以下问题已经确认，但暂时不作为当前 Windows 主线的阻塞项，后续实现 GATT host 和跨平台传输测试时统一处理：
 
 - iOS 在调用 `setNotifyValue(true, for:)` 后会立即写入 request；应等待 challenge characteristic 的订阅成功回调，避免 Windows 已发送通知但 iOS 尚未完成订阅。
 - challenge 和 assertion 当前直接以完整 JSON 写入 characteristic，尚未实现应用层 MTU 分片、重组、消息长度限制、乱序/重复片段拒绝和传输超时。
 - result characteristic 已订阅，但 iOS 尚未消费明确的成功/失败回执，也没有把回执状态暴露到界面。
 - CoreBluetooth 的后台恢复、锁屏 iPhone、Windows 锁屏以及 BLE 断线重连的组合生命周期尚未在实体设备上验证。
 - BLE 配对/链路保护与 Windows GATT characteristic 的权限策略尚未完成联调；BLE 仍然只负责传输，不能替代签名认证。
-- AccessorySetupKit 只负责系统级发现和授权，不能替代 Windows 端的公钥登记、签名验证或后台/锁屏生命周期；当前只支持 iOS 18.0 及以上。
+- App 中仍有部分说明文字把 BLE 描述为“尚未接入”，需要在 BLE 传输稳定后统一更新 UI 文案。
 
 ## 解决的问题与边界
 
@@ -112,7 +112,6 @@ Windows Hello / WebAuthn 可以作为交互式登录或凭据能力的研究方�
 
 要求：
 
-- iOS 18.0 或更高版本的实体 iPhone（AccessorySetupKit 要求 iOS 18.0+）。
 - macOS 和 Xcode 26.3 或更高版本（项目当前由该版本创建）。
 - 一台能运行当前 Deployment Target 的实体 iPhone。
 - Apple Developer 签名团队；免费个人签名也可以用于开发验证，但有效期和后台能力受 Apple 规则限制。
@@ -125,15 +124,14 @@ Windows Hello / WebAuthn 可以作为交互式登录或凭据能力的研究方�
 4. 首次启动时允许蓝牙权限。
 5. 点击“准备密钥”生成或读取 Secure Enclave 私钥。
 6. 点击“执行本地签名测试”确认本机可以完成签名和公钥验证。
-7. 点击“开始连接”会打开 AccessorySetupKit 系统选择器；选择正在运行的 Windows `GattHost` 后，App 再通过 CoreBluetooth 连接项目定义的 GATT service。
+7. 点击“开始连接”会扫描项目定义的 Windows GATT service；在 Windows `GattHost` 尚未实现前，页面会显示明确的连接失败或无设备状态，不会报告认证成功。
 
 ## iOS：使用方法
 
 1. 启动 App。
 2. 点击“准备密钥”。App 会创建或读取 Secure Enclave 私钥，并显示公钥 SHA-256 指纹。
 3. 点击“执行本地签名测试”。App 会生成随机 challenge、签名，并使用公钥在本地验证；成功或失败都会显示在界面上。
-4. 点击“开始连接”，在系统选择器中选择 Windows 电脑；Windows `GattHost` 必须正在运行并广播项目 service。
-5. 如果设备刚重启且尚未第一次解锁，Keychain 可能返回系统拒绝访问错误。先手动解锁一次，再重试；这不是被隐藏的 fallback。
+4. 如果设备刚重启且尚未第一次解锁，Keychain 可能返回系统拒绝访问错误。先手动解锁一次，再重试；这不是被隐藏的 fallback。
 
 当前 App 不会因为附近存在某个蓝牙设备就报告认证成功；必须完成指定 service、characteristic 和 challenge 签名链路。
 
@@ -174,7 +172,7 @@ Windows SDK 目标仍需要在 Windows 开发环境中完成实际构建验证�
 ## 当前验证状态
 
 - `ios/App/Info.plist` 已通过 `plutil -lint`。
-- iOS 核心安全、协议和 BLE 源码已通过 Swift 类型检查；AccessorySetupKit 接入仍需在 macOS/Xcode 和实体 iPhone 上构建验证。
+- iOS 核心安全、协议和 BLE 源码已通过 Swift 类型检查。
 - `windows/Protocol/SigningPayload.cpp` 已通过 macOS 上的 C++20 语法检查。
 - Xcode 工程可以被 `xcodebuild -list` 正确解析。
 - 完整 Xcode 构建曾被当前环境的 `swift-plugin-server`/sandbox 限制阻断；这属于构建环境限制，不能当作完整构建成功，也不能当作源码已经在真实设备上验证。
@@ -196,6 +194,6 @@ LSA 包属于系统级登录组件。未完成隔离测试、签名、账户映�
 ## Windows 当前推进状态
 
 - `windows/GattHost` 已有可编译、可运行的前台 GATT Server 原型：创建项目定义的 service 和四个 characteristic，接收 `0x01` request，发送 challenge，并接收 assertion 传输帧。
-- `windows/UnlockService/UnlockServiceCore` 已独立实现 challenge 新鲜度、单次使用、assertion JSON 解析、P-256 公钥指纹匹配和 CNG 验签；`unlock_service_host` 已通过受保护的同用户命名管道与 `GattHost` 联调，Session 0 Windows Service 和公钥登记仍待完成。
+- `windows/UnlockService/UnlockServiceCore` 已独立实现 challenge 新鲜度、单次使用、assertion JSON 解析、P-256 公钥指纹匹配和 CNG 验签；它还没有被提升为真正的 Session 0 Windows Service，也没有接入 IPC。
 - Windows 本机的 `unlock_protocol_tests` 和 `unlock_service_tests` 均已通过；`GattHost` 已通过 Windows SDK/C++/WinRT 编译并完成本机启动烟雾测试。
-- 下一步是实现 package identity/MSIX、后台/锁屏生命周期、公钥登记和正式 Windows Service；在这些完成前不会接入 Credential Provider 或 LSA 注册。
+- 下一步是把 GATT host 与服务核心通过受保护 IPC 连接起来，再实现 package identity/MSIX、后台/锁屏生命周期和公钥登记；在这些完成前不会接入 Credential Provider 或 LSA 注册。

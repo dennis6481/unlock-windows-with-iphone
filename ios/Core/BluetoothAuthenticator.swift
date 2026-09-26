@@ -1,4 +1,4 @@
-// Modified by Rui MA on 26 Sep 2026
+// Modified by Codex on 26 Sep 2026
 
 @preconcurrency import CoreBluetooth
 import Foundation
@@ -50,7 +50,6 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
     )
 
     private var wantsToScan = false
-    private var preferredPeripheralIdentifier: UUID?
     private var peripheral: CBPeripheral?
     private var requestCharacteristic: CBCharacteristic?
     private var challengeCharacteristic: CBCharacteristic?
@@ -66,31 +65,14 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
     func start() throws {
         lastError = nil
         wantsToScan = true
-        preferredPeripheralIdentifier = nil
         guard centralManager.state == .poweredOn else {
             throw BluetoothUnlockError.bluetoothUnavailable(centralManager.state)
         }
         scanForWindowsHost()
     }
 
-    func start(accessoryIdentifier: UUID) throws {
-        lastError = nil
-        wantsToScan = true
-        preferredPeripheralIdentifier = accessoryIdentifier
-        guard centralManager.state == .poweredOn else {
-            throw BluetoothUnlockError.bluetoothUnavailable(centralManager.state)
-        }
-
-        if let knownPeripheral = centralManager.retrievePeripherals(withIdentifiers: [accessoryIdentifier]).first {
-            connect(to: knownPeripheral)
-        } else {
-            scanForWindowsHost()
-        }
-    }
-
     func stop() {
         wantsToScan = false
-        preferredPeripheralIdentifier = nil
         centralManager.stopScan()
         if let peripheral {
             centralManager.cancelPeripheralConnection(peripheral)
@@ -132,23 +114,13 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
         advertisementData: [String: Any],
         rssi RSSI: NSNumber
     ) {
-        if let preferredPeripheralIdentifier,
-           peripheral.identifier != preferredPeripheralIdentifier {
-            return
-        }
-
-        connect(to: peripheral)
-    }
-
-    private func connect(to peripheral: CBPeripheral) {
         self.peripheral = peripheral
         peripheral.delegate = self
-        centralManager.stopScan()
-        centralManager.connect(peripheral)
+        central.stopScan()
+        central.connect(peripheral)
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        preferredPeripheralIdentifier = nil
         peripheral.delegate = self
         peripheral.discoverServices([Self.serviceUUID])
     }

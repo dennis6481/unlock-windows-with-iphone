@@ -1,3 +1,5 @@
+// Modified by Rui MA on 26 Sep 2026
+
 import CryptoKit
 import Foundation
 import Security
@@ -34,7 +36,9 @@ final class SecureEnclaveKeyStore {
 
     func publicKeyRawRepresentation() throws -> Data {
         let privateKey = try loadOrCreateKey()
-        return privateKey.publicKey.rawRepresentation
+        // The Windows verifier consumes the uncompressed ANSI X9.63 form:
+        // 0x04 followed by the 32-byte X and Y coordinates.
+        return privateKey.publicKey.x963Representation
     }
 
     func sign(data: Data) throws -> Data {

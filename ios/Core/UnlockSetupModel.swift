@@ -1,3 +1,5 @@
+// Modified by Rui MA on 26 Sep 2026
+
 import CryptoKit
 import Foundation
 import Observation
@@ -65,7 +67,7 @@ final class UnlockSetupModel {
         do {
             let challenge = UnlockChallenge.new(audience: "windows-unlock")
             let assertion = try UnlockProtocol.sign(challenge: challenge, using: keyStore)
-            let publicKey = try P256.Signing.PublicKey(rawRepresentation: assertion.publicKeyRawRepresentation)
+            let publicKey = try P256.Signing.PublicKey(x963Representation: assertion.publicKeyRawRepresentation)
             let signature = try P256.Signing.ECDSASignature(rawRepresentation: assertion.signatureRawRepresentation)
             let payload = try UnlockProtocol.bytesToSign(for: challenge)
 

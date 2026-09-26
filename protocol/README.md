@@ -1,3 +1,5 @@
+<!-- Modified by Rui MA on 26 Sep 2026 -->
+
 # Unlock protocol v1
 
 这是 iPhone 与 Windows 之间的认证层约定。它独立于 BLE；BLE 只负责传输完整的逻辑消息。实现 BLE 分片时，必须先重组出完整 JSON，再交给本协议层解析，不能对半个 JSON 做认证。
@@ -47,7 +49,7 @@ audienceUTF8
 ```json
 {
   "keyID": "<lowercase hex SHA-256 of publicKeyRawRepresentation>",
-  "publicKeyRawRepresentation": "<base64: P-256 raw public key>",
+  "publicKeyRawRepresentation": "<base64: 65-byte uncompressed P-256 X9.63 key, 0x04 || X || Y>",
   "requestID": "<same UUID as challenge>",
   "signatureRawRepresentation": "<base64: 64-byte r||s ECDSA signature>",
   "version": 1

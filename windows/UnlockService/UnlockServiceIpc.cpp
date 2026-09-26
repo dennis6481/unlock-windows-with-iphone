@@ -1,4 +1,5 @@
 // Created by Rui MA on 26 Sep 2026
+// Modified by Rui MA on 26 Sep 2026
 
 #include "UnlockServiceIpc.h"
 
@@ -215,16 +216,25 @@ void closeHandle(HANDLE handle) noexcept {
 } // namespace
 
 Response call(const Operation operation, const std::string_view payload) {
+    return callOnPipe(kPipeName, operation, payload);
+}
+
+Response callOnPipe(
+    const std::wstring_view pipeName,
+    const Operation operation,
+    const std::string_view payload
+) {
     if (payload.size() > kMaxPayloadSize) {
         return {Status::invalidRequest, "IPC payload is too large"};
     }
 
-    if (!WaitNamedPipeW(kPipeName, 5'000)) {
+    const std::wstring pipePath(pipeName);
+    if (!WaitNamedPipeW(pipePath.c_str(), 5'000)) {
         return {Status::unavailable, "UnlockService pipe is unavailable"};
     }
 
     const auto pipe = CreateFileW(
-        kPipeName,
+        pipePath.c_str(),
         GENERIC_READ | GENERIC_WRITE,
         0,
         nullptr,
@@ -259,6 +269,8 @@ Response call(const Operation operation, const std::string_view payload) {
     };
 }
 
+Server::Server(const std::wstring_view pipeName) : pipeName_(pipeName) {}
+
 Server::~Server() {
     closePipe();
 }
@@ -273,7 +285,7 @@ bool Server::waitForRequest(Operation& operation, std::string& payload) {
     }
 
     const auto pipe = CreateNamedPipeW(
-        kPipeName,
+        pipeName_.c_str(),
         PIPE_ACCESS_DUPLEX,
         PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
         1,
@@ -303,7 +315,7 @@ bool Server::waitForRequest(Operation& operation, std::string& payload) {
     MessageHeader header{};
     if (!readMessage(pipe, header, payload) ||
         header.operation < static_cast<std::uint16_t>(Operation::issueChallenge) ||
-        header.operation > static_cast<std::uint16_t>(Operation::verifyAssertion) ||
+        header.operation > static_cast<std::uint16_t>(Operation::reloadEnrollment) ||
         header.status != static_cast<std::uint32_t>(Status::success)) {
         closePipe();
         return false;

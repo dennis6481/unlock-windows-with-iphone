@@ -1,5 +1,7 @@
 // Created by Rui MA on 26 Sep 2026
+// Modified by Rui MA on 26 Sep 2026
 
+#include "EnrollmentStore.h"
 #include "UnlockServiceCore.h"
 #include "UnlockServiceIpc.h"
 
@@ -45,11 +47,25 @@ int main() {
         winrt::init_apartment(winrt::apartment_type::multi_threaded);
 
         unlock_windows::service::UnlockServiceCore service;
+        unlock_windows::service::EnrollmentStore enrollmentStore;
+        const auto reloadEnrollment = [&]() {
+            if (const auto enrolledKey = enrollmentStore.load()) {
+                service.setEnrolledPublicKey(*enrolledKey);
+                std::cout << "[UnlockService] enrollment key loaded; fingerprint="
+                          << unlock_windows::service::EnrollmentStore::fingerprint(*enrolledKey)
+                          << "\n";
+                return true;
+            }
+
+            service.clearEnrolledPublicKey();
+            std::cout << "[UnlockService] no enrollment key is installed; valid assertions will return key_not_enrolled\n";
+            return false;
+        };
+        reloadEnrollment();
         unlock_windows::service::ipc::Server server;
         std::cout << "[UnlockService] listening on "
                   << winrt::to_string(unlock_windows::service::ipc::kPipeName)
-                  << "\n"
-                  << "[UnlockService] no enrollment key is installed; valid assertions will return key_not_enrolled\n";
+                  << "\n";
 
         for (;;) {
             unlock_windows::service::ipc::Operation operation{};
@@ -72,6 +88,8 @@ int main() {
                     response = makeResult(result);
                     std::cout << "[UnlockService] assertion result="
                               << unlock_windows::service::assertionCodeName(result.code) << "\n";
+                } else if (operation == unlock_windows::service::ipc::Operation::reloadEnrollment) {
+                    response = reloadEnrollment() ? "enrollment_loaded" : "enrollment_missing";
                 } else {
                     status = unlock_windows::service::ipc::Status::invalidRequest;
                     response = "unsupported IPC operation";

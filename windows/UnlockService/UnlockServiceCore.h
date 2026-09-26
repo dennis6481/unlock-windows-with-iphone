@@ -66,6 +66,7 @@ public:
     // The real enrollment flow will load this value from protected storage.
     // Until a key is installed, no assertion is allowed to authenticate.
     void setEnrolledPublicKey(std::vector<std::uint8_t> rawPublicKey);
+    void clearEnrolledPublicKey() noexcept;
 
     [[nodiscard]] const std::string& audience() const noexcept {
         return audience_;

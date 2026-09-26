@@ -1,4 +1,5 @@
 // Created by Rui MA on 26 Sep 2026
+// Modified by Rui MA on 26 Sep 2026
 
 #pragma once
 
@@ -14,6 +15,7 @@ inline constexpr std::uint32_t kMaxPayloadSize = 64 * 1024;
 enum class Operation : std::uint16_t {
     issueChallenge = 1,
     verifyAssertion = 2,
+    reloadEnrollment = 3,
 };
 
 enum class Status : std::uint32_t {
@@ -32,9 +34,17 @@ struct Response final {
 // connection only when the client process belongs to the same Windows user.
 [[nodiscard]] Response call(Operation operation, std::string_view payload);
 
+// Test-only endpoint variant; production callers should use call().
+[[nodiscard]] Response callOnPipe(
+    std::wstring_view pipeName,
+    Operation operation,
+    std::string_view payload
+);
+
 class Server final {
 public:
     Server() = default;
+    explicit Server(std::wstring_view pipeName);
     Server(const Server&) = delete;
     Server& operator=(const Server&) = delete;
     ~Server();
@@ -46,6 +56,7 @@ private:
     void closePipe() noexcept;
 
     void* pipe_ = nullptr;
+    std::wstring pipeName_ = kPipeName;
     Operation operation_ = Operation::issueChallenge;
 };
 

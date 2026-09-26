@@ -337,6 +337,11 @@ void UnlockServiceCore::setEnrolledPublicKey(std::vector<std::uint8_t> rawPublic
     enrolledPublicKey_ = std::move(rawPublicKey);
 }
 
+void UnlockServiceCore::clearEnrolledPublicKey() noexcept {
+    std::lock_guard lock(mutex_);
+    enrolledPublicKey_.reset();
+}
+
 std::string UnlockServiceCore::requestIdString(const protocol::FixedChallenge& challenge) {
     constexpr char hex[] = "0123456789abcdef";
     std::string result;

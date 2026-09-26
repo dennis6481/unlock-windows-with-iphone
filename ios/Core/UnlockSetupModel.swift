@@ -29,11 +29,19 @@ final class UnlockSetupModel {
     var publicKeyFingerprint: String?
     var lastError: String?
     var lastTestResult: String?
+    var bluetoothStatus = "未启动"
+    var bluetoothError: String?
 
     private let keyStore: SecureEnclaveKeyStore
+    private let bluetoothAuthenticator: BluetoothAuthenticator
 
     init(keyStore: SecureEnclaveKeyStore = SecureEnclaveKeyStore()) {
         self.keyStore = keyStore
+        self.bluetoothAuthenticator = BluetoothAuthenticator(keyStore: keyStore)
+        self.bluetoothAuthenticator.onError = { [weak self] message in
+            self?.bluetoothStatus = "连接失败"
+            self?.bluetoothError = message
+        }
     }
 
     func prepareKey() {
@@ -58,18 +66,34 @@ final class UnlockSetupModel {
             let challenge = UnlockChallenge.new(audience: "windows-unlock")
             let assertion = try UnlockProtocol.sign(challenge: challenge, using: keyStore)
             let publicKey = try P256.Signing.PublicKey(rawRepresentation: assertion.publicKeyRawRepresentation)
-            let signature = try P256.Signing.ECDSASignature(derRepresentation: assertion.signatureDERRepresentation)
+            let signature = try P256.Signing.ECDSASignature(rawRepresentation: assertion.signatureRawRepresentation)
             let payload = try UnlockProtocol.bytesToSign(for: challenge)
 
             guard publicKey.isValidSignature(signature, for: payload) else {
                 throw UnlockError.localVerificationFailed
             }
 
-            lastTestResult = "本地签名和公钥验证成功；DER 签名长度：\(assertion.signatureDERRepresentation.count) 字节。"
+            lastTestResult = "本地签名和公钥验证成功；raw r||s 签名长度：\(assertion.signatureRawRepresentation.count) 字节。"
             state = .ready
         } catch {
             state = .error
             lastError = error.localizedDescription
         }
+    }
+
+    func startBluetooth() {
+        bluetoothError = nil
+        do {
+            try bluetoothAuthenticator.start()
+            bluetoothStatus = "正在扫描 Windows GATT host"
+        } catch {
+            bluetoothStatus = "连接失败"
+            bluetoothError = error.localizedDescription
+        }
+    }
+
+    func stopBluetooth() {
+        bluetoothAuthenticator.stop()
+        bluetoothStatus = "已停止"
     }
 }

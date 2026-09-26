@@ -18,6 +18,12 @@ struct ContentView: View {
                         prepareKey: model.prepareKey,
                         signTestChallenge: model.signTestChallenge
                     )
+                    BluetoothSection(
+                        status: model.bluetoothStatus,
+                        errorMessage: model.bluetoothError,
+                        start: model.startBluetooth,
+                        stop: model.stopBluetooth
+                    )
                     ScopeSection()
                 }
                 .padding()
@@ -100,6 +106,33 @@ private struct ScopeSection: View {
                 .font(.headline)
             Text("Windows GATT Server、iPhone 后台 BLE 会话、Credential Provider、LSA Authentication Package 和自动解锁。认证失败不会静默退回软件密钥。")
                 .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct BluetoothSection: View {
+    let status: String
+    let errorMessage: String?
+    let start: () -> Void
+    let stop: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("BLE 状态")
+                .font(.headline)
+            Text(status)
+                .foregroundStyle(.secondary)
+            if let errorMessage {
+                Text(errorMessage)
+                    .foregroundStyle(.red)
+                    .textSelection(.enabled)
+            }
+            HStack {
+                Button("开始连接", action: start)
+                    .buttonStyle(.borderedProminent)
+                Button("停止", action: stop)
+                    .buttonStyle(.bordered)
+            }
         }
     }
 }

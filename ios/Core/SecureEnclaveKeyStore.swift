@@ -42,7 +42,7 @@ final class SecureEnclaveKeyStore {
 
         do {
             let signature = try privateKey.signature(for: data)
-            return signature.derRepresentation
+            return signature.rawRepresentation
         } catch {
             throw UnlockError.signingFailed(error.localizedDescription)
         }

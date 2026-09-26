@@ -7,6 +7,7 @@ enum UnlockError: LocalizedError, Equatable {
     case storedKeyUnreadable(String)
     case keyGenerationFailed(String)
     case signingFailed(String)
+    case protocolEncodingFailed(String)
     case localVerificationFailed
 
     var errorDescription: String? {
@@ -23,6 +24,8 @@ enum UnlockError: LocalizedError, Equatable {
             return "生成 Secure Enclave 私钥失败：\(message)"
         case let .signingFailed(message):
             return "Secure Enclave 签名失败：\(message)"
+        case let .protocolEncodingFailed(message):
+            return "认证协议编码失败：\(message)"
         case .localVerificationFailed:
             return "本地公钥验证失败；不会把这次结果报告为认证成功。"
         }

@@ -12,9 +12,10 @@
 
 - iOS App 的 Secure Enclave P-256 密钥生成与 Keychain 持久化。
 - Keychain 使用 `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`；这允许设备重启后完成第一次解锁之后，在 iPhone 再次锁屏时读取密钥并签名。
-- 明确的 challenge/签名数据结构和 canonical JSON 编码约定，见 [`protocol/README.md`](protocol/README.md)。
+- 明确的 challenge/签名数据结构和跨平台固定二进制签名载荷，JSON 只作传输外壳，见 [`protocol/README.md`](protocol/README.md)。
 - App 内的本地签名和本地公钥验证测试，以及可见的错误信息。
-- iOS 后台蓝牙中心角色所需的 Info.plist 声明；BLE 连接和 Windows 端服务尚未声称完成。
+- iOS CoreBluetooth Central 状态机：扫描、连接、状态恢复、challenge notify、签名和 assertion 回写；Windows GATT host 尚未实现。
+- iOS 后台蓝牙中心角色所需的 Info.plist 声明。
 
 当前还没有完成：
 
@@ -42,11 +43,14 @@ iOS App 负责：
 
 ### Windows 端
 
-Windows 端最终需要拆成三个组件：
+Windows 端最终需要拆成四个组件：
 
-- `UnlockService`：Windows Service，运行在 Session 0，维护 GATT Server、challenge 超时/防重放、已登记公钥和 Credential Provider 的 IPC。
+- `GattHost`：带 package identity 的 Windows GATT host，优先使用 `GattServiceProvider`/后台 GATT provider 接收 iPhone 连接。它不是普通桌面进程；是否能在目标 Windows 版本的锁屏阶段持续工作，必须在实体机器上验证。
+- `UnlockService`：Windows Service，运行在 Session 0，维护 challenge 超时/防重放、已登记公钥、协议验证和与 Credential Provider/LSA 的 IPC。当前不把“普通 Session 0 服务直接调用 GATT Server”当成已验证事实。
 - `CredentialProvider`：实现 `CPUS_UNLOCK_WORKSTATION`，向 LogonUI 提供解锁凭据入口。它不能靠普通桌面 App 的 UI 自动解锁。
 - `PairingTool`：只负责首次配对、显示并确认公钥指纹、安装/注册所需组件。
+
+此外还有 `LSAAuthenticationPackage`：它由 LSA 在系统启动时加载，接收自定义的无密码认证数据，重新验证 iPhone 签名并为已映射的 Windows 用户返回登录 Token。它不能依赖普通用户桌面进程的内存结果。
 
 真正不保存 Windows 密码的方案需要自定义 LSA Authentication Package，将验证后的公钥身份转换为 Windows 的认证令牌。这是高权限、系统级、安全敏感的代码，尚未实现；不能用“把 PIN/密码放在配置文件里”冒充无密码方案。
 
@@ -70,9 +74,12 @@ Windows Hello / WebAuthn 可以作为交互式登录或凭据能力的研究方�
 │   ├── ContentView.swift
 │   └── MyApp.swift
 └── windows/
+    ├── GattHost/
     ├── UnlockService/
     ├── CredentialProvider/
-    └── PairingTool/
+    ├── LSAAuthenticationPackage/
+    ├── PairingTool/
+    └── Protocol/
 ```
 
 这是一个根目录下同时包含 iOS target 和 Windows 工程的跨平台项目；两边共享的是协议和测试向量，不共享 UI 或平台安全 API。
@@ -90,7 +97,8 @@ Windows Hello / WebAuthn 可以作为交互式登录或凭据能力的研究方�
 1. 用 Xcode 打开 `ios/ios.xcodeproj`。
 2. 在 target `ios` 的 Signing & Capabilities 中选择你的 Team，并确认 Bundle Identifier 可用。
 3. 选择实体 iPhone，而不是 Simulator，运行 App。
-4. 首次启动时允许蓝牙权限。当前版本只完成密钥准备和本地签名测试，尚未开始 BLE 配对。
+4. 首次启动时允许蓝牙权限。
+5. 点击“开始连接”会扫描项目定义的 Windows GATT service；在 Windows `GattHost` 尚未实现前，页面会显示明确的连接失败或无设备状态，不会报告认证成功。
 
 ## iOS：使用方法
 
@@ -99,7 +107,7 @@ Windows Hello / WebAuthn 可以作为交互式登录或凭据能力的研究方�
 3. 点击“执行本地签名测试”。App 会生成随机 challenge、签名，并使用公钥在本地验证；成功或失败都会显示在界面上。
 4. 如果设备刚重启且尚未第一次解锁，Keychain 可能返回系统拒绝访问错误。先手动解锁一次，再重试；这不是被隐藏的 fallback。
 
-当前 App 不会声称已经连接 Windows，也不会因为附近存在某个蓝牙设备就报告认证成功。
+当前 App 不会因为附近存在某个蓝牙设备就报告认证成功；必须完成指定 service、characteristic 和 challenge 签名链路。
 
 ## Windows：安装方式
 
@@ -108,30 +116,29 @@ Windows Hello / WebAuthn 可以作为交互式登录或凭据能力的研究方�
 下一阶段的开发环境预期为：
 
 - Windows 11 x64。
-- Visual Studio 2022，安装 “Desktop development with C++”。
+- Visual Studio 2022，安装 “Desktop development with C++” 和 Windows App SDK/C++/WinRT 所需组件。
 - Windows SDK，包含 Bluetooth GATT、Windows Service、Credential Provider 和 LSA 相关头文件/库。
 - 支持 BLE 的硬件；开发阶段建议用独立的测试账户和虚拟机/备用机器。
+- GATT host 需要带 package identity 的安装方式（MSIX 或 packaged with external location），因为 Windows 的后台/能力声明依赖 package identity。
 
-在 Windows 端可以运行的第一个里程碑应是协议验证工具和 GATT 认证服务，而不是直接安装解锁 Provider。它必须先证明：公钥登记、challenge 新鲜度、签名验证、超时和重放拒绝都正确。
+在 Windows 端可以运行的第一个里程碑应是协议验证工具和 GATT host，而不是直接注册 LSA 包。它必须先证明：公钥登记、challenge 新鲜度、签名验证、超时、重放拒绝以及锁屏时 GATT host 的生命周期都正确。
 
 ## Windows：使用方法（当前阶段）
 
 当前没有可执行步骤，因为 Windows 认证组件尚未实现。实现后会把下面的流程补成可复制的命令和安装脚本：
 
 1. 用 `PairingTool` 完成一次性配对并人工确认公钥指纹。
-2. 以受保护的 Windows Service 身份运行 `UnlockService`。
-3. 锁屏时由 Service 发起 challenge，iPhone 返回签名 assertion。
-4. Service 验证 assertion 后，通过受支持的 Credential Provider/LSA 路径完成解锁。
-5. 任一验证、超时、权限或系统 API 错误都停止本次自动解锁并保留明确日志，Windows Hello/PIN/密码仍可作为用户主动选择的 fallback。
+2. 安装并启动带 package identity 的 `GattHost`，再以受保护的 Windows Service 身份运行 `UnlockService`。
+3. 锁屏时由认证链路生成 challenge，iPhone 返回签名 assertion。
+4. `UnlockService` 和 `LSAAuthenticationPackage` 独立验证 assertion，并将公钥映射到指定 Windows 用户。
+5. 认证包返回 Windows 登录 Token；Windows Hello/PIN/密码仍可作为用户主动选择的 fallback。
+6. 任一验证、超时、权限或系统 API 错误都停止本次自动解锁并保留明确日志。
 
-## 安全决策（实现前必须确认）
+## 已确认的安全路线
 
-下一阶段存在一个不能默认替用户选择的分叉：
+已确认采用路线 A：不保存 Windows 密码，使用 iPhone 私钥签名和 Windows 公钥验证，再由自定义 LSA Authentication Package 完成认证。路线 B 只作为调试通信的临时验证方式，不会被实现成产品 fallback，也不会把密码写入配置文件。
 
-- **路线 A：先做无密码的自定义 LSA Authentication Package。** 安全边界更符合目标，但开发、签名、安装和调试成本最高，错误可能影响系统登录。
-- **路线 B：先做 Credential Provider + 测试账户桥接。** 只用于验证 BLE、challenge 和 LogonUI 生命周期；它需要一个明确的测试认证后端，不能作为最终产品，也不能把真实密码以明文或普通配置保存。
-
-在开始写 Windows 解锁代码前，需要确认先走哪条路线。无论选择哪条路线，都不会把认证失败改成“继续尝试”或静默降级。
+LSA 包属于系统级登录组件。未完成隔离测试、签名、账户映射和恢复方案前，不会注册到日常使用的 Windows 主机。
 
 ## 参考资料
 

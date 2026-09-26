@@ -8,7 +8,7 @@
 
 ## 当前状态
 
-当前是第一阶段骨架，已经有：
+当前已经完成协议、安全密钥存储、iOS BLE Central 骨架，以及 Windows 侧的协议/CNG 验证代码：
 
 - iOS App 的 Secure Enclave P-256 密钥生成与 Keychain 持久化。
 - Keychain 使用 `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`；这允许设备重启后完成第一次解锁之后，在 iPhone 再次锁屏时读取密钥并签名。
@@ -16,13 +16,17 @@
 - App 内的本地签名和本地公钥验证测试，以及可见的错误信息。
 - iOS CoreBluetooth Central 状态机：扫描、连接、状态恢复、challenge notify、签名和 assertion 回写；Windows GATT host 尚未实现。
 - iOS 后台蓝牙中心角色所需的 Info.plist 声明。
+- Windows CNG/BCrypt P-256 公钥导入、SHA-256 和原始 `r || s` 签名验证代码。
+- Windows 与 iOS 一致的签名载荷构造代码，以及供未来 LSA 使用的无密码提交缓冲区定义。
 
 当前还没有完成：
 
-- Windows GATT Server、配对工具和跨平台 BLE 传输。
+- Windows GATT Server、配对工具和完整的跨平台 BLE 传输。
 - Windows Credential Provider 的生产实现。
 - 无密码的 LSA Authentication Package。
 - “检测到 iPhone 后自动解锁”的端到端流程。
+
+Windows 侧当前没有可安装的服务、Credential Provider 或 LSA 包；现有 CNG/protocol 源码需要在 Windows SDK 环境中编译验证。
 
 不会用软件私钥、密码硬编码、静默重试或吞掉异常来伪造这些功能。某个阶段未实现或系统拒绝访问时，App/服务应报告明确错误。
 
@@ -35,7 +39,7 @@ iOS App 负责：
 1. 在 Secure Enclave 可用的实体 iPhone 上创建 P-256 签名密钥。
 2. 将 Secure Enclave 私钥的持久化表示放入 Keychain，访问级别为 `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`。
 3. 用 Windows 发来的 challenge 生成签名 assertion。
-4. 通过 CoreBluetooth 作为 Central 连接 Windows 端 GATT Server（下一阶段实现）。
+4. 通过 CoreBluetooth 作为 Central 连接 Windows 端 GATT Server。
 
 这个访问级别有一个必须接受的安全语义：它保证“本机自上次重启后已经成功解锁过”，不保证“当前屏幕处于解锁状态”或“当前一定是本人在操作”。因此本项目的第一版目标是允许锁屏 iPhone 响应 challenge；如果以后要求当前用户在场，需要改用带用户参与条件的 Keychain/Secure Enclave access control，并重新评估后台可用性。
 
@@ -70,16 +74,22 @@ Windows Hello / WebAuthn 可以作为交互式登录或凭据能力的研究方�
 │   │   ├── UnlockError.swift
 │   │   ├── SecureEnclaveKeyStore.swift
 │   │   ├── UnlockProtocol.swift
+│   │   ├── BluetoothAuthenticator.swift
 │   │   └── UnlockSetupModel.swift
 │   ├── ContentView.swift
 │   └── MyApp.swift
 └── windows/
+    ├── CMakeLists.txt
     ├── GattHost/
     ├── UnlockService/
     ├── CredentialProvider/
     ├── LSAAuthenticationPackage/
     ├── PairingTool/
     └── Protocol/
+        ├── UnlockCrypto.*
+        ├── SigningPayload.*
+        ├── UnlockLogonBuffer.h
+        └── README.md
 ```
 
 这是一个根目录下同时包含 iOS target 和 Windows 工程的跨平台项目；两边共享的是协议和测试向量，不共享 UI 或平台安全 API。
@@ -98,7 +108,9 @@ Windows Hello / WebAuthn 可以作为交互式登录或凭据能力的研究方�
 2. 在 target `ios` 的 Signing & Capabilities 中选择你的 Team，并确认 Bundle Identifier 可用。
 3. 选择实体 iPhone，而不是 Simulator，运行 App。
 4. 首次启动时允许蓝牙权限。
-5. 点击“开始连接”会扫描项目定义的 Windows GATT service；在 Windows `GattHost` 尚未实现前，页面会显示明确的连接失败或无设备状态，不会报告认证成功。
+5. 点击“准备密钥”生成或读取 Secure Enclave 私钥。
+6. 点击“执行本地签名测试”确认本机可以完成签名和公钥验证。
+7. 点击“开始连接”会扫描项目定义的 Windows GATT service；在 Windows `GattHost` 尚未实现前，页面会显示明确的连接失败或无设备状态，不会报告认证成功。
 
 ## iOS：使用方法
 
@@ -111,7 +123,7 @@ Windows Hello / WebAuthn 可以作为交互式登录或凭据能力的研究方�
 
 ## Windows：安装方式
 
-当前 Windows 组件尚未实现，因此现在没有可安装的 Windows MSI、服务或 Credential Provider，也不应把空目录注册为系统组件。
+完整 Windows 组件尚未实现，因此现在没有可安装的 Windows MSI、服务或 Credential Provider，也不应把空目录注册为系统组件。当前仓库已经有协议/CNG 库源码，但只能在 Windows SDK 环境中构建。
 
 下一阶段的开发环境预期为：
 
@@ -121,11 +133,20 @@ Windows Hello / WebAuthn 可以作为交互式登录或凭据能力的研究方�
 - 支持 BLE 的硬件；开发阶段建议用独立的测试账户和虚拟机/备用机器。
 - GATT host 需要带 package identity 的安装方式（MSIX 或 packaged with external location），因为 Windows 的后台/能力声明依赖 package identity。
 
+构建当前协议/CNG 库的命令为：
+
+```powershell
+cmake -S windows -B windows/build -A x64
+cmake --build windows/build --config Debug
+```
+
+当前开发环境是 macOS，因此只对可移植的签名载荷代码做了语法检查，没有把 Windows SDK 编译结果写成已验证事实。
+
 在 Windows 端可以运行的第一个里程碑应是协议验证工具和 GATT host，而不是直接注册 LSA 包。它必须先证明：公钥登记、challenge 新鲜度、签名验证、超时、重放拒绝以及锁屏时 GATT host 的生命周期都正确。
 
 ## Windows：使用方法（当前阶段）
 
-当前没有可执行步骤，因为 Windows 认证组件尚未实现。实现后会把下面的流程补成可复制的命令和安装脚本：
+当前还不能完成端到端自动解锁，因为 Windows 认证组件尚未实现。实现后会把下面的流程补成可复制的命令和安装脚本：
 
 1. 用 `PairingTool` 完成一次性配对并人工确认公钥指纹。
 2. 安装并启动带 package identity 的 `GattHost`，再以受保护的 Windows Service 身份运行 `UnlockService`。
@@ -133,6 +154,14 @@ Windows Hello / WebAuthn 可以作为交互式登录或凭据能力的研究方�
 4. `UnlockService` 和 `LSAAuthenticationPackage` 独立验证 assertion，并将公钥映射到指定 Windows 用户。
 5. 认证包返回 Windows 登录 Token；Windows Hello/PIN/密码仍可作为用户主动选择的 fallback。
 6. 任一验证、超时、权限或系统 API 错误都停止本次自动解锁并保留明确日志。
+
+## 当前验证状态
+
+- `ios/App/Info.plist` 已通过 `plutil -lint`。
+- iOS 核心安全、协议和 BLE 源码已通过 Swift 类型检查。
+- `windows/Protocol/SigningPayload.cpp` 已通过 macOS 上的 C++20 语法检查。
+- Xcode 工程可以被 `xcodebuild -list` 正确解析。
+- 完整 Xcode 构建曾被当前环境的 `swift-plugin-server`/sandbox 限制阻断；这属于构建环境限制，不能当作完整构建成功，也不能当作源码已经在真实设备上验证。
 
 ## 已确认的安全路线
 

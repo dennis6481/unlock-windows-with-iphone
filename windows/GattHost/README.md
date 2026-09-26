@@ -2,7 +2,7 @@
 
 # GattHost
 
-The first foreground prototype is now in `main.cpp` and is built as `unlock_gatt_host`. It creates the custom service and four characteristics, accepts the `0x01` request frame, sends a JSON challenge notification, receives an assertion frame, and emits an explicit `authenticated:false` transport result.
+The first foreground prototype is now in `main.cpp` and is built as `unlock_gatt_host`. It creates the custom service and four characteristics, starts an explicitly discoverable/connectable advertisement, accepts the `0x01` request frame, sends a JSON challenge notification, receives an assertion frame, and emits an explicit `authenticated:false` transport result.
 
 Build and run it from a developer command prompt with the Windows SDK loaded:
 

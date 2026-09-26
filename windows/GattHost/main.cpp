@@ -207,7 +207,21 @@ public:
             }
         );
 
-        serviceProvider_.StartAdvertising();
+        advertisementStatusToken_ = serviceProvider_.AdvertisementStatusChanged(
+            [this](
+                GattServiceProvider const&,
+                GattServiceProviderAdvertisementStatusChangedEventArgs const& args
+            ) {
+                std::cout << "[GattHost] advertisement status="
+                          << static_cast<int>(args.Status())
+                          << " error=" << static_cast<int>(args.Error()) << "\n";
+            }
+        );
+
+        GattServiceProviderAdvertisingParameters advertisingParameters;
+        advertisingParameters.IsDiscoverable(true);
+        advertisingParameters.IsConnectable(true);
+        serviceProvider_.StartAdvertising(advertisingParameters);
         std::cout << "[GattHost] advertising service " << to_string(kServiceUuid) << "\n"
                   << "[GattHost] request=" << to_string(kRequestCharacteristicUuid) << "\n"
                   << "[GattHost] challenge=" << to_string(kChallengeCharacteristicUuid) << "\n"
@@ -218,6 +232,9 @@ public:
 
     void stop() noexcept {
         try {
+            if (serviceProvider_) {
+                serviceProvider_.AdvertisementStatusChanged(advertisementStatusToken_);
+            }
             if (serviceProvider_) {
                 serviceProvider_.StopAdvertising();
             }
@@ -340,6 +357,7 @@ private:
     event_token requestWriteToken_{};
     event_token assertionWriteToken_{};
     event_token challengeSubscriptionToken_{};
+    event_token advertisementStatusToken_{};
 };
 
 } // namespace

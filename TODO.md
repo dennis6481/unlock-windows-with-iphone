@@ -1,0 +1,83 @@
+<!-- Created by Codex on 27 Sep 2026 -->
+
+# 自动解锁认证模式 TODO
+
+本项目只采用“自动解锁认证模式”：完成首次登记后，iPhone 在后台自动发现已登记的 Windows 电脑，自动建立 BLE 连接、完成 challenge 签名并触发解锁流程。
+
+运行期间不使用 NFC、Face ID、手动确认或 Windows 通知确认。首次登记仍必须保留 Windows 指纹确认，避免把未知公钥写入本机。
+
+## 当前已完成
+
+- [x] iPhone Secure Enclave P-256 私钥和 Keychain 持久化
+- [x] iOS CoreBluetooth Central、BLE service/characteristic 和状态恢复骨架
+- [x] iOS `bluetooth-central` 后台能力声明
+- [x] Windows 前台 GATT Host 广播和 characteristic 传输
+- [x] challenge、签名 assertion、重放和过期校验
+- [x] Windows CNG P-256 验签
+- [x] Windows 公钥指纹登记和通知确认
+- [x] DPAPI/ACL 保护的公钥登记存储
+- [x] 登记记录保存 Windows 用户 SID
+- [x] UnlockService named-pipe IPC
+- [x] Windows CMake/Makefile 构建和四个 CTest
+
+## 1. iOS 后台自动认证
+
+- [ ] 增加“启用自动解锁”设置，并在首次登记成功后持久化状态
+- [ ] App 启动、蓝牙恢复和系统唤醒时自动扫描项目 GATT service
+- [ ] 发现已登记 Windows 广播后自动连接，不要求点击“开始连接”
+- [ ] 后台自动订阅 challenge/result characteristic
+- [ ] 自动发送 request、接收 challenge、签名并写回 assertion
+- [ ] 处理断线重连、重复发现、重复 request、超时和指数退避
+- [ ] 收到 `unlock_approved` 后停止本轮扫描，避免重复认证
+- [ ] 蓝牙关闭、权限撤销、App 被系统终止时显示明确状态
+- [ ] 实体 iPhone 验证前台、后台、锁屏、重新启动 App 和断线重连
+- [ ] 记录并验证 iOS 后台扫描不是实时保证，不能把超时当成认证失败
+
+## 2. Windows 后台 GATT 生命周期
+
+- [ ] 将前台 `GattHost` 改为带 package identity 的后台 GATT 组件
+- [ ] 验证 `GattServiceProvider` 在 Windows 锁屏时仍能广播和接收写入
+- [ ] 将 `UnlockService` 改为真正的 Windows Service
+- [ ] 配置开机启动、服务停止、崩溃恢复和安全卸载
+- [ ] 保留当前 named-pipe 用户/权限校验，并重新验证 Session 0 通信
+- [ ] 后台服务启动后自动加载 DPAPI 登记记录和 Windows SID
+- [ ] 后台服务不能依赖交互式桌面、控制台窗口或 Windows 通知
+
+## 3. 自动解锁决策层
+
+- [ ] `UnlockServiceCore` 保存已登记公钥对应的 Windows SID
+- [ ] 签名验证成功且 SID 有效时返回 `unlock_approved`
+- [ ] 未登记、错误公钥、错误 SID、过期 challenge 和重放始终拒绝
+- [ ] 自动认证结果加入冷却时间和重复请求抑制
+- [ ] 增加可配置 RSSI 近距离阈值，信号过弱时不触发自动认证/解锁
+- [ ] 对 RSSI 连续采样取平均并加入进入/离开滞回，避免瞬时波动反复触发
+- [ ] RSSI 只能作为距离门控，不能替代签名和公钥身份认证
+- [ ] 增加自动批准、拒绝、超时和重放的单元测试与 IPC 测试
+
+## 4. Windows 真正解锁
+
+- [ ] 设计 Credential Provider 与 UnlockService/LSA 的 IPC 边界
+- [ ] 实现 `CPUS_UNLOCK_WORKSTATION` 测试 Credential Provider
+- [ ] 让认证结果只映射到登记记录中的 Windows SID
+- [ ] 研究并实现不保存 Windows 密码的 LSA Authentication Package
+- [ ] 验证认证包返回的登录 Token 和锁屏解锁流程
+- [ ] 保留 Windows Hello/PIN/密码作为系统恢复入口
+- [ ] 仅在测试账户、虚拟机或备用电脑上验证，完成回滚和卸载流程
+
+## 5. 端到端验证
+
+- [ ] 首次登记后关闭两个前台程序，确认后台组件自动恢复
+- [ ] iPhone 锁屏且 App 不在前台时，验证自动连接和签名
+- [ ] Windows 锁屏时验证 GATT 广播、challenge 和 assertion
+- [ ] iPhone 离开范围后确认不会产生新的解锁批准
+- [ ] 手机留在电脑旁、用户离开时记录当前自动模式的安全语义
+- [ ] Windows 服务重启后验证公钥和 SID 持久化
+- [ ] 蓝牙断开、电脑睡眠/唤醒、iPhone 重启后验证恢复
+- [ ] 运行 `make test`，确认全部 Windows 测试通过
+
+## 明确不采用
+
+- [ ] NFC 贴近确认
+- [ ] 运行期间 Face ID 或人工确认
+- [ ] 仅依靠 RSSI、蓝牙连接状态或传统蓝牙配对作为认证
+- [ ] 在配置文件中保存 Windows 密码或 PIN

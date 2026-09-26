@@ -1,0 +1,17 @@
+.DS_Store
+*.code-workspace
+
+# Xcode
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+.build/
+.swiftpm/
+
+# Xcode build artifacts
+*.hmap
+*.ipa
+*.dSYM
+*.dSYM.zip
+

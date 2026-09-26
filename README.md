@@ -30,6 +30,17 @@ Windows 侧当前没有可安装的服务、Credential Provider 或 LSA 包；�
 
 不会用软件私钥、密码硬编码、静默重试或吞掉异常来伪造这些功能。某个阶段未实现或系统拒绝访问时，App/服务应报告明确错误。
 
+### 已知问题（iOS BLE，暂缓处理）
+
+以下问题已经确认，但暂时不作为当前 Windows 主线的阻塞项，后续实现 GATT host 和跨平台传输测试时统一处理：
+
+- iOS 在调用 `setNotifyValue(true, for:)` 后会立即写入 request；应等待 challenge characteristic 的订阅成功回调，避免 Windows 已发送通知但 iOS 尚未完成订阅。
+- challenge 和 assertion 当前直接以完整 JSON 写入 characteristic，尚未实现应用层 MTU 分片、重组、消息长度限制、乱序/重复片段拒绝和传输超时。
+- result characteristic 已订阅，但 iOS 尚未消费明确的成功/失败回执，也没有把回执状态暴露到界面。
+- CoreBluetooth 的后台恢复、锁屏 iPhone、Windows 锁屏以及 BLE 断线重连的组合生命周期尚未在实体设备上验证。
+- BLE 配对/链路保护与 Windows GATT characteristic 的权限策略尚未完成联调；BLE 仍然只负责传输，不能替代签名认证。
+- App 中仍有部分说明文字把 BLE 描述为“尚未接入”，需要在 BLE 传输稳定后统一更新 UI 文案。
+
 ## 解决的问题与边界
 
 ### iOS 端
@@ -140,9 +151,9 @@ cmake -S windows -B windows/build -A x64
 cmake --build windows/build --config Debug
 ```
 
-当前开发环境是 macOS，因此只对可移植的签名载荷代码做了语法检查，没有把 Windows SDK 编译结果写成已验证事实。
+Windows SDK 目标仍需要在 Windows 开发环境中完成实际构建验证；没有把跨平台语法检查结果写成 Windows 构建成功的事实。
 
-在 Windows 端可以运行的第一个里程碑应是协议验证工具和 GATT host，而不是直接注册 LSA 包。它必须先证明：公钥登记、challenge 新鲜度、签名验证、超时、重放拒绝以及锁屏时 GATT host 的生命周期都正确。
+在 Windows 端可以运行的第一个里程碑应是协议验证工具和 GATT host，而不是直接注册 LSA 包。当前先加入协议自测目标，验证固定签名载荷、CNG 验签成功路径和篡改签名拒绝路径；随后再实现 GATT host。完整里程碑仍必须证明：公钥登记、challenge 新鲜度、签名验证、超时、重放拒绝以及锁屏时 GATT host 的生命周期都正确。
 
 ## Windows：使用方法（当前阶段）
 
@@ -176,3 +187,10 @@ LSA 包属于系统级登录组件。未完成隔离测试、签名、账户映�
 - [Apple：Core Bluetooth background processing](https://developer.apple.com/library/archive/documentation/NetworkingInternetWeb/Conceptual/CoreBluetooth_concepts/CoreBluetoothBackgroundProcessingForIOSApps/PerformingTasksWhileYourAppIsInTheBackground.html)
 - [Microsoft：Credential Providers](https://learn.microsoft.com/en-us/windows/win32/secauthn/credential-providers-in-windows)
 - [Microsoft：LSA Authentication Model](https://learn.microsoft.com/en-us/windows/win32/secauthn/lsa-authentication-model)
+
+## Windows 当前推进状态
+
+- `windows/GattHost` 已有可编译、可运行的前台 GATT Server 原型：创建项目定义的 service 和四个 characteristic，接收 `0x01` request，发送 challenge，并接收 assertion 传输帧。
+- `windows/UnlockService/UnlockServiceCore` 已独立实现 challenge 新鲜度、单次使用、assertion JSON 解析、P-256 公钥指纹匹配和 CNG 验签；它还没有被提升为真正的 Session 0 Windows Service，也没有接入 IPC。
+- Windows 本机的 `unlock_protocol_tests` 和 `unlock_service_tests` 均已通过；`GattHost` 已通过 Windows SDK/C++/WinRT 编译并完成本机启动烟雾测试。
+- 下一步是把 GATT host 与服务核心通过受保护 IPC 连接起来，再实现 package identity/MSIX、后台/锁屏生命周期和公钥登记；在这些完成前不会接入 Credential Provider 或 LSA 注册。

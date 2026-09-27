@@ -224,3 +224,7 @@ LSA 包属于系统级登录组件。未完成隔离测试、签名、账户映�
 - `unlock_pairing_tool` 已实现 Windows 通知确认按钮；iOS 可通过 GATT 发送登记候选公钥，但没有点击 Confirm 就不会写入公钥。
 - Windows 本机的 `unlock_protocol_tests`、`unlock_service_tests`、`unlock_service_ipc_tests` 和 `unlock_enrollment_store_tests` 均已通过；全部 Windows 目标已完成 SDK 构建。
 - SID 记录已经落地，下一步是把当前前台登记流程提升为 package identity/MSIX、后台/锁屏生命周期和真正的 Windows Service；之后再让认证组件实际使用 SID 映射，在这些完成前不会接入 Credential Provider 或 LSA 注册。
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE.md](LICENSE.md).

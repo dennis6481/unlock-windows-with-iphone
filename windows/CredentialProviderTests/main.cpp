@@ -1,10 +1,13 @@
 // Created by Rui MA on 27 Sep 2026
+// Modified by Codex on 27 Sep 2026
 
 #include "UnlockCredentialProvider.h"
 #include "UnlockCredentialSerialization.h"
 
 #include <Windows.h>
+#include <ShlGuid.h>
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
@@ -28,6 +31,154 @@ void require(const bool condition, const char* message) {
         throw std::runtime_error(message);
     }
 }
+
+class TestUser final : public ICredentialProviderUser {
+public:
+    explicit TestUser(const wchar_t* sid) : sid_(sid) {}
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(
+        REFIID riid,
+        void** object
+    ) override {
+        if (object == nullptr) {
+            return E_POINTER;
+        }
+        *object = nullptr;
+        if (IsEqualIID(riid, IID_IUnknown) ||
+            IsEqualIID(riid, __uuidof(ICredentialProviderUser))) {
+            *object = static_cast<ICredentialProviderUser*>(this);
+            AddRef();
+            return S_OK;
+        }
+        return E_NOINTERFACE;
+    }
+
+    ULONG STDMETHODCALLTYPE AddRef() override {
+        return refCount_.fetch_add(1, std::memory_order_relaxed) + 1;
+    }
+
+    ULONG STDMETHODCALLTYPE Release() override {
+        return refCount_.fetch_sub(1, std::memory_order_acq_rel) - 1;
+    }
+
+    HRESULT STDMETHODCALLTYPE GetSid(LPWSTR* sid) override {
+        if (sid == nullptr) {
+            return E_POINTER;
+        }
+        *sid = nullptr;
+        const auto bytes = (sid_.size() + 1) * sizeof(wchar_t);
+        *sid = static_cast<LPWSTR>(CoTaskMemAlloc(bytes));
+        if (*sid == nullptr) {
+            return E_OUTOFMEMORY;
+        }
+        std::memcpy(*sid, sid_.c_str(), bytes);
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE GetProviderID(GUID* providerId) override {
+        if (providerId == nullptr) {
+            return E_POINTER;
+        }
+        *providerId = GUID_NULL;
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE GetStringValue(
+        REFPROPERTYKEY,
+        LPWSTR* stringValue
+    ) override {
+        if (stringValue != nullptr) {
+            *stringValue = nullptr;
+        }
+        return E_NOTIMPL;
+    }
+
+    HRESULT STDMETHODCALLTYPE GetValue(
+        REFPROPERTYKEY,
+        PROPVARIANT* value
+    ) override {
+        if (value != nullptr) {
+            *value = {};
+        }
+        return E_NOTIMPL;
+    }
+
+private:
+    std::atomic<ULONG> refCount_{1};
+    std::wstring sid_;
+};
+
+class TestUserArray final : public ICredentialProviderUserArray {
+public:
+    explicit TestUserArray(const wchar_t* sid) : user_(sid) {}
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(
+        REFIID riid,
+        void** object
+    ) override {
+        if (object == nullptr) {
+            return E_POINTER;
+        }
+        *object = nullptr;
+        if (IsEqualIID(riid, IID_IUnknown) ||
+            IsEqualIID(riid, __uuidof(ICredentialProviderUserArray))) {
+            *object = static_cast<ICredentialProviderUserArray*>(this);
+            AddRef();
+            return S_OK;
+        }
+        return E_NOINTERFACE;
+    }
+
+    ULONG STDMETHODCALLTYPE AddRef() override {
+        return refCount_.fetch_add(1, std::memory_order_relaxed) + 1;
+    }
+
+    ULONG STDMETHODCALLTYPE Release() override {
+        return refCount_.fetch_sub(1, std::memory_order_acq_rel) - 1;
+    }
+
+    HRESULT STDMETHODCALLTYPE SetProviderFilter(REFGUID) override {
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE GetAccountOptions(
+        CREDENTIAL_PROVIDER_ACCOUNT_OPTIONS* options
+    ) override {
+        if (options == nullptr) {
+            return E_POINTER;
+        }
+        *options = CPAO_NONE;
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE GetCount(DWORD* count) override {
+        if (count == nullptr) {
+            return E_POINTER;
+        }
+        *count = 1;
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE GetAt(
+        DWORD index,
+        ICredentialProviderUser** user
+    ) override {
+        if (user == nullptr) {
+            return E_POINTER;
+        }
+        *user = nullptr;
+        if (index != 0) {
+            return E_INVALIDARG;
+        }
+        *user = &user_;
+        user_.AddRef();
+        return S_OK;
+    }
+
+private:
+    std::atomic<ULONG> refCount_{1};
+    TestUser user_;
+};
 
 std::wstring moduleDirectory() {
     std::wstring path(32'768, L'\0');
@@ -87,15 +238,24 @@ void run() {
         "logon usage scenario was unexpectedly enabled"
     );
 
-    DWORD fieldCount = 0;
-    require(provider->GetFieldDescriptorCount(&fieldCount) == S_OK && fieldCount == 3,
-        "unexpected Credential Provider field count");
+    ICredentialProviderSetUserArray* setUserArray = nullptr;
+    require(
+        provider->QueryInterface(
+            __uuidof(ICredentialProviderSetUserArray),
+            reinterpret_cast<void**>(&setUserArray)
+        ) == S_OK,
+        "V2 user-array interface is missing"
+    );
+    TestUserArray users(L"S-1-5-21-1000-1000-1000-1001");
+    require(
+        setUserArray->SetUserArray(&users) == S_OK,
+        "Credential Provider rejected the user array"
+    );
+    setUserArray->Release();
 
-    CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR* descriptor = nullptr;
-    require(provider->GetFieldDescriptorAt(0, &descriptor) == S_OK, "title field missing");
-    require(descriptor->cpft == CPFT_LARGE_TEXT, "title field type mismatch");
-    CoTaskMemFree(descriptor->pszLabel);
-    CoTaskMemFree(descriptor);
+    DWORD fieldCount = 0;
+    require(provider->GetFieldDescriptorCount(&fieldCount) == S_OK && fieldCount == 4,
+        "unexpected Credential Provider field count");
 
     DWORD credentialCount = 0;
     DWORD defaultIndex = 0;
@@ -109,8 +269,44 @@ void run() {
     ICredentialProviderCredential* credential = nullptr;
     require(provider->GetCredentialAt(0, &credential) == S_OK, "credential tile missing");
 
+    CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR* descriptor = nullptr;
+    require(provider->GetFieldDescriptorAt(0, &descriptor) == S_OK, "logo field missing");
+    require(descriptor->cpft == CPFT_TILE_IMAGE, "logo field type mismatch");
+    require(IsEqualGUID(descriptor->guidFieldType, CPFG_CREDENTIAL_PROVIDER_LOGO),
+        "logo field GUID mismatch");
+    HBITMAP logo = nullptr;
+    require(credential != nullptr, "credential must be available before testing its logo");
+    CoTaskMemFree(descriptor->pszLabel);
+    CoTaskMemFree(descriptor);
+    require(credential->GetBitmapValue(0, &logo) == S_OK && logo != nullptr,
+        "credential logo is missing");
+    DeleteObject(logo);
+
+    descriptor = nullptr;
+    require(provider->GetFieldDescriptorAt(1, &descriptor) == S_OK, "title field missing");
+    require(descriptor->cpft == CPFT_LARGE_TEXT, "title field type mismatch");
+    CoTaskMemFree(descriptor->pszLabel);
+    CoTaskMemFree(descriptor);
+
+    ICredentialProviderCredential2* credential2 = nullptr;
+    require(
+        credential->QueryInterface(
+            __uuidof(ICredentialProviderCredential2),
+            reinterpret_cast<void**>(&credential2)
+        ) == S_OK,
+        "V2 credential interface is missing"
+    );
+    LPWSTR userSid = nullptr;
+    require(
+        credential2->GetUserSid(&userSid) == S_OK &&
+            std::wstring(userSid) == L"S-1-5-21-1000-1000-1000-1001",
+        "Credential Provider returned the wrong user SID"
+    );
+    CoTaskMemFree(userSid);
+    credential2->Release();
+
     LPWSTR title = nullptr;
-    require(credential->GetStringValue(0, &title) == S_OK, "credential title missing");
+    require(credential->GetStringValue(1, &title) == S_OK, "credential title missing");
     require(std::wstring(title) == L"Unlock Windows with iPhone", "credential title mismatch");
     CoTaskMemFree(title);
 

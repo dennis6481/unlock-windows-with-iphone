@@ -64,8 +64,8 @@ struct AssertionResult final {
 class UnlockServiceCore final {
 public:
     explicit UnlockServiceCore(
-        std::string audience = "windows-unlock",
-        std::int64_t challengeLifetimeMilliseconds = 30'000,
+        std::string audience = protocol::kUnlockAudience,
+        std::int64_t challengeLifetimeMilliseconds = protocol::kChallengeLifetimeMilliseconds,
         std::int64_t unlockCooldownMilliseconds = 5'000
     );
 

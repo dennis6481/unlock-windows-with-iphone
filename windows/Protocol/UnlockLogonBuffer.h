@@ -18,6 +18,8 @@ inline constexpr std::size_t kRequestIdSize = 16;
 inline constexpr std::size_t kNonceSize = 32;
 inline constexpr std::size_t kAudienceMaxUtf8Bytes = 64;
 inline constexpr std::size_t kRawSignatureSize = 64;
+inline constexpr char kUnlockAudience[] = "windows-unlock";
+inline constexpr std::int64_t kChallengeLifetimeMilliseconds = 30'000;
 inline constexpr char kUnlockLsaAuthenticationPackageName[] =
     "UnlockWindowsWithIPhone";
 

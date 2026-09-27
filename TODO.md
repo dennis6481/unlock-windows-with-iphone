@@ -1,4 +1,5 @@
 <!-- Created by Rui MA on 27 Sep 2026 -->
+<!-- Modified by Codex on 27 Sep 2026 -->
 
 # 自动解锁认证模式 TODO
 
@@ -20,9 +21,14 @@
 - [x] `UnlockServiceCore` 在签名验证后绑定登记 SID，并输出 `unlock_approved` 决策信号（不执行系统解锁）
 - [x] 定义 Credential Provider/LSA 共用的无密码提交缓冲区，并增加结构校验测试（不注册系统组件）
 - [x] 实现只用于 SDK/COM smoke test 的 `CPUS_UNLOCK_WORKSTATION` Credential Provider shell（不注册、不返回登录凭据）
+- [x] Credential Provider 增加 V2 用户关联：通过 `ICredentialProviderSetUserArray` 和 `ICredentialProviderCredential2::GetUserSid` 绑定当前 Windows 用户
+- [x] 增加只构建不注册的 LSA Authentication Package 原型：独立校验 `UnlockLogonBuffer`、登记公钥、SID、audience、时间窗口和签名，并准备 SID 映射的 token 信息
+- [x] 增加仅供一次性 Windows VM 使用的 LSA 注册备份/回滚脚本和只读 package lookup smoke test（默认不执行、不注册）
+- [x] 在关闭 LSA Protection 的一次性 VM 中完成 LSA package 注册、重启和 package ID 查询
+- [x] 增加仅供一次性 Windows VM 使用的 Credential Provider 注册/回滚脚本，并完成注册表/DLL 路径检查
 - [x] 对自动解锁批准加入短冷却和一次性 challenge 消费，抑制 BLE 重复发现造成的连续批准
 - [x] UnlockService named-pipe IPC
-- [x] Windows CMake/Makefile 构建和四个 CTest
+- [x] Windows CMake/Makefile 构建和六个 CTest
 
 ## 借鉴成熟方案的边界
 
@@ -74,12 +80,16 @@
 
 ## 4. Windows 真正解锁
 
-- [ ] 设计 Credential Provider 与 UnlockService/LSA 的 IPC 边界
+- [x] 设计 Credential Provider 与 UnlockService/LSA 的 IPC 边界
 - [x] 定义 Credential Provider 与 LSA 共享的 `UnlockLogonBuffer` 输入边界（仅 codec，不注册 DLL）
 - [x] 增加仅供测试的 Credential Provider serialization adapter，验证已批准字段能生成 `CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION`
 - [x] 定义开发期 `consumeUnlockApproval` named-pipe 边界：一次性、短期、返回二进制 `UnlockLogonBuffer`
 - [x] 让未注册的 Credential Provider 在 LSA 包存在时消费受保护的短期批准并提交 `UnlockLogonBuffer`
-- [ ] 将真实 LSA Authentication Package 注册到测试环境并完成独立验签
+- [x] 增加只构建不注册的 LSA Authentication Package callback 和独立验签测试；包内增加进程生命周期内的 request ID 防重放
+- [x] 将真实 LSA Authentication Package 注册到测试 VM 并完成 package lookup smoke test（LSA Protection 关闭）
+- [ ] 验证 VM-only Credential Provider 锁屏 tile 能走到 LSA package
+- [ ] 查明一次性 VM 中 LogonUI 仍只显示 PIN 的原因：确认 System32 DLL 与 Release 构建 hash 一致，并用进程加载诊断确认 LogonUI 是否加载 Provider DLL
+- [ ] 在 Credential Provider 真正出现在锁屏后，验证 tile 激活、`GetSerialization`、LSA package lookup 和一次性批准消费的完整链路
 - [ ] 让认证结果只映射到登记记录中的 Windows SID
 - [ ] 研究并实现不保存 Windows 密码的 LSA Authentication Package
 - [ ] 验证认证包返回的登录 Token 和锁屏解锁流程
@@ -96,6 +106,21 @@
 - [ ] Windows 服务重启后验证公钥和 SID 持久化
 - [ ] 蓝牙断开、电脑睡眠/唤醒、iPhone 重启后验证恢复
 - [ ] 运行 `make test`，确认全部 Windows 测试通过
+
+## 当前 Windows VM 阻塞记录
+
+- Windows Release 构建和 6 个 CTest 已通过。
+- 一次性 VM 中 LSA package lookup 已返回 package ID，Credential Provider 注册表项和 System32 DLL 路径检查为存在，直接 COM smoke test 返回成功。
+- 锁屏/登录界面仍只显示 PIN，没有出现 “Unlock Windows with iPhone” tile；现有 Winlogon ETW 记录没有给出明确的 Provider CLSID 或 DLL 加载证据。
+- 当前阻塞点在 LogonUI 的 Credential Provider 激活/显示链路，不是 iPhone 签名、UnlockService 验签或 LSA package lookup。未确认 tile 出现前，不宣称已经完成实际解锁。
+
+## 6. LSA Protection 与生产发布
+
+- [x] 确认 LSA Protection 会阻止当前未经过 Microsoft LSA 签名的 package
+- [x] 将“关闭 LSA Protection 仅限一次性 VM”记录为 Windows 已知问题
+- [ ] 生产路线：组织身份、EV 代码签名证书、Partner Center Hardware Developer Program 和 Microsoft LSA File Signing
+- [ ] 个人开发路线：评估 Credential Provider + 受保护服务方案，避免把 Microsoft LSA 签名当作 MVP 前置条件
+- [ ] 不在宿主机或日常使用系统关闭 LSA Protection
 
 ## 明确不采用
 

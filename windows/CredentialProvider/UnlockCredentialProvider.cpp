@@ -1,4 +1,5 @@
 // Created by Rui MA on 27 Sep 2026
+// Modified by Codex on 27 Sep 2026
 
 #include "UnlockCredentialProvider.h"
 #include "UnlockCredentialApprovalClient.h"
@@ -7,7 +8,11 @@
 #include <atomic>
 #include <cwchar>
 #include <cstring>
+#include <cstdint>
 #include <new>
+#include <string>
+
+#include <ShlGuid.h>
 
 namespace {
 
@@ -17,21 +22,24 @@ using unlock_windows::credential_provider::buildCredentialSerialization;
 using unlock_windows::credential_provider::consumePendingApproval;
 using unlock_windows::credential_provider::lookupAuthenticationPackage;
 
-constexpr DWORD kTitleField = 0;
-constexpr DWORD kStatusField = 1;
-constexpr DWORD kSubmitField = 2;
-constexpr DWORD kFieldCount = 3;
+constexpr DWORD kIconField = 0;
+constexpr DWORD kTitleField = 1;
+constexpr DWORD kStatusField = 2;
+constexpr DWORD kSubmitField = 3;
+constexpr DWORD kFieldCount = 4;
 
 struct FieldDefinition final {
     DWORD id;
     CREDENTIAL_PROVIDER_FIELD_TYPE type;
     const wchar_t* label;
+    GUID fieldType;
 };
 
-constexpr FieldDefinition kFields[] = {
-    {kTitleField, CPFT_LARGE_TEXT, L"Unlock with iPhone"},
-    {kStatusField, CPFT_SMALL_TEXT, L"Status"},
-    {kSubmitField, CPFT_SUBMIT_BUTTON, L"Unlock"},
+const FieldDefinition kFields[] = {
+    {kIconField, CPFT_TILE_IMAGE, nullptr, CPFG_CREDENTIAL_PROVIDER_LOGO},
+    {kTitleField, CPFT_LARGE_TEXT, L"Unlock with iPhone", GUID_NULL},
+    {kStatusField, CPFT_SMALL_TEXT, L"Status", GUID_NULL},
+    {kSubmitField, CPFT_SUBMIT_BUTTON, L"Unlock", GUID_NULL},
 };
 
 std::atomic<ULONG> gObjectCount{0};
@@ -84,9 +92,11 @@ HRESULT copyFieldDescriptor(
 
     descriptor->dwFieldID = definition.id;
     descriptor->cpft = definition.type;
-    descriptor->guidFieldType = GUID_NULL;
+    descriptor->guidFieldType = definition.fieldType;
     descriptor->pszLabel = nullptr;
-    const auto result = copyString(definition.label, &descriptor->pszLabel);
+    const auto result = definition.label == nullptr
+        ? S_OK
+        : copyString(definition.label, &descriptor->pszLabel);
     if (FAILED(result)) {
         CoTaskMemFree(descriptor);
         return result;
@@ -96,7 +106,58 @@ HRESULT copyFieldDescriptor(
     return S_OK;
 }
 
-class UnlockCredential final : public ICredentialProviderCredential {
+HBITMAP createProviderLogo() noexcept {
+    BITMAPINFO bitmapInfo{};
+    bitmapInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bitmapInfo.bmiHeader.biWidth = 72;
+    bitmapInfo.bmiHeader.biHeight = -72;
+    bitmapInfo.bmiHeader.biPlanes = 1;
+    bitmapInfo.bmiHeader.biBitCount = 32;
+    bitmapInfo.bmiHeader.biCompression = BI_RGB;
+
+    void* pixels = nullptr;
+    const auto bitmap = CreateDIBSection(
+        nullptr,
+        &bitmapInfo,
+        DIB_RGB_COLORS,
+        &pixels,
+        nullptr,
+        0
+    );
+    if (bitmap == nullptr || pixels == nullptr) {
+        if (bitmap != nullptr) {
+            DeleteObject(bitmap);
+        }
+        return nullptr;
+    }
+
+    auto* const pixelBuffer = static_cast<std::uint32_t*>(pixels);
+    for (int y = 0; y < 72; ++y) {
+        for (int x = 0; x < 72; ++x) {
+            pixelBuffer[y * 72 + x] = 0x00c2410c;
+        }
+    }
+
+    for (int y = 12; y < 60; ++y) {
+        for (int x = 24; x < 48; ++x) {
+            pixelBuffer[y * 72 + x] = 0x00ffffff;
+        }
+    }
+    for (int y = 18; y < 54; ++y) {
+        for (int x = 28; x < 44; ++x) {
+            pixelBuffer[y * 72 + x] = 0x00c2410c;
+        }
+    }
+    for (int y = 55; y < 58; ++y) {
+        for (int x = 33; x < 39; ++x) {
+            pixelBuffer[y * 72 + x] = 0x00c2410c;
+        }
+    }
+
+    return bitmap;
+}
+
+class UnlockCredential final : public ICredentialProviderCredential2 {
 public:
     UnlockCredential() noexcept {
         objectCreated();
@@ -121,8 +182,9 @@ public:
         }
         *object = nullptr;
         if (IsEqualIID(riid, IID_IUnknown) ||
-            IsEqualIID(riid, __uuidof(ICredentialProviderCredential))) {
-            *object = static_cast<ICredentialProviderCredential*>(this);
+            IsEqualIID(riid, __uuidof(ICredentialProviderCredential)) ||
+            IsEqualIID(riid, __uuidof(ICredentialProviderCredential2))) {
+            *object = static_cast<ICredentialProviderCredential2*>(this);
             AddRef();
             return S_OK;
         }
@@ -184,6 +246,7 @@ public:
             return E_POINTER;
         }
         switch (fieldId) {
+            case kIconField:
             case kTitleField:
             case kStatusField:
                 *state = CPFS_DISPLAY_IN_BOTH;
@@ -203,6 +266,12 @@ public:
         LPWSTR* value
     ) override {
         switch (fieldId) {
+            case kIconField:
+                if (value == nullptr) {
+                    return E_POINTER;
+                }
+                *value = nullptr;
+                return S_OK;
             case kTitleField:
                 return copyString(L"Unlock Windows with iPhone", value);
             case kStatusField:
@@ -219,14 +288,18 @@ public:
     }
 
     HRESULT STDMETHODCALLTYPE GetBitmapValue(
-        DWORD,
+        DWORD fieldId,
         HBITMAP* bitmap
     ) override {
         if (bitmap == nullptr) {
             return E_POINTER;
         }
         *bitmap = nullptr;
-        return E_NOTIMPL;
+        if (fieldId != kIconField) {
+            return E_INVALIDARG;
+        }
+        *bitmap = createProviderLogo();
+        return *bitmap == nullptr ? E_OUTOFMEMORY : S_OK;
     }
 
     HRESULT STDMETHODCALLTYPE GetCheckboxValue(
@@ -366,12 +439,38 @@ public:
         return S_OK;
     }
 
+    HRESULT STDMETHODCALLTYPE GetUserSid(LPWSTR* sid) override {
+        if (sid == nullptr) {
+            return E_POINTER;
+        }
+        if (userSid_.empty()) {
+            *sid = nullptr;
+            return E_UNEXPECTED;
+        }
+        return copyString(userSid_.c_str(), sid);
+    }
+
+    HRESULT setUserSid(const std::wstring& sid) noexcept {
+        if (sid.empty()) {
+            userSid_.clear();
+            return E_INVALIDARG;
+        }
+        try {
+            userSid_ = sid;
+        } catch (const std::bad_alloc&) {
+            return E_OUTOFMEMORY;
+        }
+        return S_OK;
+    }
+
 private:
     std::atomic<ULONG> refCount_{1};
     ICredentialProviderCredentialEvents* events_ = nullptr;
+    std::wstring userSid_;
 };
 
-class UnlockCredentialProvider final : public ICredentialProvider {
+class UnlockCredentialProvider final : public ICredentialProvider,
+                                       public ICredentialProviderSetUserArray {
 public:
     UnlockCredentialProvider() noexcept
         : credential_(new (std::nothrow) UnlockCredential()) {
@@ -406,6 +505,11 @@ public:
         if (IsEqualIID(riid, IID_IUnknown) ||
             IsEqualIID(riid, __uuidof(ICredentialProvider))) {
             *object = static_cast<ICredentialProvider*>(this);
+            AddRef();
+            return S_OK;
+        }
+        if (IsEqualIID(riid, __uuidof(ICredentialProviderSetUserArray))) {
+            *object = static_cast<ICredentialProviderSetUserArray*>(this);
             AddRef();
             return S_OK;
         }
@@ -466,6 +570,56 @@ public:
         return S_OK;
     }
 
+    HRESULT STDMETHODCALLTYPE SetUserArray(
+        ICredentialProviderUserArray* users
+    ) override {
+        if (users == nullptr) {
+            return E_POINTER;
+        }
+
+        hasUserSid_ = false;
+
+        DWORD userCount = 0;
+        auto result = users->GetCount(&userCount);
+        if (FAILED(result)) {
+            return result;
+        }
+        if (userCount == 0) {
+            return S_FALSE;
+        }
+
+        ICredentialProviderUser* user = nullptr;
+        result = users->GetAt(0, &user);
+        if (FAILED(result) || user == nullptr) {
+            return FAILED(result) ? result : E_UNEXPECTED;
+        }
+
+        LPWSTR sid = nullptr;
+        result = user->GetSid(&sid);
+        user->Release();
+        if (FAILED(result) || sid == nullptr || sid[0] == L'\0') {
+            CoTaskMemFree(sid);
+            return FAILED(result) ? result : E_UNEXPECTED;
+        }
+
+        std::wstring sidValue;
+        try {
+            sidValue.assign(sid);
+        } catch (const std::bad_alloc&) {
+            CoTaskMemFree(sid);
+            return E_OUTOFMEMORY;
+        }
+        CoTaskMemFree(sid);
+        if (credential_ == nullptr) {
+            return E_UNEXPECTED;
+        }
+        result = credential_->setUserSid(sidValue);
+        if (SUCCEEDED(result)) {
+            hasUserSid_ = true;
+        }
+        return result;
+    }
+
     HRESULT STDMETHODCALLTYPE GetFieldDescriptorCount(DWORD* count) override {
         if (count == nullptr) {
             return E_POINTER;
@@ -499,7 +653,7 @@ public:
             autoLogonWithDefault == nullptr) {
             return E_POINTER;
         }
-        if (!usageScenarioSet_ || !ready()) {
+        if (!usageScenarioSet_ || !ready() || !hasUserSid_) {
             return E_UNEXPECTED;
         }
         *count = 1;
@@ -530,6 +684,7 @@ private:
     ICredentialProviderEvents* events_ = nullptr;
     UINT_PTR adviseContext_ = 0;
     bool usageScenarioSet_ = false;
+    bool hasUserSid_ = false;
 };
 
 class ClassFactory final : public IClassFactory {

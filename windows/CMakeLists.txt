@@ -89,6 +89,29 @@ target_compile_features(unlock_service_core PUBLIC cxx_std_20)
 target_compile_definitions(unlock_service_core PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(unlock_service_core PUBLIC unlock_protocol_crypto windowsapp bcrypt)
 
+add_library(unlock_lsa_verifier STATIC
+    LSAAuthenticationPackage/UnlockLsaLogonVerifier.cpp
+)
+
+target_include_directories(unlock_lsa_verifier
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/LSAAuthenticationPackage
+        ${CMAKE_CURRENT_SOURCE_DIR}/Protocol
+        ${CMAKE_CURRENT_SOURCE_DIR}/UnlockService
+)
+
+target_compile_features(unlock_lsa_verifier PUBLIC cxx_std_20)
+target_compile_definitions(unlock_lsa_verifier PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(
+    unlock_lsa_verifier
+    PUBLIC
+        unlock_protocol_crypto
+        unlock_enrollment_store
+        advapi32
+        bcrypt
+        crypt32
+)
+
 if(BUILD_TESTING)
     add_executable(unlock_protocol_tests
         ProtocolTests/main.cpp
@@ -147,6 +170,44 @@ target_compile_features(unlock_service_host PRIVATE cxx_std_20)
 target_compile_definitions(unlock_service_host PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(unlock_service_host PRIVATE unlock_service_core unlock_service_ipc unlock_enrollment_store windowsapp bcrypt advapi32 crypt32)
 
+add_library(unlock_lsa_authentication_package SHARED
+    LSAAuthenticationPackage/UnlockLsaAuthenticationPackage.cpp
+)
+
+target_include_directories(unlock_lsa_authentication_package
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/LSAAuthenticationPackage
+        ${CMAKE_CURRENT_SOURCE_DIR}/Protocol
+        ${CMAKE_CURRENT_SOURCE_DIR}/UnlockService
+)
+
+target_compile_features(unlock_lsa_authentication_package PRIVATE cxx_std_20)
+target_compile_definitions(unlock_lsa_authentication_package PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(unlock_lsa_authentication_package PRIVATE unlock_lsa_verifier advapi32)
+if(MSVC)
+    target_link_options(unlock_lsa_authentication_package PRIVATE
+        /EXPORT:LsaApInitializePackage
+        /EXPORT:LsaApLogonUserEx2
+        /EXPORT:LsaApCallPackage
+        /EXPORT:LsaApCallPackageUntrusted
+        /EXPORT:LsaApCallPackagePassthrough
+        /EXPORT:LsaApLogonTerminated
+    )
+endif()
+
+add_executable(unlock_lsa_package_lookup
+    LSAAuthenticationPackage/LookupAuthenticationPackage.cpp
+)
+
+target_include_directories(unlock_lsa_package_lookup
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/Protocol
+)
+
+target_compile_features(unlock_lsa_package_lookup PRIVATE cxx_std_20)
+target_compile_definitions(unlock_lsa_package_lookup PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(unlock_lsa_package_lookup PRIVATE secur32)
+
 add_executable(unlock_pairing_tool
     PairingTool/main.cpp
 )
@@ -170,7 +231,7 @@ target_include_directories(unlock_credential_provider
 
 target_compile_features(unlock_credential_provider PRIVATE cxx_std_20)
 target_compile_definitions(unlock_credential_provider PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_libraries(unlock_credential_provider PRIVATE unlock_protocol_crypto unlock_service_ipc ole32 secur32)
+target_link_libraries(unlock_credential_provider PRIVATE unlock_protocol_crypto unlock_service_ipc ole32 secur32 gdi32)
 if(MSVC)
     target_link_options(unlock_credential_provider PRIVATE
         /EXPORT:DllGetClassObject
@@ -195,8 +256,42 @@ if(BUILD_TESTING)
     target_link_libraries(unlock_credential_provider_tests PRIVATE unlock_protocol_crypto ole32)
 
     add_test(NAME unlock_credential_provider_tests COMMAND unlock_credential_provider_tests)
+
+    add_executable(unlock_lsa_authentication_package_tests
+        LSAAuthenticationPackageTests/main.cpp
+    )
+
+    target_include_directories(unlock_lsa_authentication_package_tests
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/LSAAuthenticationPackage
+            ${CMAKE_CURRENT_SOURCE_DIR}/Protocol
+            ${CMAKE_CURRENT_SOURCE_DIR}/UnlockService
+    )
+
+    target_compile_features(unlock_lsa_authentication_package_tests PRIVATE cxx_std_20)
+    target_compile_definitions(unlock_lsa_authentication_package_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_link_libraries(
+        unlock_lsa_authentication_package_tests
+        PRIVATE
+            unlock_lsa_verifier
+            unlock_protocol_crypto
+            unlock_enrollment_store
+            advapi32
+            bcrypt
+            crypt32
+    )
+    add_dependencies(
+        unlock_lsa_authentication_package_tests
+        unlock_lsa_authentication_package
+    )
+
+    add_test(
+        NAME unlock_lsa_authentication_package_tests
+        COMMAND unlock_lsa_authentication_package_tests
+    )
 endif()
 
-# The CredentialProvider target is a build-only COM shell. UnlockService,
-# CredentialProvider and LSAAuthenticationPackage remain separate targets so
-# each can acquire an explicit installation and failure policy independently.
+# The CredentialProvider and LSAAuthenticationPackage targets are build-only
+# prototypes. UnlockService, CredentialProvider and LSAAuthenticationPackage
+# remain separate targets so each can acquire an explicit installation and
+# failure policy independently.

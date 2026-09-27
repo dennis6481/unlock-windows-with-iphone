@@ -1,4 +1,5 @@
 <!-- Modified by Rui MA on 26 Sep 2026 -->
+<!-- Modified by Codex on 27 Sep 2026 -->
 
 # Unlock Windows with iPhone
 
@@ -20,20 +21,21 @@
 - iOS 后台蓝牙中心角色所需的 Info.plist 声明。
 - Windows CNG/BCrypt P-256 公钥导入、SHA-256 和原始 `r || s` 签名验证代码。
 - Windows 与 iOS 一致的签名载荷构造代码，以及供未来 LSA 使用的无密码提交缓冲区定义。
-- Windows 已增加 Credential Provider/LSA 共用的固定提交缓冲区 codec：构造和结构校验可独立测试，但尚未注册登录组件。
-- Windows 已增加仅用于 SDK/COM smoke test 的 `CPUS_UNLOCK_WORKSTATION` Credential Provider shell；它可被直接加载测试但不注册，只有在找到指定 LSA 包后才会消费受保护批准并返回 serialization；当前因 LSA 包尚未实现仍不会返回登录凭据。
+- Windows 已增加 Credential Provider/LSA 共用的固定提交缓冲区 codec：构造和结构校验可独立测试。
+- Windows 已增加仅用于 SDK/COM smoke test 的 `CPUS_UNLOCK_WORKSTATION` Credential Provider V2 shell；它通过用户 SID 关联把磁贴绑定到 LogonUI 当前用户，带有 VM-only 注册/回滚脚本，只有在找到指定 LSA 包后才会消费受保护批准并返回 serialization。另有只构建不注册的 LSA package 原型，会独立校验提交缓冲区和登记映射，但尚未接入生产 LSASS 流程。
 - Windows `UnlockService` 已将有效签名与登记记录中的 Windows SID 组合为 `unlock_approved` 决策信号，并通过开发期 named pipe 提供一次性、短期的二进制 `UnlockLogonBuffer`；这一步只交接后续认证所需材料，不直接调用 Windows 解锁 API。
 - Windows `UnlockService` 已对批准结果加入短冷却和一次性 challenge 消费，避免 BLE 重复发现造成连续解锁批准。
+- 在一次性 Windows VM 中关闭 LSA Protection 后，已成功注册并查询到 LSA package ID；这只证明 VM smoke test 的加载链路成立。
 
 当前还没有完成：
 
 - Windows GATT host 的后台/锁屏生命周期、package identity 和完整安装流程。
 - Windows `PairingTool` 的公钥确认通知和受保护登记存储已经有原型，iOS UI 已支持通过 GATT 发送登记公钥；剪贴板复制仅作为备用调试路径。
 - Windows Credential Provider 的生产实现。
-- 无密码的 LSA Authentication Package。
+- 注册到 LSASS 并完成真实 token/锁屏流程的无密码 LSA Authentication Package。
 - “检测到 iPhone 后自动解锁”的端到端流程。
 
-Windows 侧当前没有可安装的服务、Credential Provider 或 LSA 包；前台 GATT、IPC、受保护公钥登记、配对确认工具和未注册 Credential Provider shell 可以在 Windows SDK 环境中编译验证。
+Windows 侧当前没有生产安装包、后台服务或可交付的登录组件；前台 GATT、IPC、受保护公钥登记、配对确认工具、VM-only Credential Provider/LSA 注册脚本和测试 shell 可以在 Windows SDK 环境中编译验证。
 
 不会用软件私钥、密码硬编码、静默重试或吞掉异常来伪造这些功能。某个阶段未实现或系统拒绝访问时，App/服务应报告明确错误。
 
@@ -47,6 +49,15 @@ Windows 侧当前没有可安装的服务、Credential Provider 或 LSA 包；�
 - CoreBluetooth 的后台恢复、锁屏 iPhone、Windows 锁屏以及 BLE 断线重连的组合生命周期尚未在实体设备上验证。
 - BLE 配对/链路保护与 Windows GATT characteristic 的权限策略尚未完成联调；BLE 仍然只负责传输，不能替代签名认证。
 - App 中仍有部分说明文字把 BLE 描述为“尚未接入”，需要在 BLE 传输稳定后统一更新 UI 文案。
+
+### 已知问题（Windows LSA Protection）
+
+- Windows 启用 LSA Protection 时，当前未经过 Microsoft LSA 签名的
+  `unlock_lsa_authentication_package.dll` 会被系统阻止加载；安装注册表项后
+  `unlock_lsa_package_lookup.exe` 仍会返回 `not loaded`，并可能显示“该模块被阻止加载到本地安全机构”。
+- 当前 LSA 注册/查询流程只能在一次性测试 VM 中关闭 LSA Protection 后运行；这不是生产环境配置，也不应在日常使用的宿主机上关闭。
+- 生产环境要保留自定义 LSA Authentication Package，需要 EV 代码签名证书并通过 Microsoft Partner Center 的 LSA File Signing Service 获得 Microsoft 签名；个人自签名或普通 Authenticode 签名不能绕过该限制。
+- VM 中出现 `loaded by LSA; package id=...` 只证明 LSA 已加载 DLL，不等于已经完成 Credential Provider、登录 Token 和锁屏自动解锁。
 
 ## 解决的问题与边界
 
@@ -144,7 +155,7 @@ Windows Hello / WebAuthn 可以作为交互式登录或凭据能力的研究方�
 
 ## Windows：安装方式
 
-完整 Windows 组件尚未实现，因此现在没有可安装的 Windows MSI、服务或 Credential Provider，也不应把原型注册为系统组件。当前仓库已经有协议/CNG 库、前台 GATT host、IPC host 和 PairingTool，但仍只能在 Windows SDK 环境中构建验证。
+完整 Windows 组件尚未实现，因此现在没有可交付的 Windows MSI、服务或生产登录组件，也不应把原型注册到日常使用系统。当前仓库已经有协议/CNG 库、前台 GATT host、IPC host、PairingTool、Credential Provider shell、build-only LSA package 和仅供 VM 使用的注册回滚脚本；登录组件仍只能在一次性 VM 中构建和验证。
 
 下一阶段的开发环境预期为：
 
@@ -167,6 +178,7 @@ cmake --build windows/build --config Debug
 cd windows
 make                 # 构建并运行测试
 make build           # 只构建
+make build-release   # 构建 Release 版本，避免 Debug CRT 依赖
 make test            # 构建并运行测试
 ```
 
@@ -177,9 +189,9 @@ nmake /f Makefile build
 nmake /f Makefile test
 ```
 
-Windows SDK 目标已在当前 Windows 环境完成构建和本机 CTest 验证；这仍不等于后台锁屏生命周期、Credential Provider 或 LSA 已经实现。
+Windows SDK 目标已在当前 Windows 环境完成构建和本机 CTest 验证；这仍不等于后台锁屏生命周期、Credential Provider 的 LogonUI 激活或真实 LSA 登录流程已经完成。
 
-在 Windows 端可以运行的当前里程碑是协议验证工具、前台 GATT host、UnlockService IPC host 和 PairingTool，而不是直接注册 LSA 包。PairingTool 通过 Windows 通知要求用户确认后，将公钥和当前 Windows 用户 SID 一起写入 DPAPI 保护的登记记录；GATT host 不会自动登记公钥。当前 `UnlockService` 在有效签名和已登记 SID 同时满足时返回 `unlock_approved`，但还没有把这个决策交给 Credential Provider/LSA 执行真正解锁。完整里程碑仍必须证明：该 SID 映射能被登录组件正确使用、challenge 新鲜度、签名验证、超时、重放拒绝以及锁屏时 GATT host 的生命周期都正确。
+在 Windows 端可以运行的当前里程碑是协议验证工具、前台 GATT host、UnlockService IPC host、PairingTool、Credential Provider shell、build-only LSA package 和只读 LSA package lookup 工具。PairingTool 通过 Windows 通知要求用户确认后，将公钥和当前 Windows 用户 SID 一起写入 DPAPI 保护的登记记录；GATT host 不会自动登记公钥。当前 `UnlockService` 在有效签名和已登记 SID 同时满足时返回 `unlock_approved`，Credential Provider 可交接一次性缓冲区，LSA 原型会再次验签并准备 SID token 信息；VM 专用脚本可以备份、注册和恢复测试用注册表值，但默认不会执行注册。一次性 VM 中目前已确认 LSA package lookup 成功、Credential Provider 注册表/DLL 路径存在且直接 COM smoke test 成功，但锁屏界面仍只显示 PIN，尚未证明 LogonUI 实例化了自定义 tile。完整里程碑仍必须证明：该 SID 映射能被登录组件正确使用、challenge 新鲜度、签名验证、超时、重放拒绝以及锁屏时 GATT host 的生命周期都正确。
 
 ## Windows：使用方法（当前阶段）
 
@@ -199,7 +211,7 @@ Windows SDK 目标已在当前 Windows 环境完成构建和本机 CTest 验证�
 - `ios/App/Info.plist` 已通过 `plutil -lint`。
 - iOS 核心安全、协议和 BLE 源码已通过 Swift 类型检查。
 - `windows/Protocol/SigningPayload.cpp` 已通过 macOS 上的 C++20 语法检查。
-- 当前 Windows SDK 构建已通过全部目标，4 个 CTest 均通过；登记存储测试同时覆盖 DPAPI 往返和 Windows SID 往返；PairingTool 的帮助命令 smoke test 通过。
+- 当前 Windows SDK Release 构建已通过全部目标，6 个 CTest 均通过；登记存储测试同时覆盖 DPAPI 往返和 Windows SID 往返，Credential Provider 测试覆盖 V2 用户 SID、tile logo 和 DLL 导出，LSA 测试覆盖独立验签和 DLL 导出；另有不修改系统的 LSA package lookup 工具和 VM 专用注册/回滚脚本；PairingTool 的帮助命令 smoke test 通过。
 - Xcode 工程可以被 `xcodebuild -list` 正确解析。
 - 完整 Xcode 构建曾被当前环境的 `swift-plugin-server`/sandbox 限制阻断；这属于构建环境限制，不能当作完整构建成功，也不能当作源码已经在真实设备上验证。
 
@@ -223,7 +235,7 @@ LSA 包属于系统级登录组件。未完成隔离测试、签名、账户映�
 - `windows/UnlockService/UnlockServiceCore` 已独立实现 challenge 新鲜度、单次使用、assertion JSON 解析、P-256 公钥指纹匹配和 CNG 验签；`unlock_service_host` 通过同用户 named pipe 使用它，并从 DPAPI/ACL 保护的登记文件加载公钥及其当前 Windows 用户 SID。
 - `unlock_pairing_tool` 已实现 Windows 通知确认按钮；iOS 可通过 GATT 发送登记候选公钥，但没有点击 Confirm 就不会写入公钥。
 - Windows 本机的 `unlock_protocol_tests`、`unlock_service_tests`、`unlock_service_ipc_tests` 和 `unlock_enrollment_store_tests` 均已通过；全部 Windows 目标已完成 SDK 构建。
-- SID 记录已经落地，下一步是把当前前台登记流程提升为 package identity/MSIX、后台/锁屏生命周期和真正的 Windows Service；之后再让认证组件实际使用 SID 映射，在这些完成前不会接入 Credential Provider 或 LSA 注册。
+- SID 记录已经落地。一次性 VM 中 LSA package 已能 lookup 到 package ID，Credential Provider 的注册表项和 DLL 路径也已存在，直接 COM smoke test 返回成功；但锁屏界面目前仍只显示 PIN，尚未观察到自定义 tile。下一步是确认 LogonUI 是否加载了最新 DLL、补齐 Credential Provider 的锁屏激活诊断，然后再推进 package identity/MSIX、后台/锁屏生命周期和真正的 Windows Service。
 
 ## License
 

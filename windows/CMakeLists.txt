@@ -37,6 +37,7 @@ endif()
 add_library(unlock_protocol_crypto STATIC
     Protocol/UnlockCrypto.cpp
     Protocol/SigningPayload.cpp
+    Protocol/UnlockLogonBufferCodec.cpp
 )
 
 target_include_directories(unlock_protocol_crypto
@@ -46,7 +47,7 @@ target_include_directories(unlock_protocol_crypto
 
 target_compile_features(unlock_protocol_crypto PUBLIC cxx_std_20)
 target_compile_definitions(unlock_protocol_crypto PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_libraries(unlock_protocol_crypto PUBLIC bcrypt)
+target_link_libraries(unlock_protocol_crypto PUBLIC bcrypt advapi32)
 
 add_library(unlock_service_ipc STATIC
     UnlockService/UnlockServiceIpc.cpp

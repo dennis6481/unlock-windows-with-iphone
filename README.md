@@ -20,6 +20,7 @@
 - iOS 后台蓝牙中心角色所需的 Info.plist 声明。
 - Windows CNG/BCrypt P-256 公钥导入、SHA-256 和原始 `r || s` 签名验证代码。
 - Windows 与 iOS 一致的签名载荷构造代码，以及供未来 LSA 使用的无密码提交缓冲区定义。
+- Windows 已增加 Credential Provider/LSA 共用的固定提交缓冲区 codec：构造和结构校验可独立测试，但尚未注册登录组件。
 - Windows `UnlockService` 已将有效签名与登记记录中的 Windows SID 组合为 `unlock_approved` 决策信号；这一步只批准后续解锁，不直接调用 Windows 解锁 API。
 
 当前还没有完成：

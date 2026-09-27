@@ -285,8 +285,14 @@ void run() {
         "un-enrolled public key was accepted"
     );
     service.setEnrolledPublicKey(signedAssertion.publicKey);
+    service.setEnrolledAccountSid("S-1-5-21-111111111-222222222-333333333-1001");
     const auto valid = service.verifyAssertion(assertion, 2'001);
     require(valid.code == AssertionCode::authenticated, "valid assertion was rejected");
+    require(valid.unlockApproved(), "valid assertion with an enrolled SID was not approved");
+    require(
+        valid.accountSid == "S-1-5-21-111111111-222222222-333333333-1001",
+        "approved assertion returned the wrong account SID"
+    );
     require(
         service.verifyAssertion(assertion, 2'002).code == AssertionCode::challenge_replayed,
         "replayed assertion was accepted"

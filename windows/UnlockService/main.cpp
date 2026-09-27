@@ -29,12 +29,18 @@ std::int64_t nowMilliseconds() {
     );
 }
 
+const char* resultStatus(const unlock_windows::service::AssertionResult result) noexcept {
+    return result.unlockApproved()
+        ? "unlock_approved"
+        : unlock_windows::service::assertionCodeName(result.code);
+}
+
 std::string makeResult(const unlock_windows::service::AssertionResult result) {
     std::ostringstream output;
     output << "{\"authenticated\":"
            << (result.authenticated() ? "true" : "false")
            << ",\"status\":\""
-           << unlock_windows::service::assertionCodeName(result.code)
+           << resultStatus(result)
            << "\"}";
     return output.str();
 }
@@ -49,16 +55,18 @@ int main() {
         unlock_windows::service::EnrollmentStore enrollmentStore;
         const auto reloadEnrollment = [&]() {
             if (const auto enrolledRecord = enrollmentStore.load()) {
+                const auto accountSid = std::string(
+                    enrolledRecord->accountSid.begin(),
+                    enrolledRecord->accountSid.end()
+                );
                 service.setEnrolledPublicKey(enrolledRecord->publicKey);
+                service.setEnrolledAccountSid(accountSid);
                 std::cout << "[UnlockService] enrollment key loaded; fingerprint="
                           << unlock_windows::service::EnrollmentStore::fingerprint(
                                  enrolledRecord->publicKey
                              )
                           << " accountSID="
-                          << std::string(
-                                 enrolledRecord->accountSid.begin(),
-                                 enrolledRecord->accountSid.end()
-                             )
+                          << accountSid
                           << "\n";
                 return true;
             }
@@ -93,7 +101,7 @@ int main() {
                     const auto result = service.verifyAssertion(payload, nowMilliseconds());
                     response = makeResult(result);
                     std::cout << "[UnlockService] assertion result="
-                              << unlock_windows::service::assertionCodeName(result.code) << "\n";
+                              << resultStatus(result) << "\n";
                 } else if (operation == unlock_windows::service::ipc::Operation::reloadEnrollment) {
                     response = reloadEnrollment() ? "enrollment_loaded" : "enrollment_missing";
                 } else {

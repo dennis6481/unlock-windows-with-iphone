@@ -335,11 +335,21 @@ void UnlockServiceCore::setEnrolledPublicKey(std::vector<std::uint8_t> rawPublic
     }
     std::lock_guard lock(mutex_);
     enrolledPublicKey_ = std::move(rawPublicKey);
+    enrolledAccountSid_.reset();
+}
+
+void UnlockServiceCore::setEnrolledAccountSid(std::string accountSid) {
+    if (accountSid.empty()) {
+        throw std::invalid_argument("enrolled account SID must not be empty");
+    }
+    std::lock_guard lock(mutex_);
+    enrolledAccountSid_ = std::move(accountSid);
 }
 
 void UnlockServiceCore::clearEnrolledPublicKey() noexcept {
     std::lock_guard lock(mutex_);
     enrolledPublicKey_.reset();
+    enrolledAccountSid_.reset();
 }
 
 std::string UnlockServiceCore::requestIdString(const protocol::FixedChallenge& challenge) {
@@ -457,7 +467,10 @@ AssertionResult UnlockServiceCore::verifyAssertion(
         }
 
         outstandingChallengeConsumed_ = true;
-        return {AssertionCode::authenticated};
+        return {
+            AssertionCode::authenticated,
+            enrolledAccountSid_.value_or("")
+        };
     } catch (...) {
         return {AssertionCode::malformed_json};
     }

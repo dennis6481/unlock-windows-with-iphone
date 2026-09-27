@@ -37,9 +37,14 @@ struct IssuedChallenge final {
 
 struct AssertionResult final {
     AssertionCode code;
+    std::string accountSid;
 
     [[nodiscard]] bool authenticated() const noexcept {
         return code == AssertionCode::authenticated;
+    }
+
+    [[nodiscard]] bool unlockApproved() const noexcept {
+        return authenticated() && !accountSid.empty();
     }
 };
 
@@ -66,6 +71,7 @@ public:
     // The real enrollment flow will load this value from protected storage.
     // Until a key is installed, no assertion is allowed to authenticate.
     void setEnrolledPublicKey(std::vector<std::uint8_t> rawPublicKey);
+    void setEnrolledAccountSid(std::string accountSid);
     void clearEnrolledPublicKey() noexcept;
 
     [[nodiscard]] const std::string& audience() const noexcept {
@@ -86,6 +92,7 @@ private:
     std::mutex mutex_;
     std::optional<protocol::FixedChallenge> outstandingChallenge_;
     std::optional<std::vector<std::uint8_t>> enrolledPublicKey_;
+    std::optional<std::string> enrolledAccountSid_;
     bool outstandingChallengeConsumed_ = false;
 };
 

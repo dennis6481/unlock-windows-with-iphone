@@ -1,4 +1,4 @@
-<!-- Created by Codex on 27 Sep 2026 -->
+<!-- Created by Rui MA on 27 Sep 2026 -->
 
 # 自动解锁认证模式 TODO
 
@@ -17,8 +17,23 @@
 - [x] Windows 公钥指纹登记和通知确认
 - [x] DPAPI/ACL 保护的公钥登记存储
 - [x] 登记记录保存 Windows 用户 SID
+- [x] `UnlockServiceCore` 在签名验证后绑定登记 SID，并输出 `unlock_approved` 决策信号（不执行系统解锁）
 - [x] UnlockService named-pipe IPC
 - [x] Windows CMake/Makefile 构建和四个 CTest
+
+## 借鉴成熟方案的边界
+
+已实现的协议、BLE 传输、Secure Enclave 签名、Windows CNG 验签、DPAPI 登记和首次指纹确认暂时冻结，不直接替换为参考项目的实现。
+
+- [x] 参考 UnTouchID 的分层思路：后台常驻组件、一次性 challenge、短期有效的配对凭据、重放保护、连接重试和审计日志
+- [x] 参考 EIDAuthentication 的 Windows 边界：Credential Provider 负责锁屏交互，LSA/受保护服务负责认证结果和 SID 映射，安装/卸载/回滚必须独立设计
+- [ ] 不直接复制参考项目代码；EIDAuthentication 使用 GPL-3.0，后续若需要复用代码必须先单独处理许可证问题
+- [ ] 当前 Windows 优先实现认证决策信号 `unlock_approved`，不提前接入实际登录 Token 或解锁 API
+
+参考项目：
+
+- [UnTouchID](https://github.com/HMAKT99/UnTouchID)（macOS/PAM 架构参考，不作为 Windows 实现）
+- [EIDAuthentication](https://github.com/SP00KY-CB/EIDAuthentication)（Windows Credential Provider/LSA 架构参考，不复制智能卡和密码逻辑）
 
 ## 1. iOS 后台自动认证
 
@@ -45,8 +60,8 @@
 
 ## 3. 自动解锁决策层
 
-- [ ] `UnlockServiceCore` 保存已登记公钥对应的 Windows SID
-- [ ] 签名验证成功且 SID 有效时返回 `unlock_approved`
+- [x] `UnlockServiceCore` 保存已登记公钥对应的 Windows SID
+- [x] 签名验证成功且 SID 有效时返回 `unlock_approved`
 - [ ] 未登记、错误公钥、错误 SID、过期 challenge 和重放始终拒绝
 - [ ] 自动认证结果加入冷却时间和重复请求抑制
 - [ ] 增加可配置 RSSI 近距离阈值，信号过弱时不触发自动认证/解锁
@@ -78,6 +93,7 @@
 ## 明确不采用
 
 - [ ] NFC 贴近确认
+- [ ] UWB 距离测量（当前电脑和测试环境没有 UWB 硬件）
 - [ ] 运行期间 Face ID 或人工确认
 - [ ] 仅依靠 RSSI、蓝牙连接状态或传统蓝牙配对作为认证
 - [ ] 在配置文件中保存 Windows 密码或 PIN

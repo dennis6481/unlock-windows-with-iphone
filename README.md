@@ -20,6 +20,7 @@
 - iOS 后台蓝牙中心角色所需的 Info.plist 声明。
 - Windows CNG/BCrypt P-256 公钥导入、SHA-256 和原始 `r || s` 签名验证代码。
 - Windows 与 iOS 一致的签名载荷构造代码，以及供未来 LSA 使用的无密码提交缓冲区定义。
+- Windows `UnlockService` 已将有效签名与登记记录中的 Windows SID 组合为 `unlock_approved` 决策信号；这一步只批准后续解锁，不直接调用 Windows 解锁 API。
 
 当前还没有完成：
 
@@ -172,7 +173,7 @@ nmake /f Makefile test
 
 Windows SDK 目标已在当前 Windows 环境完成构建和本机 CTest 验证；这仍不等于后台锁屏生命周期、Credential Provider 或 LSA 已经实现。
 
-在 Windows 端可以运行的当前里程碑是协议验证工具、前台 GATT host、UnlockService IPC host 和 PairingTool，而不是直接注册 LSA 包。PairingTool 通过 Windows 通知要求用户确认后，将公钥和当前 Windows 用户 SID 一起写入 DPAPI 保护的登记记录；GATT host 不会自动登记公钥。完整里程碑仍必须证明：该 SID 映射能被登录组件正确使用、challenge 新鲜度、签名验证、超时、重放拒绝以及锁屏时 GATT host 的生命周期都正确。
+在 Windows 端可以运行的当前里程碑是协议验证工具、前台 GATT host、UnlockService IPC host 和 PairingTool，而不是直接注册 LSA 包。PairingTool 通过 Windows 通知要求用户确认后，将公钥和当前 Windows 用户 SID 一起写入 DPAPI 保护的登记记录；GATT host 不会自动登记公钥。当前 `UnlockService` 在有效签名和已登记 SID 同时满足时返回 `unlock_approved`，但还没有把这个决策交给 Credential Provider/LSA 执行真正解锁。完整里程碑仍必须证明：该 SID 映射能被登录组件正确使用、challenge 新鲜度、签名验证、超时、重放拒绝以及锁屏时 GATT host 的生命周期都正确。
 
 ## Windows：使用方法（当前阶段）
 

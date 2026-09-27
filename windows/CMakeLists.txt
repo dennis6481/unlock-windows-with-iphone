@@ -155,6 +155,46 @@ target_compile_features(unlock_pairing_tool PRIVATE cxx_std_20)
 target_compile_definitions(unlock_pairing_tool PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(unlock_pairing_tool PRIVATE unlock_enrollment_store unlock_service_ipc windowsapp shell32 ole32 propsys)
 
-# UnlockService, CredentialProvider and LSAAuthenticationPackage remain
-# intentionally separate targets. They will be added only when each target
-# has an explicit installation and failure policy.
+add_library(unlock_credential_provider SHARED
+    CredentialProvider/UnlockCredentialProvider.cpp
+    CredentialProvider/UnlockCredentialSerialization.cpp
+)
+
+target_include_directories(unlock_credential_provider
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/CredentialProvider
+        ${CMAKE_CURRENT_SOURCE_DIR}/Protocol
+)
+
+target_compile_features(unlock_credential_provider PRIVATE cxx_std_20)
+target_compile_definitions(unlock_credential_provider PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(unlock_credential_provider PRIVATE unlock_protocol_crypto ole32)
+if(MSVC)
+    target_link_options(unlock_credential_provider PRIVATE
+        /EXPORT:DllGetClassObject
+        /EXPORT:DllCanUnloadNow
+    )
+endif()
+
+if(BUILD_TESTING)
+    add_executable(unlock_credential_provider_tests
+        CredentialProviderTests/main.cpp
+        CredentialProvider/UnlockCredentialSerialization.cpp
+    )
+
+    target_include_directories(unlock_credential_provider_tests
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/CredentialProvider
+            ${CMAKE_CURRENT_SOURCE_DIR}/Protocol
+    )
+
+    target_compile_features(unlock_credential_provider_tests PRIVATE cxx_std_20)
+    target_compile_definitions(unlock_credential_provider_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_link_libraries(unlock_credential_provider_tests PRIVATE unlock_protocol_crypto ole32)
+
+    add_test(NAME unlock_credential_provider_tests COMMAND unlock_credential_provider_tests)
+endif()
+
+# The CredentialProvider target is a build-only COM shell. UnlockService,
+# CredentialProvider and LSAAuthenticationPackage remain separate targets so
+# each can acquire an explicit installation and failure policy independently.

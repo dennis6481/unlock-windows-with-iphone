@@ -9,7 +9,7 @@ Windows is being implemented as separate components because they run under diffe
 
 - `GattHost`: C++/WinRT foreground transport prototype is now present in `GattHost/main.cpp`. It creates the service, four characteristics, challenge notifications and assertion/result transport. Packaging and locked-screen/background lifecycle are still pending.
 - `UnlockService`: `UnlockServiceCore` now owns challenge freshness, single-use state, assertion JSON parsing, key fingerprint matching, CNG verification and the enrolled Windows SID decision in an isolated library. A valid assertion with the enrolled SID returns `unlock_approved`; `unlock_service_host` exercises it through a same-user named-pipe boundary and loads the explicitly enrolled record from the protected local store. Conversion to a real Session 0 service is still pending.
-- `CredentialProvider`: LogonUI tile for `CPUS_UNLOCK_WORKSTATION`. It serializes the custom authentication payload; it is not the component that verifies the iPhone signature.
+- `CredentialProvider`: a build-only COM shell for a `CPUS_UNLOCK_WORKSTATION` LogonUI tile. It currently returns no credential serialization and is not registered; a separately tested adapter can pack an already-approved `UnlockLogonBuffer`, but the future IPC client and LSA package must still provide and verify that approval.
 - `LSAAuthenticationPackage`: LSA-loaded package that validates the custom payload, maps the enrolled public key to a Windows account, and returns the token information required for the logon session.
 - `PairingTool`: one-time enrollment and public-key fingerprint confirmation through a Windows notification with Confirm/Cancel buttons.
 
@@ -25,7 +25,7 @@ cmake --build windows/build --config Debug
 ctest --test-dir windows/build -C Debug --output-on-failure
 ```
 
-The current Windows build has seven runnable targets: `unlock_protocol_tests`, `unlock_service_tests`, `unlock_service_ipc_tests`, `unlock_enrollment_store_tests`, `unlock_service_host`, the foreground `unlock_gatt_host` and the enrollment `unlock_pairing_tool`. The IPC test uses a dedicated test pipe, so it can run while the real `UnlockService` host is active. `unlock_enrollment_store_tests` verifies the DPAPI protect/load round trip and the Windows SID round trip. The Visual Studio/CMake setup can run the tests with `ctest --test-dir windows/build --output-on-failure`.
+The current Windows build has nine runnable targets: `unlock_protocol_tests`, `unlock_service_tests`, `unlock_service_ipc_tests`, `unlock_enrollment_store_tests`, `unlock_credential_provider_tests`, `unlock_service_host`, the foreground `unlock_gatt_host`, the enrollment `unlock_pairing_tool` and the build-only `unlock_credential_provider.dll`. The IPC test uses a dedicated test pipe, so it can run while the real `UnlockService` host is active. `unlock_enrollment_store_tests` verifies the DPAPI protect/load round trip and the Windows SID round trip. `unlock_credential_provider_tests` loads the DLL without registration, verifies that it exposes only the unlock-workstation tile and returns no credential, and validates the separate serialization adapter against `UnlockLogonBuffer`. The Visual Studio/CMake setup can run the tests with `ctest --test-dir windows/build --output-on-failure`.
 
 For a shorter command, use the repository Makefile from this directory:
 

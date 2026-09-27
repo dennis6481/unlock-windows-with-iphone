@@ -19,6 +19,7 @@
 - [x] 登记记录保存 Windows 用户 SID
 - [x] `UnlockServiceCore` 在签名验证后绑定登记 SID，并输出 `unlock_approved` 决策信号（不执行系统解锁）
 - [x] 定义 Credential Provider/LSA 共用的无密码提交缓冲区，并增加结构校验测试（不注册系统组件）
+- [x] 实现只用于 SDK/COM smoke test 的 `CPUS_UNLOCK_WORKSTATION` Credential Provider shell（不注册、不返回登录凭据）
 - [x] 对自动解锁批准加入短冷却和一次性 challenge 消费，抑制 BLE 重复发现造成的连续批准
 - [x] UnlockService named-pipe IPC
 - [x] Windows CMake/Makefile 构建和四个 CTest
@@ -75,7 +76,8 @@
 
 - [ ] 设计 Credential Provider 与 UnlockService/LSA 的 IPC 边界
 - [x] 定义 Credential Provider 与 LSA 共享的 `UnlockLogonBuffer` 输入边界（仅 codec，不注册 DLL）
-- [ ] 实现 `CPUS_UNLOCK_WORKSTATION` 测试 Credential Provider
+- [x] 增加仅供测试的 Credential Provider serialization adapter，验证已批准字段能生成 `CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION`
+- [ ] 让 Credential Provider 在收到受保护的短期批准后提交 `UnlockLogonBuffer`
 - [ ] 让认证结果只映射到登记记录中的 Windows SID
 - [ ] 研究并实现不保存 Windows 密码的 LSA Authentication Package
 - [ ] 验证认证包返回的登录 Token 和锁屏解锁流程

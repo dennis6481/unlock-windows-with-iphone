@@ -27,6 +27,7 @@ enum class AssertionCode {
     key_id_mismatch,
     invalid_signature_encoding,
     invalid_signature,
+    unlock_cooldown,
     cryptographic_api_failure,
 };
 
@@ -55,7 +56,8 @@ class UnlockServiceCore final {
 public:
     explicit UnlockServiceCore(
         std::string audience = "windows-unlock",
-        std::int64_t challengeLifetimeMilliseconds = 30'000
+        std::int64_t challengeLifetimeMilliseconds = 30'000,
+        std::int64_t unlockCooldownMilliseconds = 5'000
     );
 
     UnlockServiceCore(const UnlockServiceCore&) = delete;
@@ -89,10 +91,12 @@ public:
 private:
     std::string audience_;
     std::int64_t challengeLifetimeMilliseconds_;
+    std::int64_t unlockCooldownMilliseconds_;
     std::mutex mutex_;
     std::optional<protocol::FixedChallenge> outstandingChallenge_;
     std::optional<std::vector<std::uint8_t>> enrolledPublicKey_;
     std::optional<std::string> enrolledAccountSid_;
+    std::optional<std::int64_t> lastUnlockApprovalMilliseconds_;
     bool outstandingChallengeConsumed_ = false;
 };
 

@@ -293,11 +293,14 @@ struct HashHandle final {
 
 UnlockServiceCore::UnlockServiceCore(
     std::string audience,
-    const std::int64_t challengeLifetimeMilliseconds
+    const std::int64_t challengeLifetimeMilliseconds,
+    const std::int64_t unlockCooldownMilliseconds
 )
     : audience_(std::move(audience)),
-      challengeLifetimeMilliseconds_(challengeLifetimeMilliseconds) {
-    if (audience_.empty() || audience_.size() > 64 || challengeLifetimeMilliseconds_ <= 0) {
+      challengeLifetimeMilliseconds_(challengeLifetimeMilliseconds),
+      unlockCooldownMilliseconds_(unlockCooldownMilliseconds) {
+    if (audience_.empty() || audience_.size() > 64 ||
+        challengeLifetimeMilliseconds_ <= 0 || unlockCooldownMilliseconds_ <= 0) {
         throw std::invalid_argument("invalid UnlockServiceCore configuration");
     }
 }
@@ -336,6 +339,7 @@ void UnlockServiceCore::setEnrolledPublicKey(std::vector<std::uint8_t> rawPublic
     std::lock_guard lock(mutex_);
     enrolledPublicKey_ = std::move(rawPublicKey);
     enrolledAccountSid_.reset();
+    lastUnlockApprovalMilliseconds_.reset();
 }
 
 void UnlockServiceCore::setEnrolledAccountSid(std::string accountSid) {
@@ -344,12 +348,14 @@ void UnlockServiceCore::setEnrolledAccountSid(std::string accountSid) {
     }
     std::lock_guard lock(mutex_);
     enrolledAccountSid_ = std::move(accountSid);
+    lastUnlockApprovalMilliseconds_.reset();
 }
 
 void UnlockServiceCore::clearEnrolledPublicKey() noexcept {
     std::lock_guard lock(mutex_);
     enrolledPublicKey_.reset();
     enrolledAccountSid_.reset();
+    lastUnlockApprovalMilliseconds_.reset();
 }
 
 std::string UnlockServiceCore::requestIdString(const protocol::FixedChallenge& challenge) {
@@ -467,6 +473,14 @@ AssertionResult UnlockServiceCore::verifyAssertion(
         }
 
         outstandingChallengeConsumed_ = true;
+        if (enrolledAccountSid_ && !enrolledAccountSid_->empty()) {
+            if (lastUnlockApprovalMilliseconds_ &&
+                (nowMilliseconds < *lastUnlockApprovalMilliseconds_ ||
+                 nowMilliseconds - *lastUnlockApprovalMilliseconds_ < unlockCooldownMilliseconds_)) {
+                return {AssertionCode::unlock_cooldown};
+            }
+            lastUnlockApprovalMilliseconds_ = nowMilliseconds;
+        }
         return {
             AssertionCode::authenticated,
             enrolledAccountSid_.value_or("")
@@ -491,6 +505,7 @@ const char* assertionCodeName(const AssertionCode code) noexcept {
         case AssertionCode::key_id_mismatch: return "key_id_mismatch";
         case AssertionCode::invalid_signature_encoding: return "invalid_signature_encoding";
         case AssertionCode::invalid_signature: return "invalid_signature";
+        case AssertionCode::unlock_cooldown: return "unlock_cooldown";
         case AssertionCode::cryptographic_api_failure: return "cryptographic_api_failure";
     }
     return "unknown";

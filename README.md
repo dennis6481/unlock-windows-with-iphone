@@ -22,6 +22,7 @@
 - Windows 与 iOS 一致的签名载荷构造代码，以及供未来 LSA 使用的无密码提交缓冲区定义。
 - Windows 已增加 Credential Provider/LSA 共用的固定提交缓冲区 codec：构造和结构校验可独立测试，但尚未注册登录组件。
 - Windows `UnlockService` 已将有效签名与登记记录中的 Windows SID 组合为 `unlock_approved` 决策信号；这一步只批准后续解锁，不直接调用 Windows 解锁 API。
+- Windows `UnlockService` 已对批准结果加入短冷却和一次性 challenge 消费，避免 BLE 重复发现造成连续解锁批准。
 
 当前还没有完成：
 

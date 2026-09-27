@@ -12,6 +12,7 @@
 #include <array>
 #include <cstring>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -169,11 +170,18 @@ struct SignedAssertion final {
     std::string keyId;
 };
 
-SignedAssertion sign(const std::vector<std::uint8_t>& payload) {
+struct SigningKey final {
     Algorithm algorithm;
+    Key key;
+    std::vector<std::uint8_t> publicKey;
+    std::string keyId;
+};
+
+std::unique_ptr<SigningKey> makeSigningKey() {
+    auto result = std::make_unique<SigningKey>();
     requireStatus(
         BCryptOpenAlgorithmProvider(
-            algorithm.receive(),
+            result->algorithm.receive(),
             BCRYPT_ECDSA_P256_ALGORITHM,
             nullptr,
             0
@@ -181,14 +189,16 @@ SignedAssertion sign(const std::vector<std::uint8_t>& payload) {
         "open ECDSA P-256"
     );
 
-    Key key;
-    requireStatus(BCryptGenerateKeyPair(algorithm.get(), key.receive(), 256, 0), "generate key");
-    requireStatus(BCryptFinalizeKeyPair(key.get(), 0), "finalize key");
+    requireStatus(
+        BCryptGenerateKeyPair(result->algorithm.get(), result->key.receive(), 256, 0),
+        "generate key"
+    );
+    requireStatus(BCryptFinalizeKeyPair(result->key.get(), 0), "finalize key");
 
     ULONG blobSize = 0;
     requireStatus(
         BCryptExportKey(
-            key.get(),
+            result->key.get(),
             nullptr,
             BCRYPT_ECCPUBLIC_BLOB,
             nullptr,
@@ -202,7 +212,7 @@ SignedAssertion sign(const std::vector<std::uint8_t>& payload) {
     ULONG exportedSize = 0;
     requireStatus(
         BCryptExportKey(
-            key.get(),
+            result->key.get(),
             nullptr,
             BCRYPT_ECCPUBLIC_BLOB,
             blob.data(),
@@ -215,18 +225,27 @@ SignedAssertion sign(const std::vector<std::uint8_t>& payload) {
     const auto* header = reinterpret_cast<const BCRYPT_ECCKEY_BLOB*>(blob.data());
     require(header->cbKey == 32, "generated key is not P-256");
 
+    result->publicKey.resize(65);
+    result->publicKey[0] = 0x04;
+    std::memcpy(result->publicKey.data() + 1, blob.data() + sizeof(BCRYPT_ECCKEY_BLOB), 64);
+    result->keyId = hex(sha256(result->publicKey.data(), result->publicKey.size()));
+    return result;
+}
+
+SignedAssertion sign(
+    const SigningKey& key,
+    const std::vector<std::uint8_t>& payload
+) {
     SignedAssertion result;
-    result.publicKey.resize(65);
-    result.publicKey[0] = 0x04;
-    std::memcpy(result.publicKey.data() + 1, blob.data() + sizeof(BCRYPT_ECCKEY_BLOB), 64);
-    result.keyId = hex(sha256(result.publicKey.data(), result.publicKey.size()));
+    result.publicKey = key.publicKey;
+    result.keyId = key.keyId;
 
     const auto digest = sha256(payload.data(), payload.size());
     result.signature.resize(64);
     ULONG signatureSize = 0;
     requireStatus(
         BCryptSignHash(
-            key.get(),
+            key.key.get(),
             nullptr,
             const_cast<PUCHAR>(reinterpret_cast<const UCHAR*>(digest.data())),
             static_cast<ULONG>(digest.size()),
@@ -278,7 +297,8 @@ void run() {
     const auto validIssued = service.issueChallenge(2'000);
     const auto payload = unlock_windows::protocol::buildSigningPayload(validIssued.challenge);
     require(payload.succeeded(), "test payload did not build");
-    const auto signedAssertion = sign(payload.bytes);
+    const auto signingKey = makeSigningKey();
+    const auto signedAssertion = sign(*signingKey, payload.bytes);
     const auto assertion = makeAssertion(service, validIssued, signedAssertion);
     require(
         service.verifyAssertion(assertion, 2'001).code == AssertionCode::key_not_enrolled,
@@ -296,6 +316,30 @@ void run() {
     require(
         service.verifyAssertion(assertion, 2'002).code == AssertionCode::challenge_replayed,
         "replayed assertion was accepted"
+    );
+
+    const auto cooldownIssued = service.issueChallenge(2'003);
+    const auto cooldownPayload = unlock_windows::protocol::buildSigningPayload(cooldownIssued.challenge);
+    require(cooldownPayload.succeeded(), "cooldown test payload did not build");
+    const auto cooldownSignature = sign(*signingKey, cooldownPayload.bytes);
+    const auto cooldownAssertion = makeAssertion(service, cooldownIssued, cooldownSignature);
+    require(
+        service.verifyAssertion(cooldownAssertion, 2'004).code == AssertionCode::unlock_cooldown,
+        "a second approval inside the cooldown was accepted"
+    );
+    require(
+        service.verifyAssertion(cooldownAssertion, 2'005).code == AssertionCode::challenge_replayed,
+        "a cooldown challenge was not consumed"
+    );
+
+    const auto afterCooldownIssued = service.issueChallenge(7'004);
+    const auto afterCooldownPayload = unlock_windows::protocol::buildSigningPayload(afterCooldownIssued.challenge);
+    require(afterCooldownPayload.succeeded(), "post-cooldown test payload did not build");
+    const auto afterCooldownSignature = sign(*signingKey, afterCooldownPayload.bytes);
+    const auto afterCooldownAssertion = makeAssertion(service, afterCooldownIssued, afterCooldownSignature);
+    require(
+        service.verifyAssertion(afterCooldownAssertion, 7'005).unlockApproved(),
+        "approval after the cooldown was rejected"
     );
 
     std::cout << "UnlockServiceCore tests passed\n";

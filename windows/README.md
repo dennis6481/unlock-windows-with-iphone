@@ -15,7 +15,7 @@ Windows is being implemented as separate components because they run under diffe
 
 ## Current code
 
-The CNG P-256 verifier is in [`Protocol/UnlockCrypto.cpp`](Protocol/UnlockCrypto.cpp). `ProtocolTests/main.cpp` tests the fixed payload, raw signature path and the shared `UnlockLogonBuffer` codec. `UnlockService/UnlockServiceCore.cpp` adds the in-memory challenge, enrollment-key check, assertion verification and `unlock_approved` decision boundary; `EnrollmentStore` protects the enrolled raw public key plus the enrolling user's validated Windows SID with DPAPI and an administrative ACL; `UnlockServiceTests/main.cpp` covers valid authentication with SID approval, unenrolled-key rejection, malformed input, request mismatch, expiration and replay rejection. No Windows Service, LSA package, registry registration or system unlock behavior has been installed.
+The CNG P-256 verifier is in [`Protocol/UnlockCrypto.cpp`](Protocol/UnlockCrypto.cpp). `ProtocolTests/main.cpp` tests the fixed payload, raw signature path and the shared `UnlockLogonBuffer` codec. `UnlockService/UnlockServiceCore.cpp` adds the in-memory challenge, enrollment-key check, assertion verification, `unlock_approved` decision boundary and a short approval cooldown; `EnrollmentStore` protects the enrolled raw public key plus the enrolling user's validated Windows SID with DPAPI and an administrative ACL; `UnlockServiceTests/main.cpp` covers valid authentication with SID approval, unenrolled-key rejection, malformed input, request mismatch, expiration, replay rejection and cooldown suppression. No Windows Service, LSA package, registry registration or system unlock behavior has been installed.
 
 Build on Windows with Visual Studio 2026 and CMake from a Developer Command Prompt:
 

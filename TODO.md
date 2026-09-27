@@ -19,6 +19,7 @@
 - [x] 登记记录保存 Windows 用户 SID
 - [x] `UnlockServiceCore` 在签名验证后绑定登记 SID，并输出 `unlock_approved` 决策信号（不执行系统解锁）
 - [x] 定义 Credential Provider/LSA 共用的无密码提交缓冲区，并增加结构校验测试（不注册系统组件）
+- [x] 对自动解锁批准加入短冷却和一次性 challenge 消费，抑制 BLE 重复发现造成的连续批准
 - [x] UnlockService named-pipe IPC
 - [x] Windows CMake/Makefile 构建和四个 CTest
 
@@ -64,7 +65,7 @@
 - [x] `UnlockServiceCore` 保存已登记公钥对应的 Windows SID
 - [x] 签名验证成功且 SID 有效时返回 `unlock_approved`
 - [ ] 未登记、错误公钥、错误 SID、过期 challenge 和重放始终拒绝
-- [ ] 自动认证结果加入冷却时间和重复请求抑制
+- [x] 自动认证结果加入冷却时间和重复请求抑制
 - [ ] 增加可配置 RSSI 近距离阈值，信号过弱时不触发自动认证/解锁
 - [ ] 对 RSSI 连续采样取平均并加入进入/离开滞回，避免瞬时波动反复触发
 - [ ] RSSI 只能作为距离门控，不能替代签名和公钥身份认证

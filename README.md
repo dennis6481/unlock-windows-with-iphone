@@ -21,8 +21,8 @@
 - Windows CNG/BCrypt P-256 公钥导入、SHA-256 和原始 `r || s` 签名验证代码。
 - Windows 与 iOS 一致的签名载荷构造代码，以及供未来 LSA 使用的无密码提交缓冲区定义。
 - Windows 已增加 Credential Provider/LSA 共用的固定提交缓冲区 codec：构造和结构校验可独立测试，但尚未注册登录组件。
-- Windows 已增加仅用于 SDK/COM smoke test 的 `CPUS_UNLOCK_WORKSTATION` Credential Provider shell；它可被直接加载测试，但不注册、不返回登录凭据；另有单独的 adapter 测试把已批准字段打包成 `UnlockLogonBuffer`，尚未接入受保护 IPC。
-- Windows `UnlockService` 已将有效签名与登记记录中的 Windows SID 组合为 `unlock_approved` 决策信号；这一步只批准后续解锁，不直接调用 Windows 解锁 API。
+- Windows 已增加仅用于 SDK/COM smoke test 的 `CPUS_UNLOCK_WORKSTATION` Credential Provider shell；它可被直接加载测试但不注册，只有在找到指定 LSA 包后才会消费受保护批准并返回 serialization；当前因 LSA 包尚未实现仍不会返回登录凭据。
+- Windows `UnlockService` 已将有效签名与登记记录中的 Windows SID 组合为 `unlock_approved` 决策信号，并通过开发期 named pipe 提供一次性、短期的二进制 `UnlockLogonBuffer`；这一步只交接后续认证所需材料，不直接调用 Windows 解锁 API。
 - Windows `UnlockService` 已对批准结果加入短冷却和一次性 challenge 消费，避免 BLE 重复发现造成连续解锁批准。
 
 当前还没有完成：

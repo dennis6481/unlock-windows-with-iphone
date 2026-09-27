@@ -28,21 +28,39 @@ int main() {
         std::thread serverThread([&]() {
             try {
                 unlock_windows::service::ipc::Server server(kTestPipeName);
-                unlock_windows::service::ipc::Operation operation{};
-                std::string payload;
-                require(server.waitForRequest(operation, payload), "server did not receive request");
-                require(
-                    operation == unlock_windows::service::ipc::Operation::verifyAssertion,
-                    "server received the wrong operation"
-                );
-                require(payload == "ipc-test-payload", "server received the wrong payload");
-                require(
-                    server.respond(
-                        unlock_windows::service::ipc::Status::success,
-                        "ipc-test-response"
-                    ),
-                    "server response failed"
-                );
+                for (int round = 0; round < 2; ++round) {
+                    unlock_windows::service::ipc::Operation operation{};
+                    std::string payload;
+                    require(server.waitForRequest(operation, payload), "server did not receive request");
+                    if (round == 0) {
+                        require(
+                            operation == unlock_windows::service::ipc::Operation::verifyAssertion,
+                            "server received the wrong first operation"
+                        );
+                        require(payload == "ipc-test-payload", "server received the wrong first payload");
+                        require(
+                            server.respond(
+                                unlock_windows::service::ipc::Status::success,
+                                "ipc-test-response"
+                            ),
+                            "first server response failed"
+                        );
+                    } else {
+                        require(
+                            operation == unlock_windows::service::ipc::Operation::consumeUnlockApproval,
+                            "server received the wrong second operation"
+                        );
+                        require(payload.empty(), "consume approval request had an unexpected payload");
+                        const std::string binaryResponse("\x01\x00", 2);
+                        require(
+                            server.respond(
+                                unlock_windows::service::ipc::Status::success,
+                                binaryResponse
+                            ),
+                            "second server response failed"
+                        );
+                    }
+                }
             } catch (...) {
                 serverError = std::current_exception();
             }
@@ -55,6 +73,11 @@ int main() {
             unlock_windows::service::ipc::Operation::verifyAssertion,
             "ipc-test-payload"
         );
+        const auto approvalResponse = unlock_windows::service::ipc::callOnPipe(
+            kTestPipeName,
+            unlock_windows::service::ipc::Operation::consumeUnlockApproval,
+            {}
+        );
         serverThread.join();
         if (serverError) {
             std::rethrow_exception(serverError);
@@ -65,6 +88,13 @@ int main() {
             "client received an IPC failure"
         );
         require(response.payload == "ipc-test-response", "client received the wrong response");
+        require(
+            approvalResponse.status == unlock_windows::service::ipc::Status::success &&
+                approvalResponse.payload.size() == 2 &&
+                approvalResponse.payload[0] == '\x01' &&
+                approvalResponse.payload[1] == '\x00',
+            "client did not preserve the binary approval response"
+        );
         std::cout << "UnlockService IPC tests passed\n";
         return 0;
     } catch (const std::exception& error) {

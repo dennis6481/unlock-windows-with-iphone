@@ -3,15 +3,19 @@
 #include "EnrollmentStore.h"
 #include "UnlockServiceCore.h"
 #include "UnlockServiceIpc.h"
+#include "UnlockLogonBufferCodec.h"
 
 #include <winrt/base.h>
 
 #include <Windows.h>
+#include <sddl.h>
 
 #include <chrono>
 #include <cstdint>
 #include <iostream>
 #include <sstream>
+#include <span>
+#include <stdexcept>
 #include <string>
 #include <thread>
 
@@ -26,6 +30,42 @@ std::int64_t nowMilliseconds() {
     constexpr std::uint64_t kUnixEpochOffset100Nanoseconds = 116444736000000000ULL;
     return static_cast<std::int64_t>(
         (ticks.QuadPart - kUnixEpochOffset100Nanoseconds) / 10000ULL
+    );
+}
+
+std::string makeUnlockApprovalBuffer(
+    const unlock_windows::service::PendingUnlockApproval& approval
+) {
+    const std::wstring accountSid(
+        approval.accountSid.begin(),
+        approval.accountSid.end()
+    );
+    PSID parsedSid = nullptr;
+    if (!ConvertStringSidToSidW(accountSid.c_str(), &parsedSid)) {
+        throw std::runtime_error("ConvertStringSidToSidW failed while consuming approval");
+    }
+
+    const auto sidSize = GetLengthSid(parsedSid);
+    const auto sidBytes = std::span<const std::uint8_t>(
+        static_cast<const std::uint8_t*>(parsedSid),
+        sidSize
+    );
+    unlock_windows::protocol::UnlockLogonBuffer buffer{};
+    const auto result = unlock_windows::protocol::buildUnlockLogonBuffer(
+        approval.challenge,
+        approval.keyId,
+        sidBytes,
+        approval.signature,
+        buffer
+    );
+    LocalFree(parsedSid);
+    if (!result.succeeded()) {
+        throw std::runtime_error("approved unlock could not be encoded as UnlockLogonBuffer");
+    }
+
+    return std::string(
+        reinterpret_cast<const char*>(&buffer),
+        sizeof(buffer)
     );
 }
 
@@ -55,9 +95,8 @@ int main() {
         unlock_windows::service::EnrollmentStore enrollmentStore;
         const auto reloadEnrollment = [&]() {
             if (const auto enrolledRecord = enrollmentStore.load()) {
-                const auto accountSid = std::string(
-                    enrolledRecord->accountSid.begin(),
-                    enrolledRecord->accountSid.end()
+                const auto accountSid = winrt::to_string(
+                    winrt::hstring(enrolledRecord->accountSid)
                 );
                 service.setEnrolledPublicKey(enrolledRecord->publicKey);
                 service.setEnrolledAccountSid(accountSid);
@@ -104,6 +143,16 @@ int main() {
                               << resultStatus(result) << "\n";
                 } else if (operation == unlock_windows::service::ipc::Operation::reloadEnrollment) {
                     response = reloadEnrollment() ? "enrollment_loaded" : "enrollment_missing";
+                } else if (operation == unlock_windows::service::ipc::Operation::consumeUnlockApproval) {
+                    const auto approval = service.consumeUnlockApproval(nowMilliseconds());
+                    if (!approval) {
+                        status = unlock_windows::service::ipc::Status::serviceRejected;
+                        response = "no pending unlock approval";
+                        std::cout << "[UnlockService] no pending unlock approval\n";
+                    } else {
+                        response = makeUnlockApprovalBuffer(*approval);
+                        std::cout << "[UnlockService] consumed one-time unlock approval\n";
+                    }
                 } else {
                     status = unlock_windows::service::ipc::Status::invalidRequest;
                     response = "unsupported IPC operation";

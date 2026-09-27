@@ -7,19 +7,17 @@
 namespace unlock_windows::credential_provider {
 
 SerializationResult buildCredentialSerialization(
-    const ApprovedUnlock& approval,
+    const protocol::UnlockLogonBuffer& buffer,
     const ULONG authenticationPackage,
     CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION& output
 ) noexcept {
     output = {};
 
-    protocol::UnlockLogonBuffer buffer{};
-    const auto bufferResult = protocol::buildUnlockLogonBuffer(
-        approval.challenge,
-        approval.keyId,
-        approval.sid,
-        approval.signature,
-        buffer
+    const auto bufferResult = protocol::validateUnlockLogonBuffer(
+        std::span<const std::uint8_t>(
+            reinterpret_cast<const std::uint8_t*>(&buffer),
+            sizeof(buffer)
+        )
     );
     if (!bufferResult.succeeded()) {
         return {
@@ -45,6 +43,30 @@ SerializationResult buildCredentialSerialization(
         SerializationCode::valid,
         bufferResult.code,
     };
+}
+
+SerializationResult buildCredentialSerialization(
+    const ApprovedUnlock& approval,
+    const ULONG authenticationPackage,
+    CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION& output
+) noexcept {
+    protocol::UnlockLogonBuffer buffer{};
+    const auto bufferResult = protocol::buildUnlockLogonBuffer(
+        approval.challenge,
+        approval.keyId,
+        approval.sid,
+        approval.signature,
+        buffer
+    );
+    if (!bufferResult.succeeded()) {
+        output = {};
+        return {
+            SerializationCode::invalid_logon_buffer,
+            bufferResult.code,
+        };
+    }
+
+    return buildCredentialSerialization(buffer, authenticationPackage, output);
 }
 
 } // namespace unlock_windows::credential_provider

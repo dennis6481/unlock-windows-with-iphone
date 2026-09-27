@@ -315,7 +315,7 @@ bool Server::waitForRequest(Operation& operation, std::string& payload) {
     MessageHeader header{};
     if (!readMessage(pipe, header, payload) ||
         header.operation < static_cast<std::uint16_t>(Operation::issueChallenge) ||
-        header.operation > static_cast<std::uint16_t>(Operation::reloadEnrollment) ||
+        header.operation > static_cast<std::uint16_t>(Operation::consumeUnlockApproval) ||
         header.status != static_cast<std::uint32_t>(Status::success)) {
         closePipe();
         return false;

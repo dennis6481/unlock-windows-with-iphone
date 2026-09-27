@@ -16,6 +16,7 @@ enum class Operation : std::uint16_t {
     issueChallenge = 1,
     verifyAssertion = 2,
     reloadEnrollment = 3,
+    consumeUnlockApproval = 4,
 };
 
 enum class Status : std::uint32_t {

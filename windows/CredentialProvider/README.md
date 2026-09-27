@@ -21,9 +21,11 @@ The current prototype deliberately does not:
 - load or register an LSA Authentication Package;
 - claim that selecting the tile unlocks Windows.
 
-The COM tile's `GetSerialization` still returns `CPGSR_NO_CREDENTIAL_FINISHED`
-with a warning until the LSA package and a protected, short-lived approval
-handoff are implemented. `CredentialProviderTests` loads the DLL directly,
+The service-side protected, short-lived approval handoff now exposes a
+one-time binary buffer over the development named pipe. The COM tile first
+looks up the named LSA package and only then consumes that buffer; if the LSA
+package is absent it returns `CPGSR_NO_CREDENTIAL_FINISHED` without consuming
+the approval. `CredentialProviderTests` loads the DLL directly,
 instantiates it through `DllGetClassObject`, verifies the unlock-workstation
 tile and confirms that no credential serialization is returned. The same test
 also validates the separate serialization adapter against the shared codec;

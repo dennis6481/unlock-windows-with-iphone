@@ -1,3 +1,5 @@
+// Modified by Rui MA on 27 Sep 2026
+
 #pragma once
 
 #define WIN32_NO_STATUS
@@ -16,6 +18,8 @@ inline constexpr std::size_t kRequestIdSize = 16;
 inline constexpr std::size_t kNonceSize = 32;
 inline constexpr std::size_t kAudienceMaxUtf8Bytes = 64;
 inline constexpr std::size_t kRawSignatureSize = 64;
+inline constexpr char kUnlockLsaAuthenticationPackageName[] =
+    "UnlockWindowsWithIPhone";
 
 // This is the package-defined ProtocolSubmitBuffer used by the Credential
 // Provider and the LSA Authentication Package. It contains no password or

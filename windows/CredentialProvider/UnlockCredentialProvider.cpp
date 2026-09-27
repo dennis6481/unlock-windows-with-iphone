@@ -1,6 +1,8 @@
 // Created by Rui MA on 27 Sep 2026
 
 #include "UnlockCredentialProvider.h"
+#include "UnlockCredentialApprovalClient.h"
+#include "UnlockCredentialSerialization.h"
 
 #include <atomic>
 #include <cwchar>
@@ -10,6 +12,10 @@
 namespace {
 
 using unlock_windows::credential_provider::kUnlockCredentialProviderClsid;
+using unlock_windows::credential_provider::ApprovalFetchCode;
+using unlock_windows::credential_provider::buildCredentialSerialization;
+using unlock_windows::credential_provider::consumePendingApproval;
+using unlock_windows::credential_provider::lookupAuthenticationPackage;
 
 constexpr DWORD kTitleField = 0;
 constexpr DWORD kStatusField = 1;
@@ -303,14 +309,47 @@ public:
             return E_POINTER;
         }
 
-        *response = CPGSR_NO_CREDENTIAL_FINISHED;
         *serialization = {};
         *optionalStatusText = nullptr;
         *optionalStatusIcon = CPSI_WARNING;
-        return copyString(
-            L"The LSA authentication package is not installed; no credential was submitted.",
-            optionalStatusText
+
+        const auto authenticationPackage = lookupAuthenticationPackage();
+        if (!authenticationPackage.succeeded()) {
+            *response = CPGSR_NO_CREDENTIAL_FINISHED;
+            return copyString(
+                L"The LSA authentication package is not installed; no credential was submitted.",
+                optionalStatusText
+            );
+        }
+
+        const auto approval = consumePendingApproval();
+        if (!approval.succeeded()) {
+            *response = CPGSR_NO_CREDENTIAL_FINISHED;
+            return copyString(
+                approval.code == ApprovalFetchCode::invalid_response
+                    ? L"UnlockService returned an invalid approval; no credential was submitted."
+                    : L"No pending iPhone unlock approval is available.",
+                optionalStatusText
+            );
+        }
+
+        const auto serialized = buildCredentialSerialization(
+            approval.buffer,
+            authenticationPackage.identifier,
+            *serialization
         );
+        if (!serialized.succeeded()) {
+            *serialization = {};
+            *response = CPGSR_NO_CREDENTIAL_FINISHED;
+            return copyString(
+                L"The approved unlock buffer was invalid; no credential was submitted.",
+                optionalStatusText
+            );
+        }
+
+        *response = CPGSR_RETURN_CREDENTIAL_FINISHED;
+        *optionalStatusIcon = CPSI_NONE;
+        return S_OK;
     }
 
     HRESULT STDMETHODCALLTYPE ReportResult(

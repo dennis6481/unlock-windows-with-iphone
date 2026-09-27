@@ -3,7 +3,9 @@
 #pragma once
 
 #include "SigningPayload.h"
+#include "UnlockLogonBuffer.h"
 
+#include <array>
 #include <cstdint>
 #include <mutex>
 #include <optional>
@@ -34,6 +36,13 @@ enum class AssertionCode {
 struct IssuedChallenge final {
     protocol::FixedChallenge challenge;
     std::string json;
+};
+
+struct PendingUnlockApproval final {
+    protocol::FixedChallenge challenge;
+    std::array<std::uint8_t, protocol::kKeyIdSize> keyId{};
+    std::array<std::uint8_t, protocol::kRawSignatureSize> signature{};
+    std::string accountSid;
 };
 
 struct AssertionResult final {
@@ -70,6 +79,14 @@ public:
         std::int64_t nowMilliseconds
     );
 
+    // Consumes the one-time approval created by a valid enrolled assertion.
+    // The service caller must convert it to UnlockLogonBuffer before handing
+    // it to a Credential Provider; an expired or already consumed approval is
+    // never returned.
+    [[nodiscard]] std::optional<PendingUnlockApproval> consumeUnlockApproval(
+        std::int64_t nowMilliseconds
+    );
+
     // The real enrollment flow will load this value from protected storage.
     // Until a key is installed, no assertion is allowed to authenticate.
     void setEnrolledPublicKey(std::vector<std::uint8_t> rawPublicKey);
@@ -96,6 +113,7 @@ private:
     std::optional<protocol::FixedChallenge> outstandingChallenge_;
     std::optional<std::vector<std::uint8_t>> enrolledPublicKey_;
     std::optional<std::string> enrolledAccountSid_;
+    std::optional<PendingUnlockApproval> pendingUnlockApproval_;
     std::optional<std::int64_t> lastUnlockApprovalMilliseconds_;
     bool outstandingChallengeConsumed_ = false;
 };

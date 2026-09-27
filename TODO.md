@@ -77,7 +77,9 @@
 - [ ] 设计 Credential Provider 与 UnlockService/LSA 的 IPC 边界
 - [x] 定义 Credential Provider 与 LSA 共享的 `UnlockLogonBuffer` 输入边界（仅 codec，不注册 DLL）
 - [x] 增加仅供测试的 Credential Provider serialization adapter，验证已批准字段能生成 `CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION`
-- [ ] 让 Credential Provider 在收到受保护的短期批准后提交 `UnlockLogonBuffer`
+- [x] 定义开发期 `consumeUnlockApproval` named-pipe 边界：一次性、短期、返回二进制 `UnlockLogonBuffer`
+- [x] 让未注册的 Credential Provider 在 LSA 包存在时消费受保护的短期批准并提交 `UnlockLogonBuffer`
+- [ ] 将真实 LSA Authentication Package 注册到测试环境并完成独立验签
 - [ ] 让认证结果只映射到登记记录中的 Windows SID
 - [ ] 研究并实现不保存 Windows 密码的 LSA Authentication Package
 - [ ] 验证认证包返回的登录 Token 和锁屏解锁流程

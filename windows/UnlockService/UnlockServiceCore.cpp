@@ -131,6 +131,23 @@ struct HashHandle final {
     return outputIndex == result.size() ? std::optional{result} : std::nullopt;
 }
 
+[[nodiscard]] std::optional<std::array<std::uint8_t, protocol::kKeyIdSize>> parseKeyId(
+    const std::string_view value
+) {
+    if (value.size() != protocol::kKeyIdSize * 2 ||
+        !std::all_of(value.begin(), value.end(), isHex)) {
+        return std::nullopt;
+    }
+
+    std::array<std::uint8_t, protocol::kKeyIdSize> result{};
+    for (std::size_t index = 0; index < result.size(); ++index) {
+        result[index] = static_cast<std::uint8_t>(
+            (hexNibble(value[index * 2]) << 4) | hexNibble(value[index * 2 + 1])
+        );
+    }
+    return result;
+}
+
 [[nodiscard]] std::string base64Encode(const std::uint8_t* bytes, const std::size_t size) {
     constexpr char alphabet[] =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -329,6 +346,7 @@ IssuedChallenge UnlockServiceCore::issueChallenge(const std::int64_t issuedAtMil
 
     outstandingChallenge_ = challenge;
     outstandingChallengeConsumed_ = false;
+    pendingUnlockApproval_.reset();
     return IssuedChallenge{challenge, serializeChallenge(challenge)};
 }
 
@@ -339,6 +357,7 @@ void UnlockServiceCore::setEnrolledPublicKey(std::vector<std::uint8_t> rawPublic
     std::lock_guard lock(mutex_);
     enrolledPublicKey_ = std::move(rawPublicKey);
     enrolledAccountSid_.reset();
+    pendingUnlockApproval_.reset();
     lastUnlockApprovalMilliseconds_.reset();
 }
 
@@ -348,6 +367,7 @@ void UnlockServiceCore::setEnrolledAccountSid(std::string accountSid) {
     }
     std::lock_guard lock(mutex_);
     enrolledAccountSid_ = std::move(accountSid);
+    pendingUnlockApproval_.reset();
     lastUnlockApprovalMilliseconds_.reset();
 }
 
@@ -355,6 +375,7 @@ void UnlockServiceCore::clearEnrolledPublicKey() noexcept {
     std::lock_guard lock(mutex_);
     enrolledPublicKey_.reset();
     enrolledAccountSid_.reset();
+    pendingUnlockApproval_.reset();
     lastUnlockApprovalMilliseconds_.reset();
 }
 
@@ -432,6 +453,10 @@ AssertionResult UnlockServiceCore::verifyAssertion(
         if (keyId->size() != 64 || !std::all_of(keyId->begin(), keyId->end(), isHex)) {
             return {AssertionCode::invalid_key_id};
         }
+        const auto keyIdBytes = parseKeyId(*keyId);
+        if (!keyIdBytes) {
+            return {AssertionCode::invalid_key_id};
+        }
 
         const auto publicKey = base64Decode(*publicKeyEncoded);
         const auto signature = base64Decode(*signatureEncoded);
@@ -480,6 +505,17 @@ AssertionResult UnlockServiceCore::verifyAssertion(
                 return {AssertionCode::unlock_cooldown};
             }
             lastUnlockApprovalMilliseconds_ = nowMilliseconds;
+
+            PendingUnlockApproval approval;
+            approval.challenge = *outstandingChallenge_;
+            approval.keyId = *keyIdBytes;
+            std::copy(
+                signature->begin(),
+                signature->end(),
+                approval.signature.begin()
+            );
+            approval.accountSid = *enrolledAccountSid_;
+            pendingUnlockApproval_ = std::move(approval);
         }
         return {
             AssertionCode::authenticated,
@@ -488,6 +524,23 @@ AssertionResult UnlockServiceCore::verifyAssertion(
     } catch (...) {
         return {AssertionCode::malformed_json};
     }
+}
+
+std::optional<PendingUnlockApproval> UnlockServiceCore::consumeUnlockApproval(
+    const std::int64_t nowMilliseconds
+) {
+    std::lock_guard lock(mutex_);
+    if (!pendingUnlockApproval_) {
+        return std::nullopt;
+    }
+
+    auto approval = std::move(pendingUnlockApproval_);
+    pendingUnlockApproval_.reset();
+    if (nowMilliseconds < approval->challenge.issuedAtMilliseconds ||
+        nowMilliseconds - approval->challenge.issuedAtMilliseconds > challengeLifetimeMilliseconds_) {
+        return std::nullopt;
+    }
+    return approval;
 }
 
 const char* assertionCodeName(const AssertionCode code) noexcept {

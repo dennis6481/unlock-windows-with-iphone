@@ -40,6 +40,14 @@ struct SerializationResult final {
 // one UnlockLogonBuffer. The caller owns rgbSerialization and must release it
 // with CoTaskMemFree. LSA remains responsible for independent verification.
 [[nodiscard]] SerializationResult buildCredentialSerialization(
+    const protocol::UnlockLogonBuffer& buffer,
+    ULONG authenticationPackage,
+    CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION& output
+) noexcept;
+
+// Builds and validates the shared buffer from an already-approved input. This
+// overload is the test-side stand-in for the future protected IPC client.
+[[nodiscard]] SerializationResult buildCredentialSerialization(
     const ApprovedUnlock& approval,
     ULONG authenticationPackage,
     CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION& output

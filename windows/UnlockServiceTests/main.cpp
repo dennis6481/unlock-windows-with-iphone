@@ -317,6 +317,22 @@ void run() {
         service.verifyAssertion(assertion, 2'002).code == AssertionCode::challenge_replayed,
         "replayed assertion was accepted"
     );
+    const auto approval = service.consumeUnlockApproval(2'003);
+    require(approval.has_value(), "approved assertion did not create a pending approval");
+    require(
+        approval->challenge.requestId == validIssued.challenge.requestId &&
+            approval->accountSid == "S-1-5-21-111111111-222222222-333333333-1001" &&
+            std::memcmp(
+                approval->signature.data(),
+                signedAssertion.signature.data(),
+                approval->signature.size()
+            ) == 0,
+        "pending approval did not preserve the verified assertion"
+    );
+    require(
+        !service.consumeUnlockApproval(2'004).has_value(),
+        "pending approval could be consumed more than once"
+    );
 
     const auto cooldownIssued = service.issueChallenge(2'003);
     const auto cooldownPayload = unlock_windows::protocol::buildSigningPayload(cooldownIssued.challenge);
@@ -340,6 +356,24 @@ void run() {
     require(
         service.verifyAssertion(afterCooldownAssertion, 7'005).unlockApproved(),
         "approval after the cooldown was rejected"
+    );
+    require(
+        service.consumeUnlockApproval(7'006).has_value(),
+        "approval after the cooldown was not available to consume"
+    );
+
+    const auto expiredIssued = service.issueChallenge(13'000);
+    const auto expiredPayload = unlock_windows::protocol::buildSigningPayload(expiredIssued.challenge);
+    require(expiredPayload.succeeded(), "expired approval payload did not build");
+    const auto expiredSignature = sign(*signingKey, expiredPayload.bytes);
+    const auto expiredAssertion = makeAssertion(service, expiredIssued, expiredSignature);
+    require(
+        service.verifyAssertion(expiredAssertion, 13'001).unlockApproved(),
+        "expired approval fixture could not be authenticated before expiry"
+    );
+    require(
+        !service.consumeUnlockApproval(43'002).has_value(),
+        "expired pending approval was returned"
     );
 
     std::cout << "UnlockServiceCore tests passed\n";

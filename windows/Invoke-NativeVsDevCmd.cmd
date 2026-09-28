@@ -37,7 +37,7 @@ if /I "%UNLOCK_VS_DEV_CMD%"=="auto" (
 
     set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
     if exist "!VSWHERE!" (
-        for /f "usebackq delims=" %%A in (`"!VSWHERE!" -latest -prerelease -products * -requires !REQUIRED_VS_COMPONENT! -property installationPath`) do set "VS_INSTALLATION=%%A"
+        for /f "usebackq delims=" %%A in (`"!VSWHERE!" -all -latest -prerelease -products * -requires !REQUIRED_VS_COMPONENT! -property installationPath`) do set "VS_INSTALLATION=%%A"
     )
 
     if defined VS_INSTALLATION (

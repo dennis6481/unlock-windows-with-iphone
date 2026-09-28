@@ -1,5 +1,7 @@
 <!-- Modified by Rui MA on 26 Sep 2026 -->
-<!-- Modified by Codex on 27 Sep 2026 -->
+<!-- Modified by Rui MA on 27 Sep 2026 -->
+
+<!-- Modified by Rui MA on 28 Sep 2026 -->
 
 # Unlock Windows with iPhone
 
@@ -22,7 +24,7 @@
 - Windows CNG/BCrypt P-256 公钥导入、SHA-256 和原始 `r || s` 签名验证代码。
 - Windows 与 iOS 一致的签名载荷构造代码，以及供未来 LSA 使用的无密码提交缓冲区定义。
 - Windows 已增加 Credential Provider/LSA 共用的固定提交缓冲区 codec：构造和结构校验可独立测试。
-- Windows 已增加仅用于 SDK/COM smoke test 的 `CPUS_UNLOCK_WORKSTATION` Credential Provider V2 shell；它通过用户 SID 关联把磁贴绑定到 LogonUI 当前用户，带有 VM-only 注册/回滚脚本，只有在找到指定 LSA 包后才会消费受保护批准并返回 serialization。另有只构建不注册的 LSA package 原型，会独立校验提交缓冲区和登记映射，但尚未接入生产 LSASS 流程。
+- Windows 已增加 Credential Provider V2 shell，同时支持 `CPUS_LOGON` 和 `CPUS_UNLOCK_WORKSTATION`；Windows 10 及更高版本通常会在锁屏时请求前者。它通过用户 SID 关联把磁贴绑定到 LogonUI 当前用户，只有在找到指定 LSA 包后才会消费受保护批准并返回 serialization。Windows 11 ARM 测试 VM 已显示该 tile，并完成 LSA package lookup；原生 EXE 向导可管理测试用 CP/LSA 的安装、验证和手动跨重启清理。登录后自动续跑仍在验证。LSA package 仍只是测试原型，未接入生产 LSASS 流程。
 - Windows `UnlockService` 已将有效签名与登记记录中的 Windows SID 组合为 `unlock_approved` 决策信号，并通过开发期 named pipe 提供一次性、短期的二进制 `UnlockLogonBuffer`；这一步只交接后续认证所需材料，不直接调用 Windows 解锁 API。
 - Windows `UnlockService` 已对批准结果加入短冷却和一次性 challenge 消费，避免 BLE 重复发现造成连续解锁批准。
 - 在一次性 Windows VM 中关闭 LSA Protection 后，已成功注册并查询到 LSA package ID；这只证明 VM smoke test 的加载链路成立。
@@ -80,7 +82,7 @@ Windows 端最终需要拆成四个组件：
 
 - `GattHost`：带 package identity 的 Windows GATT host，优先使用 `GattServiceProvider`/后台 GATT provider 接收 iPhone 连接。它不是普通桌面进程；是否能在目标 Windows 版本的锁屏阶段持续工作，必须在实体机器上验证。
 - `UnlockService`：Windows Service，运行在 Session 0，维护 challenge 超时/防重放、已登记公钥、协议验证和与 Credential Provider/LSA 的 IPC。当前不把“普通 Session 0 服务直接调用 GATT Server”当成已验证事实。
-- `CredentialProvider`：实现 `CPUS_UNLOCK_WORKSTATION`，向 LogonUI 提供解锁凭据入口。它不能靠普通桌面 App 的 UI 自动解锁。
+- `CredentialProvider`：实现 `CPUS_LOGON` 和 `CPUS_UNLOCK_WORKSTATION`，向 LogonUI 提供解锁凭据入口；Windows 10 及更高版本通常会在锁屏时使用 `CPUS_LOGON`。它不能靠普通桌面 App 的 UI 自动解锁。
 - `PairingTool`：只负责首次配对、显示并确认公钥指纹、安装/注册所需组件。
 
 此外还有 `LSAAuthenticationPackage`：它由 LSA 在系统启动时加载，接收自定义的无密码认证数据，重新验证 iPhone 签名并为已映射的 Windows 用户返回登录 Token。它不能依赖普通用户桌面进程的内存结果。
@@ -159,20 +161,14 @@ Windows Hello / WebAuthn 可以作为交互式登录或凭据能力的研究方�
 
 下一阶段的开发环境预期为：
 
-- Windows 11 x64。
+- Windows 11 x64 或 ARM64。
 - Visual Studio 2022，安装 “Desktop development with C++” 和 Windows App SDK/C++/WinRT 所需组件。
 - Windows SDK，包含 Bluetooth GATT、Windows Service、Credential Provider 和 LSA 相关头文件/库。
 - 支持 BLE 的硬件；开发阶段建议用独立的测试账户和虚拟机/备用机器。
 - GATT host 需要带 package identity 的安装方式（MSIX 或 packaged with external location），因为 Windows 的后台/能力声明依赖 package identity。
 
-构建当前协议/CNG 库的命令为：
-
-```powershell
-cmake -S windows -B windows/build -A x64
-cmake --build windows/build --config Debug
-```
-
-也可以使用 `windows/Makefile` 简化命令：
+构建时必须使用与 Windows 原生架构一致的 Visual Studio 工具链。推荐使用
+Makefile；它会自动识别 x64 或 ARM64 Windows，并为 CMake 选择对应的工具链：
 
 ```powershell
 cd windows
@@ -181,6 +177,11 @@ make build           # 只构建
 make build-release   # 构建 Release 版本，避免 Debug CRT 依赖
 make test            # 构建并运行测试
 ```
+
+如需交叉构建，可显式传入 `TARGET_ARCH=x64` 或 `TARGET_ARCH=arm64`；常规 VM
+测试不应覆盖自动识别的结果。Makefile 还会通过 Visual Studio 自带的 `vswhere`
+自动定位带所需 C++ 工具链的安装位置；非标准安装才需要指定
+`VS_DEV_CMD=完整路径\VsDevCmd.bat`。
 
 如果没有 GNU Make，在 Visual Studio Developer PowerShell/Command Prompt 中使用原生命令：
 
@@ -191,7 +192,7 @@ nmake /f Makefile test
 
 Windows SDK 目标已在当前 Windows 环境完成构建和本机 CTest 验证；这仍不等于后台锁屏生命周期、Credential Provider 的 LogonUI 激活或真实 LSA 登录流程已经完成。
 
-在 Windows 端可以运行的当前里程碑是协议验证工具、前台 GATT host、UnlockService IPC host、PairingTool、Credential Provider shell、build-only LSA package 和只读 LSA package lookup 工具。PairingTool 通过 Windows 通知要求用户确认后，将公钥和当前 Windows 用户 SID 一起写入 DPAPI 保护的登记记录；GATT host 不会自动登记公钥。当前 `UnlockService` 在有效签名和已登记 SID 同时满足时返回 `unlock_approved`，Credential Provider 可交接一次性缓冲区，LSA 原型会再次验签并准备 SID token 信息；VM 专用脚本可以备份、注册和恢复测试用注册表值，但默认不会执行注册。一次性 VM 中目前已确认 LSA package lookup 成功、Credential Provider 注册表/DLL 路径存在且直接 COM smoke test 成功，但锁屏界面仍只显示 PIN，尚未证明 LogonUI 实例化了自定义 tile。完整里程碑仍必须证明：该 SID 映射能被登录组件正确使用、challenge 新鲜度、签名验证、超时、重放拒绝以及锁屏时 GATT host 的生命周期都正确。
+在 Windows 端可以运行的当前里程碑是协议验证工具、前台 GATT host、UnlockService IPC host、PairingTool、Credential Provider shell、build-only LSA package 和只读 LSA package lookup 工具。PairingTool 通过 Windows 通知要求用户确认后，将公钥和当前 Windows 用户 SID 一起写入 DPAPI 保护的登记记录；GATT host 不会自动登记公钥。当前 `UnlockService` 在有效签名和已登记 SID 同时满足时返回 `unlock_approved`，Credential Provider 可交接一次性缓冲区，LSA 原型会再次验签并准备 SID token 信息；VM 专用脚本和原生 Components Wizard EXE 可以备份、注册和恢复测试用注册表值，但默认不会执行注册。登录后自动续跑卸载仍在验证；目前可用同一个 EXE 的 `--resume-uninstall` 参数手动完成。先前 VM 使用的旧 DLL 拒绝了 Windows 10+ 锁屏常用的 `CPUS_LOGON`，因此仅显示 PIN；当前 ARM64 VM 已确认自定义 tile 出现，并在选择后完成 LSA lookup。完整里程碑仍必须证明：该 SID 映射能被登录组件正确使用、challenge 新鲜度、签名验证、超时、重放拒绝以及锁屏时 GATT host 的生命周期都正确。
 
 ## Windows：使用方法（当前阶段）
 
@@ -235,7 +236,7 @@ LSA 包属于系统级登录组件。未完成隔离测试、签名、账户映�
 - `windows/UnlockService/UnlockServiceCore` 已独立实现 challenge 新鲜度、单次使用、assertion JSON 解析、P-256 公钥指纹匹配和 CNG 验签；`unlock_service_host` 通过同用户 named pipe 使用它，并从 DPAPI/ACL 保护的登记文件加载公钥及其当前 Windows 用户 SID。
 - `unlock_pairing_tool` 已实现 Windows 通知确认按钮；iOS 可通过 GATT 发送登记候选公钥，但没有点击 Confirm 就不会写入公钥。
 - Windows 本机的 `unlock_protocol_tests`、`unlock_service_tests`、`unlock_service_ipc_tests` 和 `unlock_enrollment_store_tests` 均已通过；全部 Windows 目标已完成 SDK 构建。
-- SID 记录已经落地。一次性 VM 中 LSA package 已能 lookup 到 package ID，Credential Provider 的注册表项和 DLL 路径也已存在，直接 COM smoke test 返回成功；但锁屏界面目前仍只显示 PIN，尚未观察到自定义 tile。下一步是确认 LogonUI 是否加载了最新 DLL、补齐 Credential Provider 的锁屏激活诊断，然后再推进 package identity/MSIX、后台/锁屏生命周期和真正的 Windows Service。
+- SID 记录已经落地。一次性 Windows 11 ARM VM 中 LSA package 已能 lookup 到 package ID，Credential Provider tile 已显示；旧 DLL 因 x64 架构不匹配且拒绝 `CPUS_LOGON` 而只显示 PIN。当前 tile 点击后已到达 LSA lookup，但尚无待消费的 iPhone approval；下一步是为 LogonUI/SYSTEM 与受保护服务设计安全的一次性 approval 交接，再推进 package identity/MSIX、后台/锁屏生命周期和真正的 Windows Service。
 
 ## License
 

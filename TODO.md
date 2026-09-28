@@ -1,5 +1,5 @@
 <!-- Created by Rui MA on 27 Sep 2026 -->
-<!-- Modified by Codex on 27 Sep 2026 -->
+<!-- Modified by Rui MA on 28 Sep 2026 -->
 
 # 自动解锁认证模式 TODO
 
@@ -20,12 +20,14 @@
 - [x] 登记记录保存 Windows 用户 SID
 - [x] `UnlockServiceCore` 在签名验证后绑定登记 SID，并输出 `unlock_approved` 决策信号（不执行系统解锁）
 - [x] 定义 Credential Provider/LSA 共用的无密码提交缓冲区，并增加结构校验测试（不注册系统组件）
-- [x] 实现只用于 SDK/COM smoke test 的 `CPUS_UNLOCK_WORKSTATION` Credential Provider shell（不注册、不返回登录凭据）
+- [x] 实现只用于 SDK/COM smoke test 的 `CPUS_LOGON`/`CPUS_UNLOCK_WORKSTATION` Credential Provider shell（不注册、不返回登录凭据）
 - [x] Credential Provider 增加 V2 用户关联：通过 `ICredentialProviderSetUserArray` 和 `ICredentialProviderCredential2::GetUserSid` 绑定当前 Windows 用户
 - [x] 增加只构建不注册的 LSA Authentication Package 原型：独立校验 `UnlockLogonBuffer`、登记公钥、SID、audience、时间窗口和签名，并准备 SID 映射的 token 信息
 - [x] 增加仅供一次性 Windows VM 使用的 LSA 注册备份/回滚脚本和只读 package lookup smoke test（默认不执行、不注册）
 - [x] 在关闭 LSA Protection 的一次性 VM 中完成 LSA package 注册、重启和 package ID 查询
 - [x] 增加仅供一次性 Windows VM 使用的 Credential Provider 注册/回滚脚本，并完成注册表/DLL 路径检查
+- [x] 增加原生 Windows EXE 向导：安装/验证 Credential Provider 与 LSA package，并支持通过 `--resume-uninstall` 手动完成重启后的 DLL 和状态清理
+- [ ] 验证并修复 Windows 11 登录后自动触发 EXE 卸载续跑任务
 - [x] 对自动解锁批准加入短冷却和一次性 challenge 消费，抑制 BLE 重复发现造成的连续批准
 - [x] UnlockService named-pipe IPC
 - [x] Windows CMake/Makefile 构建和六个 CTest
@@ -87,8 +89,8 @@
 - [x] 让未注册的 Credential Provider 在 LSA 包存在时消费受保护的短期批准并提交 `UnlockLogonBuffer`
 - [x] 增加只构建不注册的 LSA Authentication Package callback 和独立验签测试；包内增加进程生命周期内的 request ID 防重放
 - [x] 将真实 LSA Authentication Package 注册到测试 VM 并完成 package lookup smoke test（LSA Protection 关闭）
-- [ ] 验证 VM-only Credential Provider 锁屏 tile 能走到 LSA package
-- [ ] 查明一次性 VM 中 LogonUI 仍只显示 PIN 的原因：确认 System32 DLL 与 Release 构建 hash 一致，并用进程加载诊断确认 LogonUI 是否加载 Provider DLL
+- [x] 验证 Windows 11 ARM VM 中 Credential Provider tile 出现在锁屏，并在点击后完成 LSA package lookup
+- [x] 查明一次性 VM 中 LogonUI 仅显示 PIN 的原因：旧 x64 DLL 不能由 ARM64 LogonUI 加载，且旧版本拒绝 Windows 10+ 常用的 `CPUS_LOGON`
 - [ ] 在 Credential Provider 真正出现在锁屏后，验证 tile 激活、`GetSerialization`、LSA package lookup 和一次性批准消费的完整链路
 - [ ] 让认证结果只映射到登记记录中的 Windows SID
 - [ ] 研究并实现不保存 Windows 密码的 LSA Authentication Package
@@ -110,9 +112,9 @@
 ## 当前 Windows VM 阻塞记录
 
 - Windows Release 构建和 6 个 CTest 已通过。
-- 一次性 VM 中 LSA package lookup 已返回 package ID，Credential Provider 注册表项和 System32 DLL 路径检查为存在，直接 COM smoke test 返回成功。
-- 锁屏/登录界面仍只显示 PIN，没有出现 “Unlock Windows with iPhone” tile；现有 Winlogon ETW 记录没有给出明确的 Provider CLSID 或 DLL 加载证据。
-- 当前阻塞点在 LogonUI 的 Credential Provider 激活/显示链路，不是 iPhone 签名、UnlockService 验签或 LSA package lookup。未确认 tile 出现前，不宣称已经完成实际解锁。
+- 一次性 Windows 11 ARM VM 中 LSA package lookup 已返回 package ID；Credential Provider tile 已出现在锁屏，点击后会通过 LSA lookup 并返回 “No pending iPhone unlock approval is available”。
+- 当前阻塞点是将有效 iPhone assertion 生成的一次性 approval 安全交给 LogonUI；当前前台 `UnlockService` 的同用户 IPC 校验不接受锁屏的 SYSTEM 客户端。
+- 尚未完成 iPhone/BLE assertion、一次性 approval 消费、LSA token 返回和实际锁屏解锁的完整链路。
 
 ## 6. LSA Protection 与生产发布
 

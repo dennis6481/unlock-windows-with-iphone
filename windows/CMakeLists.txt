@@ -1,5 +1,5 @@
 # Modified by Rui MA on 26 Sep 2026
-# Modified by Codex on 26 Sep 2026
+# Modified by Rui MA on 26 Sep 2026
 
 cmake_minimum_required(VERSION 3.25)
 
@@ -207,6 +207,25 @@ target_include_directories(unlock_lsa_package_lookup
 target_compile_features(unlock_lsa_package_lookup PRIVATE cxx_std_20)
 target_compile_definitions(unlock_lsa_package_lookup PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(unlock_lsa_package_lookup PRIVATE secur32)
+
+add_executable(unlock_windows_components_wizard WIN32
+    ComponentsWizard/main.cpp
+)
+
+target_compile_features(unlock_windows_components_wizard PRIVATE cxx_std_20)
+target_compile_definitions(unlock_windows_components_wizard PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(
+    unlock_windows_components_wizard
+    PRIVATE
+        advapi32
+        comctl32
+        ole32
+        oleaut32
+        secur32
+        shell32
+        taskschd
+        user32
+)
 
 add_executable(unlock_pairing_tool
     PairingTool/main.cpp

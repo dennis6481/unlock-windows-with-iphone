@@ -1,5 +1,5 @@
 <!-- Modified by Rui MA on 27 Sep 2026 -->
-<!-- Modified by Codex on 27 Sep 2026 -->
+<!-- Modified by Rui MA on 28 Sep 2026 -->
 
 # LSAAuthenticationPackage
 
@@ -48,25 +48,38 @@ Authenticode or self-signed certificate is not sufficient; the production
 path requires an EV certificate and Microsoft Partner Center LSA file
 signing.
 
-The scripts in this directory are deliberately guarded by
-`-IUnderstandThisIsAThrowawayVm` and require an elevated 64-bit PowerShell:
+Use the native Components Wizard EXE. It requests elevation itself and must be
+built for the native Windows architecture:
 
 ```powershell
-.\windows\LSAAuthenticationPackage\Install-TestLsaAuthenticationPackage.ps1 `
-    -IUnderstandThisIsAThrowawayVm -Confirm
+# On the Windows build machine
+cd .\windows
+make build-release
+
+# In the VM, after copying the complete build directory
+cd .\build
+.\unlock_windows_components_wizard.exe
 ```
 
-The install script backs up the `Authentication Packages` `REG_MULTI_SZ`
-value, copies the x64 DLL to `System32`, and adds only the DLL base name. It
-does not reboot automatically. After testing, restore the registry and reboot
-before removing the DLL:
+The wizard installs this package together with the Credential Provider. It
+backs up the `Authentication Packages` `REG_MULTI_SZ` value, detects the native
+x64 or ARM64 architecture, verifies that both DLLs and the EXE match it, copies
+the native DLLs to `System32`, and adds only the package DLL base name. It
+refuses an existing installation; overwrite/update is not implemented. For
+uninstall, it restores both registry configurations and requires a reboot. The
+automatic logon task is still under verification on Windows 11; if it does not
+launch the EXE after reboot, run
+`unlock_windows_components_wizard.exe --resume-uninstall` from the build
+directory to delete both DLLs and wizard state. No typed VM confirmation,
+PowerShell `-Confirm` prompt, or PowerShell continuation is required.
+
+The underlying LSA-only scripts remain available for automation:
 
 ```powershell
-.\windows\LSAAuthenticationPackage\Uninstall-TestLsaAuthenticationPackage.ps1 `
-    -IUnderstandThisIsAThrowawayVm -Confirm
+.\windows\LSAAuthenticationPackage\Uninstall-TestLsaAuthenticationPackage.ps1
 # reboot the VM
 .\windows\LSAAuthenticationPackage\Uninstall-TestLsaAuthenticationPackage.ps1 `
-    -IUnderstandThisIsAThrowawayVm -RemoveFile -Confirm
+    -RemoveFile
 ```
 
 The second rollback step removes the package DLL and then deletes the rollback

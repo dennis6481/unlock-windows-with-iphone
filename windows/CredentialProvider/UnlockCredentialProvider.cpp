@@ -1,5 +1,5 @@
 // Created by Rui MA on 27 Sep 2026
-// Modified by Codex on 27 Sep 2026
+// Modified by Rui MA on 28 Sep 2026
 
 #include "UnlockCredentialProvider.h"
 #include "UnlockCredentialApprovalClient.h"
@@ -24,9 +24,8 @@ using unlock_windows::credential_provider::lookupAuthenticationPackage;
 
 constexpr DWORD kIconField = 0;
 constexpr DWORD kTitleField = 1;
-constexpr DWORD kStatusField = 2;
-constexpr DWORD kSubmitField = 3;
-constexpr DWORD kFieldCount = 4;
+constexpr DWORD kSubmitField = 2;
+constexpr DWORD kFieldCount = 3;
 
 struct FieldDefinition final {
     DWORD id;
@@ -38,7 +37,6 @@ struct FieldDefinition final {
 const FieldDefinition kFields[] = {
     {kIconField, CPFT_TILE_IMAGE, nullptr, CPFG_CREDENTIAL_PROVIDER_LOGO},
     {kTitleField, CPFT_LARGE_TEXT, L"Unlock with iPhone", GUID_NULL},
-    {kStatusField, CPFT_SMALL_TEXT, L"Status", GUID_NULL},
     {kSubmitField, CPFT_SUBMIT_BUTTON, L"Unlock", GUID_NULL},
 };
 
@@ -248,7 +246,6 @@ public:
         switch (fieldId) {
             case kIconField:
             case kTitleField:
-            case kStatusField:
                 *state = CPFS_DISPLAY_IN_BOTH;
                 *interactiveState = CPFIS_READONLY;
                 return S_OK;
@@ -274,11 +271,6 @@ public:
                 return S_OK;
             case kTitleField:
                 return copyString(L"Unlock Windows with iPhone", value);
-            case kStatusField:
-                return copyString(
-                    L"Test provider: LSA authentication package is not installed",
-                    value
-                );
             default:
                 if (value != nullptr) {
                     *value = nullptr;
@@ -532,7 +524,10 @@ public:
         CREDENTIAL_PROVIDER_USAGE_SCENARIO scenario,
         DWORD
     ) override {
-        if (scenario != CPUS_UNLOCK_WORKSTATION) {
+        // Windows 10 and later normally use CPUS_LOGON for both sign-in and
+        // workstation unlock. CPUS_UNLOCK_WORKSTATION remains possible when
+        // system policy requires the stricter unlock-only scenario.
+        if (scenario != CPUS_LOGON && scenario != CPUS_UNLOCK_WORKSTATION) {
             return E_NOTIMPL;
         }
         usageScenarioSet_ = true;

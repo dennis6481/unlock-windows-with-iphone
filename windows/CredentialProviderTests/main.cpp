@@ -234,8 +234,12 @@ void run() {
         "unlock workstation usage scenario was rejected"
     );
     require(
-        provider->SetUsageScenario(CPUS_LOGON, 0) == E_NOTIMPL,
-        "logon usage scenario was unexpectedly enabled"
+        provider->SetUsageScenario(CPUS_LOGON, 0) == S_OK,
+        "Windows 10+ logon/unlock usage scenario was rejected"
+    );
+    require(
+        provider->SetUsageScenario(CPUS_CREDUI, 0) == E_NOTIMPL,
+        "CredUI usage scenario was unexpectedly enabled"
     );
 
     ICredentialProviderSetUserArray* setUserArray = nullptr;
@@ -254,7 +258,7 @@ void run() {
     setUserArray->Release();
 
     DWORD fieldCount = 0;
-    require(provider->GetFieldDescriptorCount(&fieldCount) == S_OK && fieldCount == 4,
+    require(provider->GetFieldDescriptorCount(&fieldCount) == S_OK && fieldCount == 3,
         "unexpected Credential Provider field count");
 
     DWORD credentialCount = 0;

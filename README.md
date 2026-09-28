@@ -1,8 +1,4 @@
-<!-- Modified by Rui MA on 26 Sep 2026 -->
-<!-- Modified by Rui MA on 27 Sep 2026 -->
-
-<!-- Modified by Rui MA on 28 Sep 2026 -->
-
+在 Windows 端可以运行的当前里程碑是协议验证工具、前台 GATT host、UnlockService IPC host、PairingTool、Credential Provider shell、build-only LSA package、原生 Components Wizard 和只读 LSA package lookup 工具。Components Wizard 是 Windows 10+ 的唯一正常安装/卸载入口；PowerShell 只保留只读诊断和调用原生恢复入口，不再直接修改 System32、注册表或维护 JSON 备份。安装会保存统一 HKLM 事务状态并在验证后提交，卸载先注销组件，重启后再由任务清理 DLL；失败时保留状态供恢复。
 # Unlock Windows with iPhone
 
 这个项目探索并实现一条明确的认证链路：
@@ -192,7 +188,7 @@ nmake /f Makefile test
 
 Windows SDK 目标已在当前 Windows 环境完成构建和本机 CTest 验证；这仍不等于后台锁屏生命周期、Credential Provider 的 LogonUI 激活或真实 LSA 登录流程已经完成。
 
-在 Windows 端可以运行的当前里程碑是协议验证工具、前台 GATT host、UnlockService IPC host、PairingTool、Credential Provider shell、build-only LSA package 和只读 LSA package lookup 工具。PairingTool 通过 Windows 通知要求用户确认后，将公钥和当前 Windows 用户 SID 一起写入 DPAPI 保护的登记记录；GATT host 不会自动登记公钥。当前 `UnlockService` 在有效签名和已登记 SID 同时满足时返回 `unlock_approved`，Credential Provider 可交接一次性缓冲区，LSA 原型会再次验签并准备 SID token 信息；VM 专用脚本和原生 Components Wizard EXE 可以备份、注册和恢复测试用注册表值，但默认不会执行注册。登录后自动续跑卸载仍在验证；目前可用同一个 EXE 的 `--resume-uninstall` 参数手动完成。先前 VM 使用的旧 DLL 拒绝了 Windows 10+ 锁屏常用的 `CPUS_LOGON`，因此仅显示 PIN；当前 ARM64 VM 已确认自定义 tile 出现，并在选择后完成 LSA lookup。完整里程碑仍必须证明：该 SID 映射能被登录组件正确使用、challenge 新鲜度、签名验证、超时、重放拒绝以及锁屏时 GATT host 的生命周期都正确。
+在 Windows 端，原生 Components Wizard 是 Windows 10+ 测试组件的唯一正常安装/卸载入口；PowerShell 只保留只读诊断和调用原生恢复入口。安装、注销、重启后清理和恢复都由同一套 HKLM 事务状态协调，未知残留不会被自动删除。LSA package lookup 和 Credential Provider tile 仍需在一次性 Windows VM 中验证，不能视为生产解锁流程已经完成。
 
 ## Windows：使用方法（当前阶段）
 
@@ -241,3 +237,13 @@ LSA 包属于系统级登录组件。未完成隔离测试、签名、账户映�
 ## License
 
 This project is licensed under the MIT License. See [LICENSE.md](LICENSE.md).
+
+## Components Wizard architecture update
+
+The Windows 10+ component installer is now a native Components Wizard EXE.
+It is the only normal installation and uninstall entry point. The wizard uses
+a classic Wizard97 Property Sheet with a left-side watermark, an explicit UAC/Common Controls v6 manifest,
+one HKLM transaction record, deterministic rollback and a post-restart
+cleanup task. PowerShell is limited to read-only diagnostics and invoking the
+native recovery entry point; it no longer performs the component transaction
+or maintains JSON backups.

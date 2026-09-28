@@ -1,143 +1,47 @@
-# Created by Rui MA on 28 Sep 2026
+# Compatibility launcher for the native Components Wizard and read-only diagnostics.
 
 [CmdletBinding()]
 param(
     [ValidateSet('Menu', 'Install', 'Unregister', 'RemoveFile', 'Status')]
     [string]$Action = 'Menu',
-    [string]$BuildDirectory = (Join-Path $PSScriptRoot '..\build'),
-    [string]$BackupDirectory = (Join-Path $PSScriptRoot '..\..\.tmp\credential-provider-backup')
+    [string]$BuildDirectory = (Join-Path $PSScriptRoot '..\build')
 )
 
 $ErrorActionPreference = 'Stop'
+$wizard = (Resolve-Path (Join-Path $BuildDirectory 'unlock_windows_components_wizard.exe')).Path
+$diagnostics = Join-Path $PSScriptRoot '..\Diagnostics\Get-ComponentsStatus.ps1'
+$recovery = Join-Path $PSScriptRoot '..\Recovery\Invoke-ComponentsRecovery.ps1'
 
-. (Join-Path $PSScriptRoot '..\WindowsArchitecture.ps1')
-
-$clsid = '{2F7A2DF4-75B4-4D8E-8A3B-0DA46C6E9112}'
-$providerName = 'Unlock Windows with iPhone'
-$dllName = 'unlock_credential_provider.dll'
-$installScript = Join-Path $PSScriptRoot 'Install-TestCredentialProvider.ps1'
-$uninstallScript = Join-Path $PSScriptRoot 'Uninstall-TestCredentialProvider.ps1'
-$targetPath = Join-Path $env:windir "System32\$dllName"
-$providerRegistrationPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers\$clsid"
-$clsidPath = "HKLM:\SOFTWARE\Classes\CLSID\$clsid"
-$inprocPath = "$clsidPath\InprocServer32"
-$backupFile = Join-Path ([IO.Path]::GetFullPath($BackupDirectory)) 'credential-provider.json'
-
-function Test-IsAdministrator {
-    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $principal = [Security.Principal.WindowsPrincipal]::new($identity)
-    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if ($Action -eq 'Status') {
+    & $diagnostics -BuildDirectory $BuildDirectory
+    return
 }
 
-function Show-Status {
-    $sourcePath = Join-Path $BuildDirectory $dllName
-    $nativeArchitecture = Get-NativeWindowsArchitecture
-    $powerShellArchitecture = Get-CurrentPowerShellArchitecture
-    $sourceArchitecture = if (Test-Path -LiteralPath $sourcePath) {
-        Get-PortableExecutableArchitecture -Path $sourcePath
-    } else {
-        'NotPresent'
-    }
-    $installedArchitecture = if (Test-Path -LiteralPath $targetPath) {
-        Get-PortableExecutableArchitecture -Path $targetPath
-    } else {
-        'NotPresent'
-    }
-    $inprocServer = if (Test-Path -LiteralPath $inprocPath) {
-        (Get-Item -LiteralPath $inprocPath).GetValue('')
-    } else {
-        $null
-    }
-
-    Write-Host "$providerName Credential Provider status" -ForegroundColor Cyan
-    [PSCustomObject]@{
-        Elevated = (Test-IsAdministrator)
-        NativeWindowsArchitecture = $nativeArchitecture
-        PowerShellArchitecture = $powerShellArchitecture
-        SourceDllPresent = (Test-Path -LiteralPath $sourcePath)
-        SourceDllArchitecture = $sourceArchitecture
-        InstalledDllPresent = (Test-Path -LiteralPath $targetPath)
-        InstalledDllArchitecture = $installedArchitecture
-        NativeArchitectureCompatible = (
-            $powerShellArchitecture -eq $nativeArchitecture -and
-            ($sourceArchitecture -eq 'NotPresent' -or $sourceArchitecture -eq $nativeArchitecture) -and
-            ($installedArchitecture -eq 'NotPresent' -or $installedArchitecture -eq $nativeArchitecture)
-        )
-        CredentialProviderRegistered = (Test-Path -LiteralPath $providerRegistrationPath)
-        ClsidRegistered = (Test-Path -LiteralPath $clsidPath)
-        InprocServer32 = $inprocServer
-        RollbackBackupPresent = (Test-Path -LiteralPath $backupFile)
-        RollbackBackup = $backupFile
-    } | Format-List
-
-    if (Test-Path -LiteralPath $sourcePath) {
-        $hash = Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256
-        Write-Host "Source DLL SHA256: $($hash.Hash)"
-    }
-
-    if (Test-Path -LiteralPath $targetPath) {
-        $hash = Get-FileHash -LiteralPath $targetPath -Algorithm SHA256
-        Write-Host "Installed DLL SHA256: $($hash.Hash)"
-    }
+if ($Action -eq 'RemoveFile') {
+    & $recovery -BuildDirectory $BuildDirectory
+    return
 }
 
-function Select-Action {
-    if ($Action -ne 'Menu') {
-        return $Action
-    }
-
+if ($Action -eq 'Menu') {
     Write-Host ''
-    Write-Host "$providerName Credential Provider wizard" -ForegroundColor Cyan
-    Write-Host '1. Install the new build'
-    Write-Host '2. Uninstall registration, then reboot'
-    Write-Host '3. Remove the DLL and rollback backup after reboot'
-    Write-Host '4. Show status'
+    Write-Host 'Unlock Windows with iPhone Components' -ForegroundColor Cyan
+    Write-Host '1. Open the native Components Wizard'
+    Write-Host '2. Show read-only diagnostics'
+    Write-Host '3. Run post-restart recovery'
     Write-Host 'Q. Quit'
-
     switch (Read-Host -Prompt 'Select an action') {
-        '1' { return 'Install' }
-        '2' { return 'Unregister' }
-        '3' { return 'RemoveFile' }
-        '4' { return 'Status' }
-        { $_ -in 'Q', 'q' } { return $null }
+        '1' { $Action = 'Install' }
+        '2' { & $diagnostics -BuildDirectory $BuildDirectory; return }
+        '3' { & $recovery -BuildDirectory $BuildDirectory; return }
+        { $_ -in 'Q', 'q' } { return }
         default { throw 'Unknown action.' }
     }
 }
 
-$selectedAction = Select-Action
-if ($null -eq $selectedAction) {
-    Write-Host 'Cancelled.'
+if ($Action -in @('Install', 'Unregister')) {
+    Write-Warning 'PowerShell no longer changes component files or registry values. Starting the native wizard.'
+    Start-Process -FilePath $wizard -Verb RunAs -Wait
     return
 }
 
-if ($selectedAction -eq 'Status') {
-    Show-Status
-    return
-}
-
-if (-not (Test-IsAdministrator)) {
-    throw 'Run the wizard from an elevated PowerShell window inside the test VM.'
-}
-
-switch ($selectedAction) {
-    'Install' {
-        & $installScript `
-            -BuildDirectory $BuildDirectory `
-            -BackupDirectory $BackupDirectory
-        Write-Host 'Restart or sign out before checking the Credential Provider tile.' -ForegroundColor Green
-    }
-    'Unregister' {
-        & $uninstallScript `
-            -BackupDirectory $BackupDirectory
-        Write-Host 'Restart the VM, then rerun this wizard and select Remove the DLL.' -ForegroundColor Green
-    }
-    'RemoveFile' {
-        & $uninstallScript `
-            -BackupDirectory $BackupDirectory `
-            -RemoveFile
-        Write-Host 'The test Credential Provider DLL and rollback backup were removed.' -ForegroundColor Green
-    }
-    default {
-        throw "Unsupported action '$selectedAction'."
-    }
-}
+throw "Unsupported action '$Action'."

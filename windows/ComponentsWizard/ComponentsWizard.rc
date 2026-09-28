@@ -1,0 +1,17 @@
+// Created by Rui MA on 28 Sep 2026
+
+#include <windows.h>
+#include <commctrl.h>
+#include "resource.h"
+
+1 RT_MANIFEST "ComponentsWizard.manifest"
+
+IDD_WIZARD_PAGE DIALOGEX 0, 0, 317, 193
+STYLE DS_CONTROL | DS_SETFONT | DS_FIXEDSYS | WS_CHILD | WS_TABSTOP
+CAPTION "Unlock Windows with iPhone Components"
+FONT 9, "Segoe UI"
+BEGIN
+    LTEXT           "", IDC_MAIN_INSTRUCTION, 112, 12, 193, 30, SS_NOPREFIX
+    EDITTEXT        IDC_DETAILS, 112, 48, 193, 108, ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY | WS_VSCROLL
+    CONTROL         "", IDC_PROGRESS, "msctls_progress32", WS_BORDER, 112, 166, 193, 12
+END

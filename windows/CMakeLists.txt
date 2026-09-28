@@ -1,6 +1,3 @@
-# Modified by Rui MA on 26 Sep 2026
-# Modified by Rui MA on 26 Sep 2026
-
 cmake_minimum_required(VERSION 3.25)
 
 project(UnlockWindowsWithIPhone LANGUAGES CXX)
@@ -210,6 +207,15 @@ target_link_libraries(unlock_lsa_package_lookup PRIVATE secur32)
 
 add_executable(unlock_windows_components_wizard WIN32
     ComponentsWizard/main.cpp
+    ComponentsWizard/ComponentState.cpp
+    ComponentsWizard/ComponentTransaction.cpp
+    ComponentsWizard/WindowsAdapter.cpp
+    ComponentsWizard/ComponentsWizard.rc
+)
+
+target_include_directories(unlock_windows_components_wizard
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/ComponentsWizard
 )
 
 target_compile_features(unlock_windows_components_wizard PRIVATE cxx_std_20)
@@ -219,6 +225,7 @@ target_link_libraries(
     PRIVATE
         advapi32
         comctl32
+        gdi32
         ole32
         oleaut32
         secur32
@@ -226,6 +233,26 @@ target_link_libraries(
         taskschd
         user32
 )
+
+if(MSVC)
+    target_link_options(unlock_windows_components_wizard PRIVATE /MANIFEST:NO)
+endif()
+
+if(BUILD_TESTING)
+    add_executable(unlock_components_wizard_tests
+        ComponentsWizardTests/main.cpp
+        ComponentsWizard/ComponentState.cpp
+    )
+
+    target_include_directories(unlock_components_wizard_tests
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/ComponentsWizard
+    )
+
+    target_compile_features(unlock_components_wizard_tests PRIVATE cxx_std_20)
+    target_compile_definitions(unlock_components_wizard_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    add_test(NAME unlock_components_wizard_tests COMMAND unlock_components_wizard_tests)
+endif()
 
 add_executable(unlock_pairing_tool
     PairingTool/main.cpp

@@ -1,18 +1,13 @@
 # Created by Rui MA on 27 Sep 2026
-# Modified by Codex on 27 Sep 2026
+# Modified by Rui MA on 28 Sep 2026
 
-[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
+[CmdletBinding()]
 param(
     [string]$BackupDirectory = (Join-Path $PSScriptRoot '..\..\.tmp\credential-provider-backup'),
-    [switch]$RemoveFile,
-    [switch]$IUnderstandThisIsAThrowawayVm
+    [switch]$RemoveFile
 )
 
 $ErrorActionPreference = 'Stop'
-
-if (-not $IUnderstandThisIsAThrowawayVm) {
-    throw 'This script is only for a disposable VM. Re-run with -IUnderstandThisIsAThrowawayVm.'
-}
 
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = [Security.Principal.WindowsPrincipal]::new($identity)
@@ -39,13 +34,6 @@ if ([IO.Path]::GetFullPath($backup.TargetPath) -ne [IO.Path]::GetFullPath($targe
 
 $providerRegistrationPath = [string]$backup.ProviderRegistrationPath
 $clsidPath = [string]$backup.ClsidPath
-
-if (-not $PSCmdlet.ShouldProcess(
-        "$targetPath and $providerRegistrationPath",
-        'Remove the test Credential Provider registration'
-    )) {
-    return
-}
 
 Remove-Item -LiteralPath $providerRegistrationPath -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $clsidPath -Recurse -Force -ErrorAction SilentlyContinue

@@ -1,18 +1,13 @@
 # Created by Rui MA on 27 Sep 2026
-# Modified by Codex on 27 Sep 2026
+# Modified by Rui MA on 28 Sep 2026
 
-[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
+[CmdletBinding()]
 param(
     [string]$BackupDirectory = (Join-Path $PSScriptRoot '..\..\.tmp\lsa-package-backup'),
-    [switch]$RemoveFile,
-    [switch]$IUnderstandThisIsAThrowawayVm
+    [switch]$RemoveFile
 )
 
 $ErrorActionPreference = 'Stop'
-
-if (-not $IUnderstandThisIsAThrowawayVm) {
-    throw 'This script is only for a disposable VM. Re-run with -IUnderstandThisIsAThrowawayVm.'
-}
 
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = [Security.Principal.WindowsPrincipal]::new($identity)
@@ -40,13 +35,6 @@ if ([IO.Path]::GetFullPath($backup.TargetPath) -ne [IO.Path]::GetFullPath($expec
 $lsaRegistryPath = [string]$backup.RegistryPath
 $lsaRegistryName = [string]$backup.RegistryValueName
 $originalValues = [string[]]$backup.ExistingValues
-
-if (-not $PSCmdlet.ShouldProcess(
-        "$($backup.TargetPath) and $lsaRegistryPath\$lsaRegistryName",
-        "Restore the pre-install LSA package state"
-    )) {
-    return
-}
 
 Set-ItemProperty -LiteralPath $lsaRegistryPath -Name $lsaRegistryName -Value $originalValues
 

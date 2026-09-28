@@ -1,11 +1,55 @@
 <!-- Created by Rui MA on 27 Sep 2026 -->
-<!-- Modified by Rui MA on 28 Sep 2026 -->
 
 # 自动解锁认证模式 TODO
 
 本项目只采用“自动解锁认证模式”：完成首次登记后，iPhone 在后台自动发现已登记的 Windows 电脑，自动建立 BLE 连接、完成 challenge 签名并触发解锁流程。
 
 运行期间不使用 NFC、Face ID、手动确认或 Windows 通知确认。首次登记仍必须保留 Windows 指纹确认，避免把未知公钥写入本机。
+
+## 下一步开发顺序（固定主线）
+
+Components Wizard 当前已可用，UI 细节暂时冻结。除非安装、卸载或恢复流程出现功能性问题，不应在下列端到端主线完成前继续打磨 Wizard UI。
+
+1. **完成并提交当前 Components Wizard 事务化改造**
+   - 先修正提交前已发现的作者注释、README 重复、只读诊断和 PowerShell 兼容入口问题。
+   - 保持 Wizard 仅管理当前 Credential Provider 和 LSA package，不在这一步顺带加入新服务。
+2. **立即进行实体 iPhone 前台协议联调**
+   - 使用前台 iOS App、前台 `GattHost` 和前台 `UnlockService` 验证完整链路：`iPhone -> GATT -> challenge -> assertion -> unlock_approved`。
+   - 验证首次登记、公钥指纹确认、签名验证、过期、重放和重复请求。
+   - 该阶段属于“真机 BLE/协议联调”，不代表 Windows 锁屏已解锁。
+3. **将 `UnlockService` 改为真正的 Windows Service，并重设计 IPC 授权**
+   - 服务运行在 Session 0，支持开机启动、停止、崩溃恢复和安全卸载。
+   - 不得简单删除当前 named-pipe 同用户检查或对所有本地进程放行。
+   - 按操作和调用方身份区分权限：GATT 仅能请求 challenge/提交 assertion，PairingTool 仅能执行管理员确认后的登记刷新，LogonUI/SYSTEM 仅能消费一次性 approval。
+   - 优先考虑拆分 IPC 端点或对每个 operation 做独立的客户端身份验证，并增加跨 Session 测试。
+4. **打通手动点击 tile 的 VM 锁屏纵向链路**
+   - 暂时保留前台 GATT 和 iPhone App，也暂时允许手动选择 Credential Provider tile。
+   - 验证：`iPhone assertion -> UnlockService approval -> GetSerialization -> LSA package -> Windows 登录结果`。
+   - 这是第一个“系统锁屏解锁”里程碑，必须只在一次性 VM、测试账户或备用电脑上执行。
+5. **修正并验证 LSA 登录语义**
+   - 根据 VM 实际回调结果处理 `CPUS_LOGON` 对应的 `Interactive` 与 `Unlock` 登录类型，不再假定只会收到 `Unlock`。
+   - 完整验证 `LSA_TOKEN_INFORMATION_V2` 中用户 SID、主组、组、权限、Owner 和默认 DACL 等字段。
+   - 验证失败路径不影响 Windows Hello、PIN 和密码恢复入口。
+6. **实现 Credential Provider 的 approval 通知和自动提交**
+   - 利用 Credential Provider events 在 approval 到达时通知 LogonUI 刷新凭据。
+   - 在安全条件满足时自动触发 `GetSerialization`，取消选择 tile 和点击 Unlock 的要求。
+   - 保证 approval 只能消费一次，超时或 UI 重建不会导致重复登录。
+7. **完成 Windows 后台 GATT 和 iOS 后台自动化**
+   - 为 Windows GATT 提供 package identity、`bluetooth` capability 和可靠的锁屏生命周期。
+   - 完成 iOS 自动扫描、连接、状态恢复、断线重连、超时和指数退避。
+   - 实体 iPhone 锁屏且 App 不在前台时，验证 Windows 锁屏从发现到解锁的完整自动链路。
+8. **将 Windows Service 和后台 GATT 纳入 Components Wizard**
+   - 只在服务和后台 GATT 的安装/卸载边界稳定后扩展 Wizard 事务。
+   - 继续遵守“先撤销注册与启动项，重启后再删除仍可能被占用的二进制文件”的回滚原则。
+9. **最后处理发布级安全、签名与 Wizard UI 精修**
+   - 完成 LSA Protection/签名路线、审计日志、威胁模型和失败恢复验证。
+   - 在功能边界稳定后再统一优化 Wizard 交互、文案和视觉细节。
+
+阶段定义：
+
+- **真机 BLE/协议联调**：实体 iPhone 与 Windows 前台组件产生 `unlock_approved`，不含系统解锁。
+- **VM 锁屏纵向链路**：可以使用前台 GATT 和手动 tile，但 approval、Credential Provider、LSA 和登录结果必须真实贯通。
+- **后台自动解锁**：iPhone 与 Windows 都在后台/锁屏生命周期中自动恢复，不要求手动选择 tile 或点击 Unlock。
 
 ## 当前已完成
 
@@ -39,7 +83,7 @@
 - [x] 参考 UnTouchID 的分层思路：后台常驻组件、一次性 challenge、短期有效的配对凭据、重放保护、连接重试和审计日志
 - [x] 参考 EIDAuthentication 的 Windows 边界：Credential Provider 负责锁屏交互，LSA/受保护服务负责认证结果和 SID 映射，安装/卸载/回滚必须独立设计
 - [ ] 不直接复制参考项目代码；EIDAuthentication 使用 GPL-3.0，后续若需要复用代码必须先单独处理许可证问题
-- [ ] 当前 Windows 优先实现认证决策信号 `unlock_approved`，不提前接入实际登录 Token 或解锁 API
+- [x] 在接入实际登录 Token 前先完成认证决策信号 `unlock_approved`
 
 参考项目：
 
@@ -65,7 +109,8 @@
 - [ ] 验证 `GattServiceProvider` 在 Windows 锁屏时仍能广播和接收写入
 - [ ] 将 `UnlockService` 改为真正的 Windows Service
 - [ ] 配置开机启动、服务停止、崩溃恢复和安全卸载
-- [ ] 保留当前 named-pipe 用户/权限校验，并重新验证 Session 0 通信
+- [ ] 按 operation 和客户端身份重设计 named-pipe 授权，允许经验证的 LogonUI/SYSTEM 消费 approval，且不向其他本地进程放开敏感操作
+- [ ] 验证 GATT、PairingTool 和 Credential Provider 在 Session 0/跨 Session 场景下只能调用各自被授权的 IPC operation
 - [ ] 后台服务启动后自动加载 DPAPI 登记记录和 Windows SID
 - [ ] 后台服务不能依赖交互式桌面、控制台窗口或 Windows 通知
 
@@ -94,7 +139,10 @@
 - [ ] 在 Credential Provider 真正出现在锁屏后，验证 tile 激活、`GetSerialization`、LSA package lookup 和一次性批准消费的完整链路
 - [ ] 让认证结果只映射到登记记录中的 Windows SID
 - [ ] 研究并实现不保存 Windows 密码的 LSA Authentication Package
+- [ ] 在 VM 中记录 `CPUS_LOGON`/`CPUS_UNLOCK_WORKSTATION` 实际对应的 LSA logon type，并正确处理 `Interactive` 与 `Unlock`
+- [ ] 完整构造并验证 `LSA_TOKEN_INFORMATION_V2` 的 SID、组、权限、Owner 和默认 DACL
 - [ ] 验证认证包返回的登录 Token 和锁屏解锁流程
+- [ ] 在 approval 到达时通过 Credential Provider events 通知 LogonUI，并在安全条件满足时自动提交凭据
 - [ ] 保留 Windows Hello/PIN/密码作为系统恢复入口
 - [ ] 仅在测试账户、虚拟机或备用电脑上验证，完成回滚和卸载流程
 

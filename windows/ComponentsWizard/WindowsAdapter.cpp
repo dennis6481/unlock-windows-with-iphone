@@ -858,6 +858,14 @@ void WindowsAdapter::registerContinuationTask(const WizardState& state) const {
     ComPtr<ITaskSettings> settings;
     checkHresult(definition->get_Settings(&settings), L"Could not configure the continuation task settings");
     checkHresult(settings->put_StartWhenAvailable(VARIANT_TRUE), L"Could not set continuation task availability");
+    checkHresult(
+        settings->put_DisallowStartIfOnBatteries(VARIANT_FALSE),
+        L"Could not allow the continuation task to start on battery power"
+    );
+    checkHresult(
+        settings->put_StopIfGoingOnBatteries(VARIANT_FALSE),
+        L"Could not keep the continuation task running on battery power"
+    );
 
     ScopedBstr taskName(kFinalizeTaskName);
     ScopedVariant user(userName);

@@ -34,6 +34,8 @@
 - MUST NOT modify unrelated components.
 - Before adding a workaround, determine and document why the invalid state
   exists and whether it can be prevented at its source.
+- If a reference link is provided, and has been approved in implementation, added them at the end of README.me.
+- If a reference link is provided but is not used, do not add it in README.md
 
   ## Build and validation
 

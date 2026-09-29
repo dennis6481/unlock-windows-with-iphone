@@ -205,6 +205,26 @@ target_compile_features(unlock_lsa_package_lookup PRIVATE cxx_std_20)
 target_compile_definitions(unlock_lsa_package_lookup PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(unlock_lsa_package_lookup PRIVATE secur32)
 
+add_executable(unlock_lsa_token_probe
+    LsaTokenProbe/main.cpp
+)
+
+target_include_directories(unlock_lsa_token_probe
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/UnlockService
+)
+
+target_compile_features(unlock_lsa_token_probe PRIVATE cxx_std_20)
+target_compile_definitions(unlock_lsa_token_probe PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(
+    unlock_lsa_token_probe
+    PRIVATE
+        unlock_enrollment_store
+        advapi32
+        authz
+        wtsapi32
+)
+
 add_executable(unlock_windows_components_wizard WIN32
     ComponentsWizard/main.cpp
     ComponentsWizard/ComponentState.cpp

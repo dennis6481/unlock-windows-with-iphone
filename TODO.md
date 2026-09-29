@@ -157,12 +157,14 @@ Components Wizard 当前已可用，UI 细节暂时冻结。除非安装、卸�
 - [ ] 蓝牙断开、电脑睡眠/唤醒、iPhone 重启后验证恢复
 - [ ] 运行 `make test`，确认全部 Windows 测试通过
 
-## 当前 Windows VM 阻塞记录
+## 当前 Windows 测试阻塞记录
 
 - Windows Release 构建和 6 个 CTest 已通过。
 - 一次性 Windows 11 ARM VM 中 LSA package lookup 已返回 package ID；Credential Provider tile 已出现在锁屏，点击后会通过 LSA lookup 并返回 “No pending iPhone unlock approval is available”。
 - 当前阻塞点是将有效 iPhone assertion 生成的一次性 approval 安全交给 LogonUI；当前前台 `UnlockService` 的同用户 IPC 校验不接受锁屏的 SYSTEM 客户端。
 - 尚未完成 iPhone/BLE assertion、一次性 approval 消费、LSA token 返回和实际锁屏解锁的完整链路。
+- Gate 1 增加只读 `unlock_lsa_token_probe`：它必须在专用实体 Windows 测试机中以 LocalSystem 运行，对比已登记活动控制台用户的真实 token 与 Authz 从 SID 推导的组和权限，并记录 primary group、owner、default DACL。该探针不构造生产 token；在无法无硬编码地区分认证包应返回的组与 LSA 自动添加的组之前，`LSA_TOKEN_INFORMATION_V2` 实施保持阻塞。
+- 2026-09-29：已确认计划任务能够以 SYSTEM 运行且 `SeTcbPrivilege` 已启用；当次采集因测试系统没有本机登记记录而按预期停止。后续改为在专用实体 Windows 测试机上重新登记并运行探针，完整命令保存在 `windows/LsaTokenProbe/README.md`。等待实体机报告期间暂停 Gate 1，不开始未打包 GATT 探针或 GattAgent 重构。
 
 ## 6. LSA Protection 与生产发布
 

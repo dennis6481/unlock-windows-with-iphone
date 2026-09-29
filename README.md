@@ -209,6 +209,7 @@ Windows SDK 目标已在当前 Windows 环境完成构建和本机 CTest 验证�
 - iOS 核心安全、协议和 BLE 源码已通过 Swift 类型检查。
 - `windows/Protocol/SigningPayload.cpp` 已通过 macOS 上的 C++20 语法检查。
 - 当前 Windows SDK Release 构建已通过全部目标，6 个 CTest 均通过；登记存储测试同时覆盖 DPAPI 往返和 Windows SID 往返，Credential Provider 测试覆盖 V2 用户 SID、tile logo 和 DLL 导出，LSA 测试覆盖独立验签和 DLL 导出；另有不修改系统的 LSA package lookup 工具和 VM 专用注册/回滚脚本；PairingTool 的帮助命令 smoke test 通过。
+- Gate 1 当前暂停等待专用实体 Windows 测试机运行只读 `unlock_lsa_token_probe`。已验证临时计划任务可获得 SYSTEM 和启用的 `SeTcbPrivilege`；上一次采集仅因测试系统缺少本机 DPAPI 登记记录而停止。实体机登记、采集和清理方法保存在 `windows/LsaTokenProbe/README.md`，报告审阅前不会继续 LSA token 构造、GATT 可行性实验或 GattAgent 实施。
 - Xcode 工程可以被 `xcodebuild -list` 正确解析。
 - 完整 Xcode 构建曾被当前环境的 `swift-plugin-server`/sandbox 限制阻断；这属于构建环境限制，不能当作完整构建成功，也不能当作源码已经在真实设备上验证。
 
@@ -225,6 +226,9 @@ LSA 包属于系统级登录组件。未完成隔离测试、签名、账户映�
 - [Apple：Core Bluetooth background processing](https://developer.apple.com/library/archive/documentation/NetworkingInternetWeb/Conceptual/CoreBluetooth_concepts/CoreBluetoothBackgroundProcessingForIOSApps/PerformingTasksWhileYourAppIsInTheBackground.html)
 - [Microsoft：Credential Providers](https://learn.microsoft.com/en-us/windows/win32/secauthn/credential-providers-in-windows)
 - [Microsoft：LSA Authentication Model](https://learn.microsoft.com/en-us/windows/win32/secauthn/lsa-authentication-model)
+- [Microsoft：`LSA_TOKEN_INFORMATION_V2` token information](https://learn.microsoft.com/en-us/windows/win32/api/ntsecpkg/ns-ntsecpkg-lsa_token_information_v1)
+- [Microsoft：`AuthzInitializeContextFromSid`](https://learn.microsoft.com/en-us/windows/win32/api/authz/nf-authz-authzinitializecontextfromsid)
+- [Microsoft：`WTSQueryUserToken`](https://learn.microsoft.com/en-us/windows/win32/api/wtsapi32/nf-wtsapi32-wtsqueryusertoken)
 
 ## Windows 当前推进状态
 

@@ -222,8 +222,47 @@ target_link_libraries(
         unlock_enrollment_store
         advapi32
         authz
+        secur32
         wtsapi32
 )
+
+add_library(unlock_lsa_convert_probe_package SHARED
+    LsaConvertProbe/Package.cpp
+)
+
+target_include_directories(unlock_lsa_convert_probe_package
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/LsaConvertProbe
+        ${CMAKE_CURRENT_SOURCE_DIR}/UnlockService
+)
+
+target_compile_features(unlock_lsa_convert_probe_package PRIVATE cxx_std_20)
+target_compile_definitions(unlock_lsa_convert_probe_package PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(
+    unlock_lsa_convert_probe_package
+    PRIVATE
+        unlock_enrollment_store
+        advapi32
+        secur32
+)
+if(MSVC)
+    target_link_options(unlock_lsa_convert_probe_package PRIVATE
+        /EXPORT:SpLsaModeInitialize
+    )
+endif()
+
+add_executable(unlock_lsa_convert_probe
+    LsaConvertProbe/Client.cpp
+)
+
+target_include_directories(unlock_lsa_convert_probe
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/LsaConvertProbe
+)
+
+target_compile_features(unlock_lsa_convert_probe PRIVATE cxx_std_20)
+target_compile_definitions(unlock_lsa_convert_probe PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(unlock_lsa_convert_probe PRIVATE secur32)
 
 add_executable(unlock_windows_components_wizard WIN32
     ComponentsWizard/main.cpp

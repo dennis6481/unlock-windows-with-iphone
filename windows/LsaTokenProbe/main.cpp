@@ -4,13 +4,16 @@
 
 #include <Windows.h>
 #include <authz.h>
+#include <ntsecapi.h>
 #include <sddl.h>
 #include <wtsapi32.h>
 
 #include <algorithm>
+#include <cstring>
 #include <cstdint>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -26,6 +29,21 @@ public:
     explicit Handle(HANDLE value) noexcept : value_(value) {}
     Handle(const Handle&) = delete;
     Handle& operator=(const Handle&) = delete;
+
+    Handle(Handle&& other) noexcept : value_(other.value_) {
+        other.value_ = nullptr;
+    }
+
+    Handle& operator=(Handle&& other) noexcept {
+        if (this != &other) {
+            if (value_ != nullptr && value_ != INVALID_HANDLE_VALUE) {
+                CloseHandle(value_);
+            }
+            value_ = other.value_;
+            other.value_ = nullptr;
+        }
+        return *this;
+    }
 
     ~Handle() {
         if (value_ != nullptr && value_ != INVALID_HANDLE_VALUE) {
@@ -124,6 +142,34 @@ struct PrivilegeEntry final {
     DWORD attributes = 0;
 };
 
+struct AccountIdentity final {
+    std::wstring name;
+    std::wstring domain;
+
+    [[nodiscard]] std::wstring qualifiedName() const {
+        return domain.empty() ? name : domain + L"\\" + name;
+    }
+};
+
+struct TokenSnapshot final {
+    std::wstring userSid;
+    std::wstring userAccount;
+    LUID authenticationId{};
+    TOKEN_ELEVATION_TYPE elevationType = TokenElevationTypeDefault;
+    bool elevated = false;
+    bool hasRestrictions = false;
+    TOKEN_TYPE tokenType = TokenPrimary;
+    std::wstring integrityLevelSid;
+    std::wstring integrityLevelAccount;
+    DWORD integrityLevelAttributes = 0;
+    std::wstring primaryGroupSid;
+    std::wstring primaryGroupAccount;
+    std::wstring ownerSid;
+    std::wstring defaultDacl;
+    std::vector<GroupEntry> groups;
+    std::vector<PrivilegeEntry> privileges;
+};
+
 [[nodiscard]] std::string win32Failure(
     const std::string_view operation,
     const DWORD error = GetLastError()
@@ -144,7 +190,7 @@ struct PrivilegeEntry final {
     return result;
 }
 
-[[nodiscard]] std::wstring accountName(PSID sid) {
+[[nodiscard]] AccountIdentity accountIdentity(PSID sid) {
     DWORD nameLength = 0;
     DWORD domainLength = 0;
     SID_NAME_USE use{};
@@ -159,7 +205,7 @@ struct PrivilegeEntry final {
     );
     const auto sizeError = GetLastError();
     if (sizeError == ERROR_NONE_MAPPED) {
-        return L"<unmapped>";
+        return {L"<unmapped>", L""};
     }
     if (sizeError != ERROR_INSUFFICIENT_BUFFER || nameLength == 0) {
         throw std::runtime_error(win32Failure("LookupAccountSidW(size)", sizeError));
@@ -180,7 +226,11 @@ struct PrivilegeEntry final {
     }
     name.resize(nameLength);
     domain.resize(domainLength);
-    return domain.empty() ? name : domain + L"\\" + name;
+    return {std::move(name), std::move(domain)};
+}
+
+[[nodiscard]] std::wstring accountName(PSID sid) {
+    return accountIdentity(sid).qualifiedName();
 }
 
 [[nodiscard]] std::vector<std::uint8_t> tokenInformation(
@@ -204,6 +254,56 @@ struct PrivilegeEntry final {
         throw std::runtime_error(win32Failure("GetTokenInformation"));
     }
     return buffer;
+}
+
+template<typename Value>
+[[nodiscard]] Value fixedTokenInformation(
+    const HANDLE token,
+    const TOKEN_INFORMATION_CLASS informationClass,
+    const std::string_view operation
+) {
+    Value value{};
+    DWORD returned = 0;
+    if (!GetTokenInformation(
+            token,
+            informationClass,
+            &value,
+            static_cast<DWORD>(sizeof(value)),
+            &returned
+        )) {
+        throw std::runtime_error(win32Failure(operation));
+    }
+    if (returned != static_cast<DWORD>(sizeof(value))) {
+        throw std::runtime_error(
+            std::string(operation) + " returned an unexpected size: " +
+            std::to_string(returned)
+        );
+    }
+    return value;
+}
+
+[[nodiscard]] bool tokenHasRestrictions(const HANDLE token) {
+    DWORD value = 0;
+    DWORD returned = 0;
+    if (!GetTokenInformation(
+            token,
+            TokenHasRestrictions,
+            &value,
+            static_cast<DWORD>(sizeof(value)),
+            &returned
+        )) {
+        throw std::runtime_error(
+            win32Failure("GetTokenInformation(TokenHasRestrictions)")
+        );
+    }
+    if (returned != static_cast<DWORD>(sizeof(BOOLEAN)) &&
+        returned != static_cast<DWORD>(sizeof(DWORD))) {
+        throw std::runtime_error(
+            "GetTokenInformation(TokenHasRestrictions) returned an unexpected size: " +
+            std::to_string(returned)
+        );
+    }
+    return value != 0;
 }
 
 [[nodiscard]] std::vector<std::uint8_t> authzInformation(
@@ -338,51 +438,329 @@ void printPrivileges(const wchar_t* heading, const std::vector<PrivilegeEntry>& 
     return result;
 }
 
-void printDifferences(
-    const std::vector<GroupEntry>& tokenGroups,
-    const std::vector<GroupEntry>& authzGroups,
-    const std::vector<PrivilegeEntry>& tokenPrivileges,
-    const std::vector<PrivilegeEntry>& authzPrivileges
+[[nodiscard]] TokenSnapshot inspectToken(const HANDLE token) {
+    const auto userBuffer = tokenInformation(token, TokenUser);
+    const auto groupsBuffer = tokenInformation(token, TokenGroups);
+    const auto privilegesBuffer = tokenInformation(token, TokenPrivileges);
+    const auto primaryGroupBuffer = tokenInformation(token, TokenPrimaryGroup);
+    const auto ownerBuffer = tokenInformation(token, TokenOwner);
+    const auto defaultDaclBuffer = tokenInformation(token, TokenDefaultDacl);
+    const auto statisticsBuffer = tokenInformation(token, TokenStatistics);
+    const auto elevationType = fixedTokenInformation<TOKEN_ELEVATION_TYPE>(
+        token,
+        TokenElevationType,
+        "GetTokenInformation(TokenElevationType)"
+    );
+    const auto elevation = fixedTokenInformation<TOKEN_ELEVATION>(
+        token,
+        TokenElevation,
+        "GetTokenInformation(TokenElevation)"
+    );
+    const auto hasRestrictions = tokenHasRestrictions(token);
+    const auto tokenType = fixedTokenInformation<TOKEN_TYPE>(
+        token,
+        TokenType,
+        "GetTokenInformation(TokenType)"
+    );
+    const auto integrityLevelBuffer = tokenInformation(token, TokenIntegrityLevel);
+
+    const auto* user = reinterpret_cast<const TOKEN_USER*>(userBuffer.data());
+    const auto* groupData = reinterpret_cast<const TOKEN_GROUPS*>(groupsBuffer.data());
+    const auto* privilegeData = reinterpret_cast<const TOKEN_PRIVILEGES*>(
+        privilegesBuffer.data()
+    );
+    const auto* primaryGroup = reinterpret_cast<const TOKEN_PRIMARY_GROUP*>(
+        primaryGroupBuffer.data()
+    );
+    const auto* owner = reinterpret_cast<const TOKEN_OWNER*>(ownerBuffer.data());
+    const auto* defaultDacl = reinterpret_cast<const TOKEN_DEFAULT_DACL*>(
+        defaultDaclBuffer.data()
+    );
+    const auto* statistics = reinterpret_cast<const TOKEN_STATISTICS*>(
+        statisticsBuffer.data()
+    );
+    const auto* integrityLevel = reinterpret_cast<const TOKEN_MANDATORY_LABEL*>(
+        integrityLevelBuffer.data()
+    );
+
+    return TokenSnapshot{
+        sidText(user->User.Sid),
+        accountName(user->User.Sid),
+        statistics->AuthenticationId,
+        elevationType,
+        elevation.TokenIsElevated != 0,
+        hasRestrictions,
+        tokenType,
+        sidText(integrityLevel->Label.Sid),
+        accountName(integrityLevel->Label.Sid),
+        integrityLevel->Label.Attributes,
+        sidText(primaryGroup->PrimaryGroup),
+        accountName(primaryGroup->PrimaryGroup),
+        owner->Owner == nullptr ? L"<default-user>" : sidText(owner->Owner),
+        defaultDaclSddl(defaultDacl->DefaultDacl),
+        groups(*groupData),
+        privileges(*privilegeData),
+    };
+}
+
+[[nodiscard]] const wchar_t* elevationTypeName(const TOKEN_ELEVATION_TYPE type) {
+    switch (type) {
+    case TokenElevationTypeDefault:
+        return L"Default";
+    case TokenElevationTypeFull:
+        return L"Full";
+    case TokenElevationTypeLimited:
+        return L"Limited";
+    default:
+        return L"Unknown";
+    }
+}
+
+[[nodiscard]] const wchar_t* tokenTypeName(const TOKEN_TYPE type) {
+    switch (type) {
+    case TokenPrimary:
+        return L"Primary";
+    case TokenImpersonation:
+        return L"Impersonation";
+    default:
+        return L"Unknown";
+    }
+}
+
+[[nodiscard]] std::optional<Handle> linkedToken(
+    const HANDLE token,
+    const TOKEN_ELEVATION_TYPE elevationType
 ) {
-    std::wcout << L"\n[group differences]\n";
-    for (const auto& entry : tokenGroups) {
-        const auto other = findGroup(authzGroups, entry.sid);
+    if (elevationType == TokenElevationTypeDefault) {
+        return std::nullopt;
+    }
+    if (elevationType != TokenElevationTypeFull &&
+        elevationType != TokenElevationTypeLimited) {
+        throw std::runtime_error("the desktop token has an unknown elevation type");
+    }
+
+    TOKEN_LINKED_TOKEN linked{};
+    DWORD returned = 0;
+    if (!GetTokenInformation(
+            token,
+            TokenLinkedToken,
+            &linked,
+            sizeof(linked),
+            &returned
+        )) {
+        throw std::runtime_error(win32Failure("GetTokenInformation(TokenLinkedToken)"));
+    }
+    if (linked.LinkedToken == nullptr || linked.LinkedToken == INVALID_HANDLE_VALUE) {
+        throw std::runtime_error(
+            "GetTokenInformation(TokenLinkedToken) returned an invalid handle"
+        );
+    }
+    return Handle(linked.LinkedToken);
+}
+
+void printTokenSummary(const wchar_t* heading, const TokenSnapshot& token) {
+    std::wcout << L"\n[" << heading << L"]\n"
+               << L"  userSid=" << token.userSid << L"\n"
+               << L"  user=" << token.userAccount << L"\n"
+               << L"  authenticationId=" << token.authenticationId.HighPart
+               << L":" << token.authenticationId.LowPart << L"\n"
+               << L"  tokenType=" << tokenTypeName(token.tokenType) << L"\n"
+               << L"  elevationType=" << elevationTypeName(token.elevationType) << L"\n"
+               << L"  elevated=" << (token.elevated ? L"true" : L"false") << L"\n"
+               << L"  hasRestrictions="
+               << (token.hasRestrictions ? L"true" : L"false") << L"\n"
+               << L"  integrityLevel=" << token.integrityLevelSid << L" "
+               << token.integrityLevelAccount
+               << L" attributes=0x" << std::hex << token.integrityLevelAttributes
+               << std::dec << L"\n"
+               << L"  primaryGroup=" << token.primaryGroupSid << L" "
+               << token.primaryGroupAccount << L"\n"
+               << L"  owner=" << token.ownerSid << L"\n"
+               << L"  defaultDacl=" << token.defaultDacl << L"\n";
+}
+
+[[nodiscard]] std::string ntStatusFailure(
+    const std::string_view operation,
+    const NTSTATUS status,
+    const NTSTATUS subStatus = 0
+) {
+    std::ostringstream output;
+    output << operation << " failed: status=0x" << std::hex
+           << static_cast<unsigned long>(status)
+           << " win32=" << std::dec << LsaNtStatusToWinError(status);
+    if (subStatus != 0) {
+        output << " subStatus=0x" << std::hex
+               << static_cast<unsigned long>(subStatus)
+               << " subStatusWin32=" << std::dec << LsaNtStatusToWinError(subStatus);
+    }
+    return output.str();
+}
+
+[[nodiscard]] Handle createMsvS4uToken(PSID accountSid) {
+    const auto identity = accountIdentity(accountSid);
+    if (identity.name == L"<unmapped>" || identity.name.empty()) {
+        throw std::runtime_error("the enrolled SID could not be mapped to an account name");
+    }
+
+    if (identity.name.size() > std::numeric_limits<USHORT>::max() / sizeof(wchar_t) ||
+        identity.domain.size() > std::numeric_limits<USHORT>::max() / sizeof(wchar_t)) {
+        throw std::runtime_error("the mapped account name is too long for an S4U request");
+    }
+
+    const auto nameBytes = identity.name.size() * sizeof(wchar_t);
+    const auto domainBytes = identity.domain.size() * sizeof(wchar_t);
+    std::vector<std::uint8_t> submitBuffer(
+        sizeof(MSV1_0_S4U_LOGON) + nameBytes + domainBytes
+    );
+    auto* request = reinterpret_cast<MSV1_0_S4U_LOGON*>(submitBuffer.data());
+    request->MessageType = MsV1_0S4ULogon;
+    request->Flags = MSV1_0_S4U_LOGON_FLAG_CHECK_LOGONHOURS;
+
+    auto* cursor = reinterpret_cast<wchar_t*>(submitBuffer.data() + sizeof(*request));
+    request->UserPrincipalName.Buffer = cursor;
+    request->UserPrincipalName.Length = static_cast<USHORT>(nameBytes);
+    request->UserPrincipalName.MaximumLength = static_cast<USHORT>(nameBytes);
+    std::memcpy(cursor, identity.name.data(), nameBytes);
+
+    cursor = reinterpret_cast<wchar_t*>(
+        reinterpret_cast<std::uint8_t*>(cursor) + nameBytes
+    );
+    request->DomainName.Buffer = cursor;
+    request->DomainName.Length = static_cast<USHORT>(domainBytes);
+    request->DomainName.MaximumLength = static_cast<USHORT>(domainBytes);
+    std::memcpy(cursor, identity.domain.data(), domainBytes);
+
+    LSA_HANDLE lsa = nullptr;
+    const auto connectStatus = LsaConnectUntrusted(&lsa);
+    if (connectStatus < 0) {
+        throw std::runtime_error(ntStatusFailure("LsaConnectUntrusted", connectStatus));
+    }
+
+    LSA_STRING packageName{};
+    packageName.Buffer = const_cast<PCHAR>(MSV1_0_PACKAGE_NAME);
+    packageName.Length = static_cast<USHORT>(std::strlen(MSV1_0_PACKAGE_NAME));
+    packageName.MaximumLength = packageName.Length;
+    ULONG packageId = 0;
+    const auto lookupStatus = LsaLookupAuthenticationPackage(
+        lsa,
+        &packageName,
+        &packageId
+    );
+    if (lookupStatus < 0) {
+        LsaDeregisterLogonProcess(lsa);
+        throw std::runtime_error(
+            ntStatusFailure("LsaLookupAuthenticationPackage(MSV1_0)", lookupStatus)
+        );
+    }
+
+    LSA_STRING origin{};
+    char originText[] = "UWIProbe";
+    origin.Buffer = originText;
+    origin.Length = 8;
+    origin.MaximumLength = 8;
+    TOKEN_SOURCE source{};
+    std::memcpy(source.SourceName, originText, sizeof(source.SourceName));
+    if (!AllocateLocallyUniqueId(&source.SourceIdentifier)) {
+        const auto error = GetLastError();
+        LsaDeregisterLogonProcess(lsa);
+        throw std::runtime_error(win32Failure("AllocateLocallyUniqueId", error));
+    }
+
+    PVOID profile = nullptr;
+    ULONG profileSize = 0;
+    LUID logonId{};
+    HANDLE token = nullptr;
+    QUOTA_LIMITS quotas{};
+    NTSTATUS subStatus = 0;
+    const auto logonStatus = LsaLogonUser(
+        lsa,
+        &origin,
+        Interactive,
+        packageId,
+        request,
+        static_cast<ULONG>(submitBuffer.size()),
+        nullptr,
+        &source,
+        &profile,
+        &profileSize,
+        &logonId,
+        &token,
+        &quotas,
+        &subStatus
+    );
+    if (profile != nullptr) {
+        LsaFreeReturnBuffer(profile);
+    }
+    LsaDeregisterLogonProcess(lsa);
+    if (logonStatus < 0) {
+        throw std::runtime_error(
+            ntStatusFailure("LsaLogonUser(MSV1_0 S4U)", logonStatus, subStatus)
+        );
+    }
+    if (token == nullptr) {
+        throw std::runtime_error("LsaLogonUser(MSV1_0 S4U) returned no token");
+    }
+    return Handle(token);
+}
+
+void printDifferences(
+    const wchar_t* heading,
+    const wchar_t* leftName,
+    const std::vector<GroupEntry>& leftGroups,
+    const std::vector<PrivilegeEntry>& leftPrivileges,
+    const wchar_t* rightName,
+    const std::vector<GroupEntry>& rightGroups,
+    const std::vector<PrivilegeEntry>& rightPrivileges
+) {
+    std::wcout << L"\n[" << heading << L" - group differences]\n";
+    for (const auto& entry : leftGroups) {
+        const auto other = findGroup(rightGroups, entry.sid);
         if (!other) {
-            std::wcout << L"  token-only " << entry.sid << L" " << entry.account << L"\n";
+            std::wcout << L"  " << leftName << L"-only " << entry.sid << L" "
+                       << entry.account << L"\n";
         } else if (other->attributes != entry.attributes) {
             std::wcout << L"  attribute-mismatch " << entry.sid
-                       << L" token=0x" << std::hex << entry.attributes
-                       << L" authz=0x" << other->attributes << std::dec << L"\n";
+                       << L" " << leftName << L"=0x" << std::hex << entry.attributes
+                       << L" " << rightName << L"=0x" << other->attributes
+                       << std::dec << L"\n";
         }
     }
-    for (const auto& entry : authzGroups) {
-        if (!findGroup(tokenGroups, entry.sid)) {
-            std::wcout << L"  authz-only " << entry.sid << L" " << entry.account << L"\n";
+    for (const auto& entry : rightGroups) {
+        if (!findGroup(leftGroups, entry.sid)) {
+            std::wcout << L"  " << rightName << L"-only " << entry.sid << L" "
+                       << entry.account << L"\n";
         }
     }
 
-    std::wcout << L"\n[privilege differences]\n";
-    for (const auto& entry : tokenPrivileges) {
-        const auto other = findPrivilege(authzPrivileges, entry.name);
+    std::wcout << L"\n[" << heading << L" - privilege differences]\n";
+    for (const auto& entry : leftPrivileges) {
+        const auto other = findPrivilege(rightPrivileges, entry.name);
         if (!other) {
-            std::wcout << L"  token-only " << entry.name << L"\n";
+            std::wcout << L"  " << leftName << L"-only " << entry.name << L"\n";
         } else if (other->attributes != entry.attributes) {
             std::wcout << L"  attribute-mismatch " << entry.name
-                       << L" token=0x" << std::hex << entry.attributes
-                       << L" authz=0x" << other->attributes << std::dec << L"\n";
+                       << L" " << leftName << L"=0x" << std::hex << entry.attributes
+                       << L" " << rightName << L"=0x" << other->attributes
+                       << std::dec << L"\n";
         }
     }
-    for (const auto& entry : authzPrivileges) {
-        if (!findPrivilege(tokenPrivileges, entry.name)) {
-            std::wcout << L"  authz-only " << entry.name << L"\n";
+    for (const auto& entry : rightPrivileges) {
+        if (!findPrivilege(leftPrivileges, entry.name)) {
+            std::wcout << L"  " << rightName << L"-only " << entry.name << L"\n";
         }
     }
 }
 
 } // namespace
 
-int wmain() {
+int wmain(const int argc, wchar_t** argv) {
     try {
+        const bool runS4u = argc == 2 && std::wstring_view(argv[1]) == L"--s4u";
+        if (argc > 2 || (argc == 2 && !runS4u)) {
+            std::wcerr << L"Usage: unlock_lsa_token_probe.exe [--s4u]\n";
+            return 2;
+        }
+
         const DWORD sessionId = WTSGetActiveConsoleSessionId();
         if (sessionId == 0xffffffff) {
             throw std::runtime_error("there is no active physical console session");
@@ -412,27 +790,17 @@ int wmain() {
             );
         }
 
-        const auto groupsBuffer = tokenInformation(token.get(), TokenGroups);
-        const auto privilegesBuffer = tokenInformation(token.get(), TokenPrivileges);
-        const auto primaryGroupBuffer = tokenInformation(token.get(), TokenPrimaryGroup);
-        const auto ownerBuffer = tokenInformation(token.get(), TokenOwner);
-        const auto defaultDaclBuffer = tokenInformation(token.get(), TokenDefaultDacl);
-        const auto statisticsBuffer = tokenInformation(token.get(), TokenStatistics);
-
-        const auto* tokenGroupData = reinterpret_cast<const TOKEN_GROUPS*>(groupsBuffer.data());
-        const auto* tokenPrivilegeData = reinterpret_cast<const TOKEN_PRIVILEGES*>(
-            privilegesBuffer.data()
-        );
-        const auto* primaryGroup = reinterpret_cast<const TOKEN_PRIMARY_GROUP*>(
-            primaryGroupBuffer.data()
-        );
-        const auto* owner = reinterpret_cast<const TOKEN_OWNER*>(ownerBuffer.data());
-        const auto* defaultDacl = reinterpret_cast<const TOKEN_DEFAULT_DACL*>(
-            defaultDaclBuffer.data()
-        );
-        const auto* statistics = reinterpret_cast<const TOKEN_STATISTICS*>(
-            statisticsBuffer.data()
-        );
+        const auto activeToken = inspectToken(token.get());
+        auto linkedTokenHandle = linkedToken(token.get(), activeToken.elevationType);
+        std::optional<TokenSnapshot> linkedTokenSnapshot;
+        if (linkedTokenHandle) {
+            linkedTokenSnapshot = inspectToken(linkedTokenHandle->get());
+            if (linkedTokenSnapshot->userSid != activeToken.userSid) {
+                throw std::runtime_error(
+                    "the linked token user SID does not match the active console token"
+                );
+            }
+        }
 
         const AuthzResourceManager resourceManager;
         const AuthzContext authzContext(tokenUser->User.Sid, resourceManager.get());
@@ -451,36 +819,90 @@ int wmain() {
             authzPrivilegesBuffer.data()
         );
 
-        const auto tokenGroups = groups(*tokenGroupData);
         const auto inferredGroups = groups(*authzGroupData);
-        const auto tokenPrivileges = privileges(*tokenPrivilegeData);
         const auto inferredPrivileges = privileges(*authzPrivilegeData);
 
         std::wcout << L"Unlock Windows with iPhone - LSA token feasibility probe\n"
-                   << L"mode=read-only\n"
+                   << L"mode=" << (runS4u ? L"s4u-token-comparison" : L"read-only") << L"\n"
                    << L"activeConsoleSessionId=" << sessionId << L"\n"
                    << L"enrolledSid=" << enrollment->accountSid << L"\n"
-                   << L"tokenUserSid=" << tokenSid << L"\n"
-                   << L"tokenUser=" << accountName(tokenUser->User.Sid) << L"\n"
-                   << L"authenticationId=" << statistics->AuthenticationId.HighPart
-                   << L":" << statistics->AuthenticationId.LowPart << L"\n"
-                   << L"primaryGroup=" << sidText(primaryGroup->PrimaryGroup) << L" "
-                   << accountName(primaryGroup->PrimaryGroup) << L"\n"
-                   << L"owner=" << (owner->Owner == nullptr ? L"<default-user>" : sidText(owner->Owner))
-                   << L"\n"
-                   << L"defaultDacl=" << defaultDaclSddl(defaultDacl->DefaultDacl) << L"\n";
+                   << L"tokenUserSid=" << tokenSid << L"\n";
 
-        printGroups(L"existing token groups", tokenGroups);
+        printTokenSummary(L"desktop token", activeToken);
+        printGroups(L"desktop token groups", activeToken.groups);
+        printPrivileges(L"desktop token privileges", activeToken.privileges);
+
+        if (linkedTokenSnapshot) {
+            printTokenSummary(L"linked token", *linkedTokenSnapshot);
+            printGroups(L"linked token groups", linkedTokenSnapshot->groups);
+            printPrivileges(L"linked token privileges", linkedTokenSnapshot->privileges);
+        } else {
+            std::wcout
+                << L"\n[linked token]\n"
+                << L"  available=false\n"
+                << L"  reason=The desktop token has TokenElevationTypeDefault; "
+                   L"this account or UAC policy does not expose a linked token for comparison.\n";
+        }
+
         printGroups(L"Authz SID-derived groups", inferredGroups);
-        printPrivileges(L"existing token privileges", tokenPrivileges);
         printPrivileges(L"Authz SID-derived privileges", inferredPrivileges);
-        printDifferences(tokenGroups, inferredGroups, tokenPrivileges, inferredPrivileges);
+
+        if (linkedTokenSnapshot) {
+            printDifferences(
+                L"desktop token versus linked token",
+                L"desktop",
+                activeToken.groups,
+                activeToken.privileges,
+                L"linked",
+                linkedTokenSnapshot->groups,
+                linkedTokenSnapshot->privileges
+            );
+            printDifferences(
+                L"linked token versus Authz SID-derived candidate",
+                L"linked",
+                linkedTokenSnapshot->groups,
+                linkedTokenSnapshot->privileges,
+                L"authz",
+                inferredGroups,
+                inferredPrivileges
+            );
+        }
+        printDifferences(
+            L"desktop token versus Authz SID-derived candidate",
+            L"desktop",
+            activeToken.groups,
+            activeToken.privileges,
+            L"authz",
+            inferredGroups,
+            inferredPrivileges
+        );
+
+        if (runS4u) {
+            const auto s4uTokenHandle = createMsvS4uToken(tokenUser->User.Sid);
+            const auto s4uToken = inspectToken(s4uTokenHandle.get());
+            if (s4uToken.userSid != enrollment->accountSid) {
+                throw std::runtime_error("the S4U token SID does not match enrollment");
+            }
+            printTokenSummary(L"MSV1_0 S4U token", s4uToken);
+            printGroups(L"MSV1_0 S4U token groups", s4uToken.groups);
+            printPrivileges(L"MSV1_0 S4U token privileges", s4uToken.privileges);
+            printDifferences(
+                L"desktop token versus MSV1_0 S4U token",
+                L"desktop",
+                activeToken.groups,
+                activeToken.privileges,
+                L"s4u",
+                s4uToken.groups,
+                s4uToken.privileges
+            );
+        }
 
         std::wcout
             << L"\n[result]\n"
             << L"  collection=complete\n"
             << L"  productionTokenConstruction=not-authorized\n"
-            << L"  note=This probe does not classify which groups LSA adds automatically.\n";
+            << L"  note=Authz similarity to a linked token would not prove that a custom authentication package receives native UAC split-token processing.\n"
+            << L"  note=This probe does not authorize copying any observed token fields into the custom authentication package.\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "LSA token feasibility probe failed: " << error.what() << "\n";

@@ -5,6 +5,8 @@
 
 > iPhone 持有 Secure Enclave 私钥 → Windows 发起一次性 challenge → iPhone 签名 → Windows 用已登记的公钥验证 → 后续接入 Windows 解锁流程
 
+原始目标是**不保存、不代填 Windows 或 Microsoft Account 密码**，仅凭 iPhone 的签名证明解锁已有 Windows 会话。签名验证原型已完成，但将该证明转换为正确的 Windows 登录 token 仍未解决；这一原始无密码方向目前暂停，详见下方 [Known issue](#known-issue-original-password-free-windows-unlock-goal-paused)。
+
 项目不把“附近发现 iPhone”或 BLE RSSI 当作认证依据。BLE 只负责传输；真正的身份依据是 iPhone 上的非导出私钥和 Windows 端登记的公钥。
 
 ## 当前状态
@@ -56,6 +58,59 @@ Windows 侧当前没有生产安装包、后台服务或可交付的登录组件
 - 当前 LSA 注册/查询流程只能在一次性测试 VM 中关闭 LSA Protection 后运行；这不是生产环境配置，也不应在日常使用的宿主机上关闭。
 - 生产环境要保留自定义 LSA Authentication Package，需要 EV 代码签名证书并通过 Microsoft Partner Center 的 LSA File Signing Service 获得 Microsoft 签名；个人自签名或普通 Authenticode 签名不能绕过该限制。
 - VM 中出现 `loaded by LSA; package id=...` 只证明 LSA 已加载 DLL，不等于已经完成 Credential Provider、登录 Token 和锁屏自动解锁。
+
+### Known issue: original password-free Windows unlock goal (paused)
+
+The original goal is to unlock an existing Windows account after verifying an
+iPhone Secure Enclave signature, without storing, recovering, or submitting the
+Windows or Microsoft Account password. The signature and account-binding
+prototypes do not yet provide a Windows logon token. Work on this original
+password-free unlock path is paused because reproducing the account, UAC, and
+session semantics of a native interactive logon is substantially more complex
+than verifying the iPhone signature.
+
+The following password-free approaches have been tested:
+
+- A disposable Windows VM loaded the custom LSA authentication package and
+  displayed the Credential Provider tile. This established that the package
+  lookup and LogonUI integration can run, but it did not create a user token or
+  unlock the workstation.
+- A read-only probe on a physical Windows machine compared the normal UAC
+  `Limited` desktop token, its linked `Full` token, and a SID-derived Authz
+  candidate. Authz had the same 24 privilege names as the linked full token,
+  but differed in privilege and Administrators group attributes and lacked
+  interactive, session, logon, and Microsoft Account-related SIDs. Authz also
+  cannot supply the real token's owner, primary group, or default DACL. The
+  earlier claim that more privileges than the filtered desktop token alone
+  proves elevation was withdrawn; the Authz result is still insufficient for
+  production token construction.
+- An MSV1_0 S4U request for an `Interactive` token returned
+  `STATUS_BAD_VALIDATION_CLASS (0xC00000A7)`. A network S4U token would not
+  establish the required interactive or unlock behavior.
+- A separate diagnostic SSP/AP loaded in the VM and confirmed that LSA exposes
+  `GetAuthDataForUser` and `ConvertAuthDataToToken`. For the actual Microsoft
+  Account sign-in, `GetAuthDataForUser` returned `STATUS_NO_SUCH_USER
+  (0xC0000064)` both for the notified email/cloud identity and for the mapped
+  local account `<COMPUTER>\<USER>` using `SecNameSamCompatible`. No authorization
+  data was returned, so `ConvertAuthDataToToken(Interactive)` was never reached
+  and its token behavior remains unknown.
+
+None of these results establishes that a custom authentication package's
+`LSA_TOKEN_INFORMATION_V2` output would receive native UAC filtering, a linked
+full token, or the Microsoft Account and session attributes seen in a normal
+logon. The current package's token return is a prototype, not a safe or
+complete production implementation. A production LSA plug-in would also need
+Microsoft LSA signing on systems with LSA Protection enabled. Password storage
+is not being adopted as an implicit workaround.
+
+The diagnostic sources are retained to reproduce these findings if this goal
+is resumed; they are not product components. Detailed usage and privacy rules:
+[read-only token comparison](windows/LsaTokenProbe/README.md) and
+[disposable-VM conversion probe](windows/LsaConvertProbe/README.md). Any future attempt must
+first demonstrate a faithful token for the Microsoft Account-linked user and
+then verify the real Credential Provider/LSA unlock contract in a disposable
+VM. Research projects for ordinary local accounts are useful references, but
+do not satisfy those two gates for this account.
 
 ## 解决的问题与边界
 
@@ -209,13 +264,14 @@ Windows SDK 目标已在当前 Windows 环境完成构建和本机 CTest 验证�
 - iOS 核心安全、协议和 BLE 源码已通过 Swift 类型检查。
 - `windows/Protocol/SigningPayload.cpp` 已通过 macOS 上的 C++20 语法检查。
 - 当前 Windows SDK Release 构建已通过全部目标，6 个 CTest 均通过；登记存储测试同时覆盖 DPAPI 往返和 Windows SID 往返，Credential Provider 测试覆盖 V2 用户 SID、tile logo 和 DLL 导出，LSA 测试覆盖独立验签和 DLL 导出；另有不修改系统的 LSA package lookup 工具和 VM 专用注册/回滚脚本；PairingTool 的帮助命令 smoke test 通过。
-- Gate 1 当前暂停等待专用实体 Windows 测试机运行只读 `unlock_lsa_token_probe`。已验证临时计划任务可获得 SYSTEM 和启用的 `SeTcbPrivilege`；上一次采集仅因测试系统缺少本机 DPAPI 登记记录而停止。实体机登记、采集和清理方法保存在 `windows/LsaTokenProbe/README.md`，报告审阅前不会继续 LSA token 构造、GATT 可行性实验或 GattAgent 实施。
+- Gate 1 的实体机三方 probe 已确认正常 UAC `Limited` desktop 与 linked `Full` token。Authz 与 full token 的 24 个 privilege 名称一致，说明此前仅凭它比 filtered token 权限多就认定提权并不成立；但 Authz 仍缺少两个 privilege 的启用状态、Administrators owner 属性、交互/session SID、Microsoft Account/cloud-authentication SID，以及真实 Primary Group、Owner 和 Default DACL。当前仍没有证据证明 custom AP 的 V2 会获得原生 UAC filtering、linked-token 和 MSA/session 增补，因此 Authz 不能用于生产。MSV1_0 S4U `Interactive` 仍因 `STATUS_BAD_VALIDATION_CLASS (0xC00000A7)` 被否决。生产 token 构造、GATT 可行性实验和 GattAgent 实施继续暂停；证据和复现方法见 `windows/LsaTokenProbe/README.md`。
+- 独立的 `GetAuthDataForUser` → `ConvertAuthDataToToken(Interactive)` 诊断 SSP/AP 已在一次性 VM 中运行；两个 helper 可用，但 MSA 云身份和其映射的本机 SAM 名均返回 `STATUS_NO_SUCH_USER`，尚未取得 token。实体机启用 LSA Protection，未在实体机加载未签名诊断 DLL。当前结论和暂停原因见上方英文 Known issue，复现细节见 `windows/LsaConvertProbe/README.md`。
 - Xcode 工程可以被 `xcodebuild -list` 正确解析。
 - 完整 Xcode 构建曾被当前环境的 `swift-plugin-server`/sandbox 限制阻断；这属于构建环境限制，不能当作完整构建成功，也不能当作源码已经在真实设备上验证。
 
 ## 已确认的安全路线
 
-已确认采用路线 A：不保存 Windows 密码，使用 iPhone 私钥签名和 Windows 公钥验证，再由自定义 LSA Authentication Package 完成认证。路线 B 只作为调试通信的临时验证方式，不会被实现成产品 fallback，也不会把密码写入配置文件。
+原始路线 A 是不保存 Windows 密码，使用 iPhone 私钥签名和 Windows 公钥验证，再由自定义 LSA Authentication Package 完成认证。签名验证已实现，但安全、完整的 Windows token 构造仍受上方 Known issue 阻塞，因此这条原始路线目前暂停。路线 B 只作为调试通信的临时验证方式，不会被实现成产品 fallback，也不会把密码写入配置文件。
 
 LSA 包属于系统级登录组件。未完成隔离测试、签名、账户映射和恢复方案前，不会注册到日常使用的 Windows 主机。
 
@@ -229,6 +285,8 @@ LSA 包属于系统级登录组件。未完成隔离测试、签名、账户映�
 - [Microsoft：`LSA_TOKEN_INFORMATION_V2` token information](https://learn.microsoft.com/en-us/windows/win32/api/ntsecpkg/ns-ntsecpkg-lsa_token_information_v1)
 - [Microsoft：`AuthzInitializeContextFromSid`](https://learn.microsoft.com/en-us/windows/win32/api/authz/nf-authz-authzinitializecontextfromsid)
 - [Microsoft：`WTSQueryUserToken`](https://learn.microsoft.com/en-us/windows/win32/api/wtsapi32/nf-wtsapi32-wtsqueryusertoken)
+- [Microsoft：`LsaLogonUser`](https://learn.microsoft.com/en-us/windows/win32/api/ntsecapi/nf-ntsecapi-lsalogonuser)
+- [Microsoft：NTSTATUS values](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-erref/596a1078-e883-4972-9bbc-49e60bebca55)
 
 ## Windows 当前推进状态
 
@@ -236,7 +294,7 @@ LSA 包属于系统级登录组件。未完成隔离测试、签名、账户映�
 - `windows/UnlockService/UnlockServiceCore` 已独立实现 challenge 新鲜度、单次使用、assertion JSON 解析、P-256 公钥指纹匹配和 CNG 验签；`unlock_service_host` 通过同用户 named pipe 使用它，并从 DPAPI/ACL 保护的登记文件加载公钥及其当前 Windows 用户 SID。
 - `unlock_pairing_tool` 已实现 Windows 通知确认按钮；iOS 可通过 GATT 发送登记候选公钥，但没有点击 Confirm 就不会写入公钥。
 - Windows 本机的 `unlock_protocol_tests`、`unlock_service_tests`、`unlock_service_ipc_tests` 和 `unlock_enrollment_store_tests` 均已通过；全部 Windows 目标已完成 SDK 构建。
-- SID 记录已经落地。一次性 Windows 11 ARM VM 中 LSA package 已能 lookup 到 package ID，Credential Provider tile 已显示；旧 DLL 因 x64 架构不匹配且拒绝 `CPUS_LOGON` 而只显示 PIN。当前 tile 点击后已到达 LSA lookup，但尚无待消费的 iPhone approval；下一步是为 LogonUI/SYSTEM 与受保护服务设计安全的一次性 approval 交接，再推进 package identity/MSIX、后台/锁屏生命周期和真正的 Windows Service。
+- SID 记录已经落地。一次性 Windows 11 ARM VM 中 LSA package 已能 lookup 到 package ID，Credential Provider tile 已显示；旧 DLL 因 x64 架构不匹配且拒绝 `CPUS_LOGON` 而只显示 PIN。当前 tile 点击后已到达 LSA lookup，但尚无待消费的 iPhone approval。无密码 token 构造仍处于上述 Known issue 的暂停状态；approval 交接、后台/锁屏生命周期和真正的 Windows Service 尚未形成端到端解锁链路。
 
 ## License
 

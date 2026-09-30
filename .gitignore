@@ -11,6 +11,12 @@ build/
 .build/
 .swiftpm/
 
+# Local diagnostic evidence (may contain account names, SIDs and token ACLs)
+lsa-token-probe*.txt
+lsa-s4u-token-probe*.txt
+unlock-lsa-convert-probe*.txt
+LsaConvertProbeInstaller/
+
 # Xcode build artifacts
 *.hmap
 *.ipa

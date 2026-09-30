@@ -7,7 +7,7 @@
 
 namespace unlock_windows::credential_provider {
 
-// This CLSID is intentionally not registered by the current prototype.
+// The VM Components Wizard registers this CLSID for the Gate A/B probe.
 inline constexpr GUID kUnlockCredentialProviderClsid{
     0x2f7a2df4,
     0x75b4,

@@ -27,15 +27,17 @@ The implementation is split into:
 
 The state record is stored at
 HKLM\SOFTWARE\UnlockWindowsWithIPhone\ComponentsWizard. It contains the
-schema version, current phase, original LSA package list, transaction ID,
+schema version, current phase, transaction ID,
 wizard path, timestamp and last error. Unknown files or registrations without
 a valid transaction record are never deleted automatically.
 
 Installation writes an Installing record before changing the machine and
 changes it to Installed only after verification. If rollback cannot finish,
-RecoveryRequired is preserved. Uninstall removes the Credential Provider and
-LSA registrations first, registers an interactive high-privilege logon task,
-and deletes the DLLs only after restart. The task invokes the internal
+RecoveryRequired is preserved. The Gate A/B wizard installs only the
+Credential Provider; it does not register or load a custom LSA package.
+Uninstall removes the Credential Provider registration, registers an
+interactive high-privilege logon task, and deletes the DLL only after restart.
+The task invokes the internal
 resume-uninstall entry point. A failed cleanup keeps state for retry.
 
 The installer creates System32 DLLs directly with normal file attributes and

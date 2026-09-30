@@ -323,20 +323,16 @@ target_link_libraries(unlock_pairing_tool PRIVATE unlock_enrollment_store unlock
 
 add_library(unlock_credential_provider SHARED
     CredentialProvider/UnlockCredentialProvider.cpp
-    CredentialProvider/UnlockCredentialApprovalClient.cpp
-    CredentialProvider/UnlockCredentialSerialization.cpp
 )
 
 target_include_directories(unlock_credential_provider
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/CredentialProvider
-        ${CMAKE_CURRENT_SOURCE_DIR}/Protocol
-        ${CMAKE_CURRENT_SOURCE_DIR}/UnlockService
 )
 
 target_compile_features(unlock_credential_provider PRIVATE cxx_std_20)
 target_compile_definitions(unlock_credential_provider PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_libraries(unlock_credential_provider PRIVATE unlock_protocol_crypto unlock_service_ipc ole32 secur32 gdi32)
+target_link_libraries(unlock_credential_provider PRIVATE ole32 secur32 gdi32 credui wtsapi32 advapi32)
 if(MSVC)
     target_link_options(unlock_credential_provider PRIVATE
         /EXPORT:DllGetClassObject

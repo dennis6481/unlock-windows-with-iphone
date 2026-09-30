@@ -29,7 +29,7 @@ public:
     [[nodiscard]] OperationResult resetStaleState();
 
 private:
-    [[nodiscard]] WizardState newState(WizardPhase phase, const std::vector<std::byte>& originalPackages) const;
+    [[nodiscard]] WizardState newState(WizardPhase phase) const;
     [[nodiscard]] OperationResult failure(const std::wstring& message, bool statePreserved) const;
     void report(const ProgressCallback& progress, int percent, const std::wstring& message) const;
     [[nodiscard]] std::wstring errorText(const std::exception& error) const;

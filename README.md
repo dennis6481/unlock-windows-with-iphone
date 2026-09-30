@@ -1,4 +1,4 @@
-在 Windows 端可以运行的当前里程碑是协议验证工具、前台 GATT host、UnlockService IPC host、PairingTool、Credential Provider shell、build-only LSA package、原生 Components Wizard 和只读 LSA package lookup 工具。Components Wizard 是 Windows 10+ 的唯一正常安装/卸载入口；PowerShell 只保留只读诊断和调用原生恢复入口，不再直接修改 System32、注册表或维护 JSON 备份。安装会保存统一 HKLM 事务状态并在验证后提交，卸载先注销组件，重启后再由任务清理 DLL；失败时保留状态供恢复。
+在 Windows 端可以运行的当前里程碑是协议验证工具、前台 GATT host、UnlockService IPC host、PairingTool、用于 Gate A/B 的 MSA 密码手动解锁 Credential Provider、原生 Components Wizard 和只读 LSA package lookup 工具。自定义 LSA 包仅保留为研究工具，不在当前产品链路中。Components Wizard 是 Windows 10+ 的唯一正常安装/卸载入口；此 Gate 只安装 Credential Provider，不改动 LSA 注册。安装会保存统一 HKLM 事务状态并在验证后提交，卸载先注销组件，重启后再由任务清理 DLL；失败时保留状态供恢复。
 # Unlock Windows with iPhone
 
 这个项目探索并实现一条明确的认证链路：
@@ -22,7 +22,7 @@
 - Windows CNG/BCrypt P-256 公钥导入、SHA-256 和原始 `r || s` 签名验证代码。
 - Windows 与 iOS 一致的签名载荷构造代码，以及供未来 LSA 使用的无密码提交缓冲区定义。
 - Windows 已增加 Credential Provider/LSA 共用的固定提交缓冲区 codec：构造和结构校验可独立测试。
-- Windows 已增加 Credential Provider V2 shell，同时支持 `CPUS_LOGON` 和 `CPUS_UNLOCK_WORKSTATION`；Windows 10 及更高版本通常会在锁屏时请求前者。它通过用户 SID 关联把磁贴绑定到 LogonUI 当前用户，只有在找到指定 LSA 包后才会消费受保护批准并返回 serialization。Windows 11 ARM 测试 VM 已显示该 tile，并完成 LSA package lookup；原生 EXE 向导可管理测试用 CP/LSA 的安装、验证和手动跨重启清理。登录后自动续跑仍在验证。LSA package 仍只是测试原型，未接入生产 LSASS 流程。
+- Windows Credential Provider V2 的当前分支同时支持 `CPUS_LOGON` 和 `CPUS_UNLOCK_WORKSTATION`，但仅允许对已有控制台会话尝试手动解锁。它读取系统提供的用户 SID 与 QualifiedUserName，在 Credential Provider 进程内打包现场输入的 MSA 密码并提交给原生 Negotiate 包；不再调用自定义 LSA 包，也不自动提交。Gate A/B 已在一次性 VM 中用实际 MSA 密码成功解锁已有会话；这不等于 iPhone 自动解锁已完成。
 - Windows `UnlockService` 已将有效签名与登记记录中的 Windows SID 组合为 `unlock_approved` 决策信号，并通过开发期 named pipe 提供一次性、短期的二进制 `UnlockLogonBuffer`；这一步只交接后续认证所需材料，不直接调用 Windows 解锁 API。
 - Windows `UnlockService` 已对批准结果加入短冷却和一次性 challenge 消费，避免 BLE 重复发现造成连续解锁批准。
 - 在一次性 Windows VM 中关闭 LSA Protection 后，已成功注册并查询到 LSA package ID；这只证明 VM smoke test 的加载链路成立。
@@ -241,9 +241,9 @@ nmake /f Makefile build
 nmake /f Makefile test
 ```
 
-Windows SDK 目标已在当前 Windows 环境完成构建和本机 CTest 验证；这仍不等于后台锁屏生命周期、Credential Provider 的 LogonUI 激活或真实 LSA 登录流程已经完成。
+Windows SDK 目标已在当前 Windows 环境完成构建和本机 CTest 验证；Gate A/B 的 Credential Provider 已在 VM 的 LogonUI 中手动解锁已有 MSA 会话，但后台锁屏生命周期和 iPhone 自动解锁链路仍未完成。
 
-在 Windows 端，原生 Components Wizard 是 Windows 10+ 测试组件的唯一正常安装/卸载入口；PowerShell 只保留只读诊断和调用原生恢复入口。安装、注销、重启后清理和恢复都由同一套 HKLM 事务状态协调，未知残留不会被自动删除。LSA package lookup 和 Credential Provider tile 仍需在一次性 Windows VM 中验证，不能视为生产解锁流程已经完成。
+在 Windows 端，原生 Components Wizard 是 Windows 10+ 测试组件的唯一正常安装/卸载入口；PowerShell 只保留只读诊断和调用原生恢复入口。安装、注销、重启后清理和恢复都由同一套 HKLM 事务状态协调，未知残留不会被自动删除。Gate A/B 的 Credential Provider tile 已在一次性 VM 中验证手动 MSA 密码解锁；LSA package lookup 属于独立研究路径，两者都不能视为生产 iPhone 自动解锁流程已经完成。
 
 ## Windows：使用方法（当前阶段）
 
@@ -309,3 +309,27 @@ one HKLM transaction record, deterministic rollback and a post-restart
 cleanup task. PowerShell is limited to read-only diagnostics and invoking the
 native recovery entry point; it no longer performs the component transaction
 or maintains JSON backups.
+
+## MSA password-backed unlock branch
+
+The active engineering branch tests Windows-native password authentication for
+an existing Microsoft Account console session. Gate A/B now uses a diagnostic
+Credential Provider tile that reads the qualified user name supplied by
+LogonUI, accepts a password entered at the VM lock screen, and sends a protected
+online-identity buffer to the built-in Negotiate package. The Components Wizard
+installs only this Credential Provider; it does not install the custom LSA
+authentication package. The VM confirmed that the MSA password tile unlocks
+the existing console session with the same user SID; native PIN sign-in remains
+available, and an incorrect password is rejected. A same-session comparison
+of desktop `whoami /all` output showed no differences, but the separate
+read-only desktop/linked-token probe is still outstanding. No password is
+stored and no automatic iPhone unlock is implemented at this gate. Gate C
+(LocalSystem DPAPI storage) is the next engineering step; Gate D (one-shot
+iPhone approval and automatic submission) remains unimplemented. See
+[Gate A/B instructions](windows/CredentialProvider/README.md).
+
+References for this branch:
+
+- [Microsoft V2 Credential Provider sample](https://github.com/microsoft/Windows-classic-samples/blob/main/Samples/CredentialProvider/cpp/CSampleCredential.cpp)
+- [ICredentialProviderUser identity properties](https://learn.microsoft.com/en-us/windows/win32/api/credentialprovider/nf-credentialprovider-icredentialprovideruser-getstringvalue)
+- [CredPackAuthenticationBuffer](https://learn.microsoft.com/en-us/windows/win32/api/wincred/nf-wincred-credpackauthenticationbuffera)

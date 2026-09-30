@@ -19,10 +19,10 @@ bool ComponentSnapshot::hasAnyArtifacts() const noexcept {
 
 bool ComponentSnapshot::isCompleteInstallation() const noexcept {
     return credentialProviderDllPresent &&
-        lsaDllPresent &&
         credentialProviderRegistered &&
         credentialProviderClsidRegistered &&
-        lsaPackageRegistered;
+        !lsaDllPresent &&
+        !lsaPackageRegistered;
 }
 
 const wchar_t* wizardPhaseName(const WizardPhase phase) noexcept {
@@ -71,6 +71,15 @@ RecoveryPlan determineRecoveryPlan(const ComponentSnapshot& snapshot) {
             snapshot.observationError.empty()
                 ? L"Windows did not return a complete component status. No changes will be made."
                 : snapshot.observationError,
+            false,
+        };
+    }
+
+    if (snapshot.lsaDllPresent || snapshot.lsaPackageRegistered) {
+        return {
+            WizardAction::blocked,
+            L"A diagnostic LSA package is installed",
+            L"This Credential Provider-only wizard cannot change an existing LSA installation. Restore the disposable VM snapshot before this probe.",
             false,
         };
     }

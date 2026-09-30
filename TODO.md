@@ -193,3 +193,36 @@ Components Wizard 当前已可用，UI 细节暂时冻结。除非安装、卸�
 - [ ] 运行期间 Face ID 或人工确认
 - [ ] 仅依靠 RSSI、蓝牙连接状态或传统蓝牙配对作为认证
 - [ ] 在配置文件中保存 Windows 密码或 PIN
+
+## MSA native credential branch (Gate A/B)
+
+- [x] Replace the Credential Provider's custom LSA serialization with a manual
+  MSA password tile that uses the enumerated qualified user name and Windows
+  Negotiate online-identity packing in the LogonUI process.
+- [x] Record the user SID, primary SID, qualified user name, user name,
+  provider ID, and active console session/account SID without recording the password.
+- [x] Remove `WTSQueryUserToken` from the Credential Provider after the VM
+  returned 1314 (`SeTcbPrivilege` not held). Resolve the active session account
+  SID from WTS session metadata and fail closed if it cannot be resolved.
+- [x] In the VM, confirm `userSid`, `primarySid`, and `consoleSid` agree and
+  `whoami /user` returns the same SID after manual MSA password unlock.
+- [ ] If iPhone enrollment is present in the same VM, cross-check its account
+  SID separately; Gate B does not require enrollment.
+- [x] Make the VM Components Wizard install only the Credential Provider; a
+  pre-existing custom LSA installation blocks this installer.
+- [x] Build on the development machine, deploy to a disposable VM, and verify
+  manual MSA password unlock of the existing console session. Native PIN
+  remains available; a wrong password is rejected.
+- [x] Confirm the existing desktop SID and session ID are unchanged after
+  manual unlock; a `whoami /all` comparison with the PIN-unlocked desktop
+  produced no differences.
+- [ ] Run the read-only desktop/linked-token probe once for a strict native
+  token baseline; the same-session `whoami /all` check does not replace it.
+- [ ] Only after Gate B succeeds: implement LocalSystem user-scope DPAPI storage
+  for a local copy of the MSA credential and a service-mediated manual submit.
+- [ ] Only after Gate C succeeds: bind iPhone approval to SID and console
+  session, atomically consume it in the service, release plaintext once to
+  LogonUI, and trigger automatic submission.
+- [ ] Validate wrong password, replay, wrong SID/session, non-LogonUI client,
+  offline behavior, and service failure while retaining native PIN/password
+  recovery.

@@ -48,7 +48,6 @@ constexpr wchar_t kWizardStateRegistryPath[] = L"SOFTWARE\\UnlockWindowsWithIPho
 constexpr wchar_t kFinalizeTaskName[] = L"UnlockWindowsWithIPhone-FinalizeUninstall";
 constexpr wchar_t kSchemaVersionValueName[] = L"SchemaVersion";
 constexpr wchar_t kStatePhaseValueName[] = L"Phase";
-constexpr wchar_t kStateOriginalPackagesValueName[] = L"OriginalAuthenticationPackages";
 constexpr wchar_t kStateTransactionIdValueName[] = L"TransactionId";
 constexpr wchar_t kStateWizardPathValueName[] = L"WizardPath";
 constexpr wchar_t kStateCreatedAtValueName[] = L"CreatedAtUtc";
@@ -643,16 +642,9 @@ std::optional<WizardState> WindowsAdapter::readState() const {
         }
         return std::nullopt;
     }
-    const auto original = readRegistryValue(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStateOriginalPackagesValueName);
-    if (!original || original->type != REG_MULTI_SZ) {
-        fail(L"The Components Wizard state is missing its original LSA package list.");
-    }
-    (void)parseMultiString(original->bytes);
-
     WizardState state;
-    state.schemaVersion = readRegistryDword(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kSchemaVersionValueName).value_or(1);
+    state.schemaVersion = readRegistryDword(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kSchemaVersionValueName).value_or(0);
     state.phase = static_cast<WizardPhase>(*phase);
-    state.originalAuthenticationPackages = original->bytes;
     state.transactionId = readRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStateTransactionIdValueName).value_or(L"");
     state.wizardPath = readRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStateWizardPathValueName).value_or(L"");
     state.createdAtUtc = readRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStateCreatedAtValueName).value_or(L"");
@@ -661,16 +653,8 @@ std::optional<WizardState> WindowsAdapter::readState() const {
 }
 
 void WindowsAdapter::writeState(const WizardState& state) const {
-    (void)parseMultiString(state.originalAuthenticationPackages);
     writeRegistryDword(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kSchemaVersionValueName, state.schemaVersion);
     writeRegistryDword(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStatePhaseValueName, static_cast<DWORD>(state.phase));
-    writeRegistryValue(
-        HKEY_LOCAL_MACHINE,
-        kWizardStateRegistryPath,
-        kStateOriginalPackagesValueName,
-        REG_MULTI_SZ,
-        state.originalAuthenticationPackages
-    );
     writeRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStateTransactionIdValueName, state.transactionId);
     writeRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStateWizardPathValueName, state.wizardPath);
     writeRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStateCreatedAtValueName, state.createdAtUtc);
@@ -909,8 +893,7 @@ ComponentSnapshot WindowsAdapter::inspect() const {
             snapshot.statePhase = state->phase;
             snapshot.stateLastError = state->lastError;
             snapshot.stateValid = isKnownPhase(static_cast<DWORD>(state->phase)) &&
-                state->schemaVersion == 1 &&
-                !state->originalAuthenticationPackages.empty();
+                state->schemaVersion == 2;
             if (!snapshot.stateValid) {
                 snapshot.stateError = L"The saved transaction state has an unsupported schema or phase.";
             }

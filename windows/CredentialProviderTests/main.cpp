@@ -1,16 +1,18 @@
 // Created by Rui MA on 27 Sep 2026
-// Modified by Codex on 27 Sep 2026
 
 #include "UnlockCredentialProvider.h"
 #include "UnlockCredentialSerialization.h"
 
 #include <Windows.h>
+#include <initguid.h>
+#include <propkey.h>
 #include <ShlGuid.h>
 
 #include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
+#include <cwchar>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -79,18 +81,35 @@ public:
         if (providerId == nullptr) {
             return E_POINTER;
         }
-        *providerId = GUID_NULL;
+        *providerId = GUID{};
         return S_OK;
     }
 
     HRESULT STDMETHODCALLTYPE GetStringValue(
-        REFPROPERTYKEY,
+        REFPROPERTYKEY key,
         LPWSTR* stringValue
     ) override {
-        if (stringValue != nullptr) {
-            *stringValue = nullptr;
+        if (stringValue == nullptr) {
+            return E_POINTER;
         }
-        return E_NOTIMPL;
+        *stringValue = nullptr;
+        const wchar_t* value = nullptr;
+        if (IsEqualPropertyKey(key, PKEY_Identity_PrimarySid)) {
+            value = sid_.c_str();
+        } else if (IsEqualPropertyKey(key, PKEY_Identity_QualifiedUserName)) {
+            value = L"MicrosoftAccount\\test@example.com";
+        } else if (IsEqualPropertyKey(key, PKEY_Identity_UserName)) {
+            value = L"test@example.com";
+        } else {
+            return E_NOTIMPL;
+        }
+        const auto bytes = (std::wcslen(value) + 1) * sizeof(wchar_t);
+        *stringValue = static_cast<LPWSTR>(CoTaskMemAlloc(bytes));
+        if (*stringValue == nullptr) {
+            return E_OUTOFMEMORY;
+        }
+        std::memcpy(*stringValue, value, bytes);
+        return S_OK;
     }
 
     HRESULT STDMETHODCALLTYPE GetValue(
@@ -258,7 +277,7 @@ void run() {
     setUserArray->Release();
 
     DWORD fieldCount = 0;
-    require(provider->GetFieldDescriptorCount(&fieldCount) == S_OK && fieldCount == 3,
+    require(provider->GetFieldDescriptorCount(&fieldCount) == S_OK && fieldCount == 4,
         "unexpected Credential Provider field count");
 
     DWORD credentialCount = 0;
@@ -266,7 +285,7 @@ void run() {
     BOOL autoLogon = TRUE;
     require(
         provider->GetCredentialCount(&credentialCount, &defaultIndex, &autoLogon) == S_OK &&
-            credentialCount == 1 && defaultIndex == 0 && autoLogon == FALSE,
+            credentialCount == 1 && defaultIndex == CREDENTIAL_PROVIDER_NO_DEFAULT && autoLogon == FALSE,
         "unexpected Credential Provider credential count"
     );
 
@@ -311,7 +330,7 @@ void run() {
 
     LPWSTR title = nullptr;
     require(credential->GetStringValue(1, &title) == S_OK, "credential title missing");
-    require(std::wstring(title) == L"Unlock Windows with iPhone", "credential title mismatch");
+    require(std::wstring(title) == L"MSA password probe", "credential title mismatch");
     CoTaskMemFree(title);
 
     CREDENTIAL_PROVIDER_GET_SERIALIZATION_RESPONSE response{};
@@ -323,7 +342,7 @@ void run() {
         "Credential Provider serialization call failed"
     );
     require(
-        response == CPGSR_NO_CREDENTIAL_FINISHED &&
+        response == CPGSR_NO_CREDENTIAL_NOT_FINISHED &&
             serialization.cbSerialization == 0 &&
             statusIcon == CPSI_WARNING &&
             status != nullptr,

@@ -36,10 +36,8 @@ void testEmptyMachineRequestsInstall() {
 void testCompleteInstallationRequestsUninstall() {
     auto snapshot = baseState(WizardPhase::installed);
     snapshot.credentialProviderDllPresent = true;
-    snapshot.lsaDllPresent = true;
     snapshot.credentialProviderRegistered = true;
     snapshot.credentialProviderClsidRegistered = true;
-    snapshot.lsaPackageRegistered = true;
     const auto plan = determineRecoveryPlan(snapshot);
     expect(plan.action == WizardAction::uninstall, "complete installation should request uninstall");
 }
@@ -51,8 +49,7 @@ void testOrphanedInstalledStateResets() {
 
 void testPartialInstallationRequestsRecovery() {
     auto snapshot = baseState(WizardPhase::installed);
-    snapshot.lsaDllPresent = true;
-    snapshot.lsaPackageRegistered = true;
+    snapshot.credentialProviderDllPresent = true;
     const auto plan = determineRecoveryPlan(snapshot);
     expect(plan.action == WizardAction::recover, "partial installation should request recovery");
 }
@@ -60,7 +57,6 @@ void testPartialInstallationRequestsRecovery() {
 void testPendingRebootRequestsCleanup() {
     auto snapshot = baseState(WizardPhase::uninstallPendingReboot);
     snapshot.credentialProviderDllPresent = true;
-    snapshot.lsaDllPresent = true;
     snapshot.continuationTaskPresent = true;
     const auto plan = determineRecoveryPlan(snapshot);
     expect(plan.action == WizardAction::cleanup, "pending uninstall should request cleanup");
@@ -69,10 +65,8 @@ void testPendingRebootRequestsCleanup() {
 void testInstalledStateWithCleanupTaskRequestsRecovery() {
     auto snapshot = baseState(WizardPhase::installed);
     snapshot.credentialProviderDllPresent = true;
-    snapshot.lsaDllPresent = true;
     snapshot.credentialProviderRegistered = true;
     snapshot.credentialProviderClsidRegistered = true;
-    snapshot.lsaPackageRegistered = true;
     snapshot.continuationTaskPresent = true;
     const auto plan = determineRecoveryPlan(snapshot);
     expect(plan.action == WizardAction::recover, "an unexpected task must not make installation look complete");
@@ -96,6 +90,18 @@ void testUnknownArtifactsAreBlocked() {
     expect(!plan.safeToAutomate, "unknown artifacts must not be safe to automate");
 }
 
+void testPreviousLsaInstallationIsNotMistakenForProbe() {
+    auto snapshot = baseState(WizardPhase::installed);
+    snapshot.credentialProviderDllPresent = true;
+    snapshot.credentialProviderRegistered = true;
+    snapshot.credentialProviderClsidRegistered = true;
+    snapshot.lsaDllPresent = true;
+    snapshot.lsaPackageRegistered = true;
+    const auto plan = determineRecoveryPlan(snapshot);
+    expect(plan.action == WizardAction::blocked,
+        "an old LSA installation must not be treated as the CP-only probe");
+}
+
 void testInvalidStateIsBlocked() {
     ComponentSnapshot snapshot;
     snapshot.statePresent = true;
@@ -117,6 +123,7 @@ int main() {
     testCleaningStateRequestsCleanup();
     testRecoveryRequiredRequestsRecovery();
     testUnknownArtifactsAreBlocked();
+    testPreviousLsaInstallationIsNotMistakenForProbe();
     testInvalidStateIsBlocked();
     std::cout << "ComponentsWizard state tests passed.\n";
     return EXIT_SUCCESS;

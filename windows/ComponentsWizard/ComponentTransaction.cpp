@@ -41,14 +41,10 @@ std::wstring combineFailure(const std::wstring& primary, const std::vector<std::
 
 ComponentTransaction::ComponentTransaction(WindowsAdapter& adapter) : adapter_(adapter) {}
 
-WizardState ComponentTransaction::newState(
-    const WizardPhase phase,
-    const std::vector<std::byte>& originalPackages
-) const {
+WizardState ComponentTransaction::newState(const WizardPhase phase) const {
     WizardState state;
-    state.schemaVersion = 1;
+    state.schemaVersion = 2;
     state.phase = phase;
-    state.originalAuthenticationPackages = originalPackages;
     state.transactionId = processTransactionId();
     state.wizardPath = adapter_.wizardPath().wstring();
     state.createdAtUtc = timestamp();
@@ -83,7 +79,6 @@ std::wstring ComponentTransaction::errorText(const std::exception& error) const 
 }
 
 OperationResult ComponentTransaction::install(const ProgressCallback& progress) {
-    std::vector<std::byte> originalPackages;
     WizardState state;
     bool stateWritten = false;
     try {
@@ -96,18 +91,11 @@ OperationResult ComponentTransaction::install(const ProgressCallback& progress) 
                 before.statePresent
             );
         }
-        originalPackages = adapter_.readAuthenticationPackages();
-        state = newState(WizardPhase::installing, originalPackages);
+        state = newState(WizardPhase::installing);
         stateWritten = true;
         adapter_.writeState(state);
 
-        report(progress, 10, L"Preparing the sign-in components...");
-        adapter_.copyNativeDll(adapter_.lsaSource(), adapter_.lsaTarget());
-
-        report(progress, 35, L"Applying Windows sign-in settings...");
-        adapter_.writeAuthenticationPackages(adapter_.addLsaModule(originalPackages));
-
-        report(progress, 60, L"Installing the sign-in components...");
+        report(progress, 35, L"Installing the Credential Provider...");
         adapter_.copyNativeDll(adapter_.credentialProviderSource(), adapter_.credentialProviderTarget());
 
         report(progress, 80, L"Finishing the installation...");
@@ -137,17 +125,7 @@ OperationResult ComponentTransaction::install(const ProgressCallback& progress) 
             rollbackErrors.push_back(errorText(rollbackError));
         }
         try {
-            adapter_.writeAuthenticationPackages(originalPackages);
-        } catch (const std::exception& rollbackError) {
-            rollbackErrors.push_back(errorText(rollbackError));
-        }
-        try {
             adapter_.deleteDllIfPresent(adapter_.credentialProviderTarget());
-        } catch (const std::exception& rollbackError) {
-            rollbackErrors.push_back(errorText(rollbackError));
-        }
-        try {
-            adapter_.deleteDllIfPresent(adapter_.lsaTarget());
         } catch (const std::exception& rollbackError) {
             rollbackErrors.push_back(errorText(rollbackError));
         }
@@ -190,15 +168,11 @@ OperationResult ComponentTransaction::beginUninstall(const ProgressCallback& pro
         report(progress, 20, L"Disabling the components...");
         adapter_.removeCredentialProviderRegistration();
 
-        report(progress, 50, L"Restoring Windows sign-in settings...");
-        adapter_.writeAuthenticationPackages(state.originalAuthenticationPackages);
-
         report(progress, 75, L"Checking the changes...");
         const auto afterRegistration = adapter_.inspect();
         if (!afterRegistration.observationValid ||
             afterRegistration.credentialProviderRegistered ||
-            afterRegistration.credentialProviderClsidRegistered ||
-            afterRegistration.lsaPackageRegistered) {
+            afterRegistration.credentialProviderClsidRegistered) {
             throw ComponentError(L"The component registrations could not be fully removed.");
         }
 
@@ -245,17 +219,12 @@ OperationResult ComponentTransaction::completeUninstall(const ProgressCallback& 
 
         report(progress, 30, L"Removing the remaining component files...");
         adapter_.deleteDllIfPresent(adapter_.credentialProviderTarget());
-        report(progress, 60, L"Finishing the removal...");
-        adapter_.deleteDllIfPresent(adapter_.lsaTarget());
-
         report(progress, 80, L"Checking the removal...");
         const auto after = adapter_.inspect();
         if (!after.observationValid ||
             after.credentialProviderDllPresent ||
-            after.lsaDllPresent ||
             after.credentialProviderRegistered ||
-            after.credentialProviderClsidRegistered ||
-            after.lsaPackageRegistered) {
+            after.credentialProviderClsidRegistered) {
             throw ComponentError(L"Uninstall verification found remaining component files or registrations.");
         }
 
@@ -275,8 +244,8 @@ OperationResult ComponentTransaction::completeUninstall(const ProgressCallback& 
             state.lastError = message;
             try {
                 adapter_.writeState(state);
-            } catch (...) {
-                // The original failure is still more useful than replacing it with a state-write failure.
+            } catch (const std::exception& stateError) {
+                return failure(message + L"\r\nCould not preserve cleanup state: " + errorText(stateError), true);
             }
         }
         return failure(message, stateWritten);
@@ -302,13 +271,11 @@ OperationResult ComponentTransaction::recover(const ProgressCallback& progress) 
         stateWritten = true;
         adapter_.writeState(state);
 
-        report(progress, 20, L"Restoring Windows sign-in settings...");
+        report(progress, 20, L"Removing the Credential Provider registration...");
         adapter_.removeCredentialProviderRegistration();
         report(progress, 45, L"Removing incomplete components...");
-        adapter_.writeAuthenticationPackages(state.originalAuthenticationPackages);
         report(progress, 70, L"Cleaning up the interrupted operation...");
         adapter_.deleteDllIfPresent(adapter_.credentialProviderTarget());
-        adapter_.deleteDllIfPresent(adapter_.lsaTarget());
         adapter_.removeContinuationTask();
 
         const auto after = adapter_.inspect();
@@ -325,7 +292,8 @@ OperationResult ComponentTransaction::recover(const ProgressCallback& progress) 
             state.lastError = message;
             try {
                 adapter_.writeState(state);
-            } catch (...) {
+            } catch (const std::exception& stateError) {
+                return failure(message + L"\r\nCould not preserve recovery state: " + errorText(stateError), true);
             }
         }
         return failure(message, stateWritten);

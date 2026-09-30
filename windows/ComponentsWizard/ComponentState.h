@@ -28,9 +28,8 @@ enum class WizardAction {
 };
 
 struct WizardState final {
-    std::uint32_t schemaVersion = 1;
+    std::uint32_t schemaVersion = 2;
     WizardPhase phase = WizardPhase::none;
-    std::vector<std::byte> originalAuthenticationPackages;
     std::wstring transactionId;
     std::wstring wizardPath;
     std::wstring createdAtUtc;

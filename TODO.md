@@ -226,12 +226,22 @@ Components Wizard 当前已可用，UI 细节暂时冻结。除非安装、卸�
   handles immediate overlapped completion and busy-instance retries; the
   service waits for a bounded full-reply acknowledgment before disconnecting
   and preserves an authorized nonce across snapshot refresh.
-- [ ] Complete the remaining saved-credential acceptance tests: confirm the
-  on-disk DPAPI record and persistence across service restart, that grants
-  do not survive restart or permit replay, identity-change and wrong-caller
-  rejection, native PIN/password recovery, and normal/emergency wizard removal.
-  Earlier "claim refused" and active-console errors occurred before Windows
-  password validation and do not establish the replay result.
+- [x] VM behavior: a successful saved-credential claim cannot be reused without
+  reauthorization; a new grant works. A grant issued before a service restart
+  cannot unlock afterward, whereas a new grant after that restart can use the
+  persisted credential. Native PIN/password recovers after refusal. Normal
+  wizard uninstall reported confirmed credential deletion; the former vault
+  path was not found afterward. An administrator was denied vault-file access,
+  and the directory ACL showed SYSTEM only. These are operator-reported VM
+  observations; the generic claim-refused message does not identify the exact
+  failed service check.
+- [ ] Complete saved-credential negative and cleanup acceptance: inspect the
+  on-disk DPAPI record from SYSTEM without exposing its contents; prove that a
+  changed QualifiedUserName/ProviderID under the same SID, wrong session, and
+  non-LogonUI caller cannot claim; test service-unavailable recovery and
+  emergency wizard removal in disposable VM snapshots. Full Windows reboot
+  first logon is outside this existing-session milestone and its refused claim
+  does not substitute for these tests.
 - [ ] Only after the saved-credential path succeeds: bind iPhone approval to SID and console
   session, atomically consume it in the service, release plaintext once to
   LogonUI, and trigger automatic submission.

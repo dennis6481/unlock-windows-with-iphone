@@ -7,9 +7,11 @@ an existing Microsoft Account console session in a disposable Windows VM. Its
 new saved-credential checkbox can request one service-mediated password release
 for **manual** submission. That path also unlocked the existing VM console
 session after a fresh one-test authorization, with no password typed at the
-tile and the same SID and session ID afterward. Replay and service-restart
-behavior remain unverified. It does not call UnlockService, auto-submit, or
-construct a Windows token.
+tile and the same SID and session ID afterward. Later VM testing confirmed
+behavioral one-shot rejection and that a service restart invalidates a prior
+authorization while a new authorization can use the stored credential. Identity
+change and wrong-caller rejection remain unverified. It does not call
+UnlockService, auto-submit, or construct a Windows token.
 
 At LogonUI enumeration, it reads `GetSid()`, `PKEY_Identity_PrimarySid`,
 `PKEY_Identity_QualifiedUserName`, `PKEY_Identity_UserName`, and

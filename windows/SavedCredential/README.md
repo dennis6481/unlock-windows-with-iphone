@@ -6,9 +6,12 @@ This prototype stores a local copy of an MSA password for **manual unlock of an
 existing physical-console session**. It is not an iPhone approval path and does
 not auto-submit. The first VM run confirmed installation and identity display.
 A later VM run used a freshly authorized saved credential, without typing a
-password at the tile, to unlock the existing console SID and session. Keep a
-usable native Windows PIN/password tile and a disposable VM snapshot; replay
-and service-restart behavior remain unverified.
+password at the tile, to unlock the existing console SID and session. The VM
+operator subsequently confirmed that a used authorization could not unlock a
+second time, a new authorization could, and an authorization issued before a
+service restart was refused afterward. Reauthorizing after that restart again
+unlocked with the saved credential. Keep a usable native Windows PIN/password
+tile and a disposable VM snapshot.
 
 The identity source is the existing Credential Provider's current LogonUI user
 enumeration: SID, PrimarySid, Windows-supplied QualifiedUserName and ProviderID.
@@ -43,9 +46,11 @@ the failing IPC stage and Win32 code on Refresh; `reply-read` points at reply
 delivery, whereas `wait-for-pipe` or `open-pipe` points at connection pressure.
 The client also retries a `CreateFileW`/`ERROR_PIPE_BUSY` race within its
 existing timeout. The updated binaries were deployed in the VM and repeated
-manager Refresh was stable. The earlier claim-refused and active-console
-messages do not by themselves prove a wrong password or one-shot replay
-rejection; the latter remains a separate test.
+manager Refresh was stable. A later controlled sequence established behavioral
+one-shot rejection: a successful saved-credential unlock was followed by a
+refused attempt without new authorization, then another successful unlock
+after new authorization. Earlier claim-refused and active-console messages
+alone did not establish that result.
 
 The `UnlockWindowsSavedCredentialService` runs as LocalSystem. Its vault is
 `%ProgramData%\UnlockWindowsSavedCredential\saved-credential.dat`; both the
@@ -96,9 +101,13 @@ attacker who already controls SYSTEM.
 5. Verify separately: identity changes reject release; service restart keeps
    the encrypted record but loses the test authorization; a second claim or
    wrong session/caller is rejected; and the native PIN/password tiles remain
-   usable. Do not mark the saved-credential path validated until all four
-   properties have VM evidence. The separate desktop/linked-token baseline
-   remains a different task.
+   usable. The current VM has confirmed the service-restart behavior, a used
+   authorization's rejection, fresh reauthorization, and native PIN/password
+   recovery after refusal. Identity changes and wrong session/caller still need
+   direct evidence. The separate desktop/linked-token baseline remains another
+   task. A full Windows reboot reaches first logon rather than the supported
+   existing-session unlock scenario, so its refused claim is not a substitute
+   for these tests.
 6. Normal wizard removal first asks the service to confirm credential deletion,
    seals further credential operations in that service process, then removes
    registrations and, after restart, component files. If deletion
@@ -108,6 +117,29 @@ attacker who already controls SYSTEM.
    preserves an `RemovedUnconfirmed` diagnostic state when the secret could
    not be confirmed absent. File deletion does not erase VM snapshots,
    backups, or physical SSD history.
+
+## VM acceptance record (1 Oct 2026)
+
+- Passed (operator-reported): saved-credential unlock with unchanged console
+  SID/session; after a successful claim, another attempt without authorization
+  was refused, while a new authorization worked. Authorization issued before
+  `Restart-Service UnlockWindowsSavedCredentialService` was refused after the
+  restart; reauthorization then worked with the stored credential. This is
+  behavioral evidence that the secret survives service restart and the old
+  grant cannot unlock after restart. The generic refusal message alone does
+  not identify which service check rejected the request.
+- Passed (operator-reported): native PIN/password recovered the session after
+  refusal. Normal wizard uninstall reported confirmed credential deletion;
+  querying the former vault path afterward returned not found. Before removal,
+  an administrator's `Get-Item`/`icacls` access to the vault file was denied,
+  while `icacls` on its directory showed `NT AUTHORITY\SYSTEM:(F)` only.
+- Not directly verified: the vault file's ciphertext from a SYSTEM context;
+  the administrator access denial is expected from the ACL, not proof of the
+  DPAPI bytes on disk. The implementation uses LocalSystem user-scope DPAPI.
+  Also unverified: changed QualifiedUserName/ProviderID under the same SID,
+  wrong session/non-LogonUI caller rejection, emergency removal, and behavior
+  under an unavailable service. Do not change the only VM's account linkage
+  merely to force an identity mismatch.
 
 ## References
 

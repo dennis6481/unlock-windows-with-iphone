@@ -1,4 +1,4 @@
-Windows 端已有协议验证工具、前台 GATT host、UnlockService IPC host、PairingTool、已在 VM 验证手动 MSA 密码解锁的 Credential Provider、原生 Components Wizard 和只读 LSA package lookup 工具。自定义 LSA 包仅保留为研究工具，不在当前产品链路中。本机加密凭据服务及手动领取路径也已在 VM 中成功解锁已有控制台会话，解锁前后的 SID 和 SessionId 一致；一次性重放、服务重启后的持久化等仍待单独验收。Components Wizard 同时安装该服务和 Credential Provider，不改动 LSA 注册。
+Windows 端已有协议验证工具、前台 GATT host、UnlockService IPC host、PairingTool、已在 VM 验证手动 MSA 密码解锁的 Credential Provider、原生 Components Wizard 和只读 LSA package lookup 工具。自定义 LSA 包仅保留为研究工具，不在当前产品链路中。本机加密凭据服务及手动领取路径已在 VM 中成功解锁已有控制台会话，解锁前后的 SID 和 SessionId 一致；VM 还验证了成功领取后不能重放、服务重启使旧测试授权失效而保存的凭据仍可用，以及正常卸载时向导确认清除凭据。身份变化和非 LogonUI 调用方的拒绝测试仍未完成。Components Wizard 同时安装该服务和 Credential Provider，不改动 LSA 注册。
 # Unlock Windows with iPhone
 
 这个项目探索并实现一条明确的认证链路：
@@ -332,9 +332,18 @@ path has since also succeeded in the VM: after a fresh one-test authorization,
 the tile used the saved credential without manual password entry and unlocked
 the existing SID and session. Repeated manager Refresh was stable after the
 pipe completion, bounded reply acknowledgment, and grant-nonce changes.
-Replay rejection, persistence across service restart, identity-change rejection,
-and failure recovery remain separate acceptance tests; earlier "claim refused"
-and active-console errors do not establish those results. iPhone approval and
+The VM operator reported that a successful saved-credential claim was followed
+by a refused attempt without another authorization; a new authorization then
+unlocked again. After an authorization and service restart, the old claim was
+refused; a new authorization unlocked using the stored credential. Native
+PIN/password recovery after a failed claim and normal wizard removal with
+confirmed credential deletion were also reported. An administrator was denied
+access to the SYSTEM-only vault file; this is an ACL observation, not a
+direct inspection of the DPAPI ciphertext. Identity-change and non-LogonUI
+caller rejection, emergency removal, and the desktop/linked-token baseline
+remain unverified. An attempted claim at first logon after a full Windows
+reboot was refused, but first logon is outside the existing-session unlock
+milestone and does not prove why the request was refused. iPhone approval and
 automatic submission remain unimplemented. See the
 [manual credential probe](windows/CredentialProvider/README.md) and
 [saved-credential procedure](windows/SavedCredential/README.md).

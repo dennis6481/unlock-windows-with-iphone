@@ -16,6 +16,7 @@ enum class WizardPhase : std::uint32_t {
     uninstallPendingReboot = 3,
     cleaningUp = 4,
     recoveryRequired = 5,
+    removedUnconfirmed = 6,
 };
 
 enum class WizardAction {
@@ -28,12 +29,14 @@ enum class WizardAction {
 };
 
 struct WizardState final {
-    std::uint32_t schemaVersion = 2;
+    std::uint32_t schemaVersion = 3;
     WizardPhase phase = WizardPhase::none;
     std::wstring transactionId;
     std::wstring wizardPath;
     std::wstring createdAtUtc;
     std::wstring lastError;
+    bool credentialCleanupConfirmed = false;
+    bool emergencyRemoval = false;
 };
 
 struct ComponentSnapshot final {
@@ -47,6 +50,10 @@ struct ComponentSnapshot final {
     bool lsaDllPresent = false;
     bool credentialProviderRegistered = false;
     bool credentialProviderClsidRegistered = false;
+    bool savedCredentialServiceExePresent = false;
+    bool savedCredentialServiceRegistered = false;
+    bool savedCredentialServiceMatchesInstallation = false;
+    bool savedCredentialServiceRunning = false;
     bool lsaPackageRegistered = false;
     bool continuationTaskPresent = false;
 

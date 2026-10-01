@@ -1,11 +1,13 @@
 <!-- Created by Rui MA on 27 Sep 2026 -->
 
-# MSA credential probe (Gate A/B)
+# MSA credential probe and saved-credential manual test
 
-The V2 Credential Provider currently tests a password-based unlock of an
-existing Microsoft Account console session in a disposable Windows VM. This is
-the first gate of the planned iPhone-approved unlock path. It does not save the
-password, call UnlockService, auto-submit, or construct a Windows token.
+The V2 Credential Provider has already demonstrated manual password unlock of
+an existing Microsoft Account console session in a disposable Windows VM. Its
+new saved-credential checkbox can request one service-mediated password release
+for **manual** submission; that new path is implemented but not yet built or
+validated. It does not call UnlockService, auto-submit, or construct a Windows
+token.
 
 At LogonUI enumeration, it reads `GetSid()`, `PKEY_Identity_PrimarySid`,
 `PKEY_Identity_QualifiedUserName`, `PKEY_Identity_UserName`, and
@@ -24,7 +26,8 @@ serialized credential in a shared diagnostic report.
 The password tile calls `CredPackAuthenticationBufferW` **inside LogonUI** with
 `CRED_PACK_PROTECTED_CREDENTIALS | CRED_PACK_ID_PROVIDER_CREDENTIALS`, the
 exact qualified user name supplied by Windows, and the manually entered MSA
-password. It submits the result to the built-in `Negotiate` authentication
+password, or with the one-time password released by the saved-credential
+service. It submits the result to the built-in `Negotiate` authentication
 package. The password is wiped after the attempt or when the tile is deselected.
 This tests a Windows authentication path; a successful pack alone is not proof
 that MSA unlock works.
@@ -39,7 +42,8 @@ SID. Native PIN sign-in remained available, while an incorrect password was
 rejected. The desktop SID and session ID were unchanged, and `whoami /all`
 showed no difference between the PIN- and MSA-password-unlocked desktop.
 This is not a direct comparison of `TokenLinkedToken`; the separate read-only
-desktop/linked-token baseline remains to be run once. No password was stored.
+desktop/linked-token baseline remains to be run once. This earlier result did
+not involve a stored password.
 
 ## VM procedure
 
@@ -51,11 +55,12 @@ desktop/linked-token baseline remains to be run once. No password was stored.
    it, restart, and finish cleanup before installing the new DLL. Do not
    overwrite a loaded DLL in System32.
 2. On the development machine, build with `cd windows` followed by
-   `make build-release`. Copy the resulting wizard EXE and
-   `unlock_credential_provider.dll` to the VM. The VM needs no build tools.
+   `make build-release` only after separately authorizing a build. Copy the
+   resulting wizard, Credential Provider DLL, saved-credential service EXE and
+   manager EXE to one VM folder. The VM needs no build tools.
 3. Run `unlock_windows_components_wizard.exe` as administrator in the VM. It
-   installs only the Credential Provider and records a version-2 HKLM
-   transaction. Restart if requested.
+   installs the Credential Provider and LocalSystem saved-credential service,
+   without registering a custom LSA package. Restart if requested.
 4. Sign in with the original Windows method, lock the workstation, choose the
    **MSA password probe** tile, enter the actual MSA password, and select
    **Test unlock**. Do not test the first login after reboot as Gate B.
@@ -73,8 +78,10 @@ desktop/linked-token baseline remains to be run once. No password was stored.
    restoring the VM snapshot. Leave the system password/PIN provider enabled.
 
 If the selected user is not the active console user, identity enumeration fails,
-or Negotiate rejects the credential, stop at Gate B and preserve the status
-without proceeding to password storage or automatic submission.
+or Negotiate rejects the credential, stop and preserve the status. For the new
+encrypted-copy workflow and its four separate acceptance properties, see the
+[saved Windows credential VM procedure](../SavedCredential/README.md). Do not
+consider that workflow validated on the strength of the earlier manual result.
 
 ## References
 

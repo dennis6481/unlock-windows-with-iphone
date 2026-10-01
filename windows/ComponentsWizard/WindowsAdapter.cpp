@@ -5,6 +5,7 @@
 #define SECURITY_WIN32
 
 #include "WindowsAdapter.h"
+#include "SavedCredentialIpc.h"
 
 #include <Windows.h>
 #include <lmcons.h>
@@ -34,6 +35,7 @@ namespace {
 using Microsoft::WRL::ComPtr;
 
 constexpr wchar_t kCredentialProviderDllName[] = L"unlock_credential_provider.dll";
+constexpr wchar_t kSavedCredentialServiceExeName[] = L"unlock_saved_credential_service.exe";
 constexpr wchar_t kLsaDllName[] = L"unlock_lsa_authentication_package.dll";
 constexpr wchar_t kLsaModuleName[] = L"unlock_lsa_authentication_package";
 constexpr wchar_t kCredentialProviderName[] = L"Unlock Windows with iPhone";
@@ -52,6 +54,8 @@ constexpr wchar_t kStateTransactionIdValueName[] = L"TransactionId";
 constexpr wchar_t kStateWizardPathValueName[] = L"WizardPath";
 constexpr wchar_t kStateCreatedAtValueName[] = L"CreatedAtUtc";
 constexpr wchar_t kStateLastErrorValueName[] = L"LastError";
+constexpr wchar_t kCredentialCleanupValueName[] = L"CredentialCleanupConfirmed";
+constexpr wchar_t kEmergencyRemovalValueName[] = L"EmergencyRemoval";
 
 [[noreturn]] void fail(const std::wstring& message) {
     throw ComponentError(message);
@@ -104,6 +108,23 @@ public:
 
 private:
     HANDLE handle_ = INVALID_HANDLE_VALUE;
+};
+
+class ScopedServiceHandle final {
+public:
+    explicit ScopedServiceHandle(SC_HANDLE handle) : handle_(handle) {}
+    ScopedServiceHandle(const ScopedServiceHandle&) = delete;
+    ScopedServiceHandle& operator=(const ScopedServiceHandle&) = delete;
+    ~ScopedServiceHandle() { close(); }
+    [[nodiscard]] SC_HANDLE get() const noexcept { return handle_; }
+    void close() noexcept {
+        if (handle_ != nullptr) {
+            CloseServiceHandle(handle_);
+            handle_ = nullptr;
+        }
+    }
+private:
+    SC_HANDLE handle_ = nullptr;
 };
 
 class ScopedRegistryKey final {
@@ -362,7 +383,7 @@ bool containsMultiString(const std::vector<std::byte>& value, const std::wstring
 }
 
 bool isKnownPhase(const DWORD phase) {
-    return phase <= static_cast<DWORD>(WizardPhase::recoveryRequired);
+    return phase <= static_cast<DWORD>(WizardPhase::removedUnconfirmed);
 }
 
 std::filesystem::path system32Directory() {
@@ -384,7 +405,12 @@ std::filesystem::path system32Directory() {
 
 bool fileExists(const std::filesystem::path& path) {
     std::error_code error;
-    return std::filesystem::is_regular_file(path, error);
+    const bool present = std::filesystem::exists(path, error);
+    if (error) fail(L"Could not inspect component path: " + path.wstring());
+    if (!present) return false;
+    const bool regular = std::filesystem::is_regular_file(path, error);
+    if (error || !regular) fail(L"Component path is not a regular file: " + path.wstring());
+    return true;
 }
 
 Architecture nativeArchitecture() {
@@ -586,12 +612,20 @@ std::filesystem::path WindowsAdapter::credentialProviderSource() const {
     return wizardPath_.parent_path() / kCredentialProviderDllName;
 }
 
+std::filesystem::path WindowsAdapter::savedCredentialServiceSource() const {
+    return wizardPath_.parent_path() / kSavedCredentialServiceExeName;
+}
+
 std::filesystem::path WindowsAdapter::lsaSource() const {
     return wizardPath_.parent_path() / kLsaDllName;
 }
 
 std::filesystem::path WindowsAdapter::credentialProviderTarget() const {
     return system32Directory() / kCredentialProviderDllName;
+}
+
+std::filesystem::path WindowsAdapter::savedCredentialServiceTarget() const {
+    return system32Directory() / kSavedCredentialServiceExeName;
 }
 
 std::filesystem::path WindowsAdapter::lsaTarget() const {
@@ -606,11 +640,17 @@ EnvironmentStatus WindowsAdapter::environment() const {
     if (fileExists(credentialProviderSource())) {
         result.credentialProviderSourceArchitecture = executableArchitecture(credentialProviderSource());
     }
+    if (fileExists(savedCredentialServiceSource())) {
+        result.savedCredentialServiceSourceArchitecture = executableArchitecture(savedCredentialServiceSource());
+    }
     if (fileExists(lsaSource())) {
         result.lsaSourceArchitecture = executableArchitecture(lsaSource());
     }
     if (fileExists(credentialProviderTarget())) {
         result.credentialProviderTargetArchitecture = executableArchitecture(credentialProviderTarget());
+    }
+    if (fileExists(savedCredentialServiceTarget())) {
+        result.savedCredentialServiceTargetArchitecture = executableArchitecture(savedCredentialServiceTarget());
     }
     if (fileExists(lsaTarget())) {
         result.lsaTargetArchitecture = executableArchitecture(lsaTarget());
@@ -649,6 +689,10 @@ std::optional<WizardState> WindowsAdapter::readState() const {
     state.wizardPath = readRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStateWizardPathValueName).value_or(L"");
     state.createdAtUtc = readRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStateCreatedAtValueName).value_or(L"");
     state.lastError = readRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStateLastErrorValueName).value_or(L"");
+    state.credentialCleanupConfirmed = readRegistryDword(
+        HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kCredentialCleanupValueName).value_or(0) == 1;
+    state.emergencyRemoval = readRegistryDword(
+        HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kEmergencyRemovalValueName).value_or(0) == 1;
     return state;
 }
 
@@ -659,6 +703,10 @@ void WindowsAdapter::writeState(const WizardState& state) const {
     writeRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStateWizardPathValueName, state.wizardPath);
     writeRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStateCreatedAtValueName, state.createdAtUtc);
     writeRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStateLastErrorValueName, state.lastError);
+    writeRegistryDword(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath,
+        kCredentialCleanupValueName, state.credentialCleanupConfirmed ? 1 : 0);
+    writeRegistryDword(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath,
+        kEmergencyRemovalValueName, state.emergencyRemoval ? 1 : 0);
 }
 
 void WindowsAdapter::clearState() const {
@@ -687,7 +735,7 @@ std::vector<std::byte> WindowsAdapter::addLsaModule(const std::vector<std::byte>
     return serializeMultiString(values);
 }
 
-void WindowsAdapter::copyNativeDll(const std::filesystem::path& source, const std::filesystem::path& target) const {
+void WindowsAdapter::copyNativeBinary(const std::filesystem::path& source, const std::filesystem::path& target) const {
     if (!fileExists(source)) {
         fail(L"Required build output is missing: " + source.wstring());
     }
@@ -700,7 +748,7 @@ void WindowsAdapter::copyNativeDll(const std::filesystem::path& source, const st
         );
     }
     if (fileExists(target)) {
-        fail(L"Refusing to overwrite an existing system DLL: " + target.wstring());
+        fail(L"Refusing to overwrite an existing system binary: " + target.wstring());
     }
 
     const auto sourceHandle = CreateFileW(
@@ -761,7 +809,7 @@ void WindowsAdapter::copyNativeDll(const std::filesystem::path& source, const st
     checkWin32(FlushFileBuffers(targetFile.get()), L"Could not flush " + target.wstring());
 }
 
-void WindowsAdapter::deleteDllIfPresent(const std::filesystem::path& target) const {
+void WindowsAdapter::deleteBinaryIfPresent(const std::filesystem::path& target) const {
     if (!fileExists(target)) {
         return;
     }
@@ -779,6 +827,102 @@ void WindowsAdapter::createCredentialProviderRegistration(const std::filesystem:
 void WindowsAdapter::removeCredentialProviderRegistration() const {
     deleteRegistryTree(HKEY_LOCAL_MACHINE, kCredentialProviderRegistryPath);
     deleteRegistryTree(HKEY_LOCAL_MACHINE, kCredentialProviderClsidRegistryPath);
+}
+
+void WindowsAdapter::createSavedCredentialService() const {
+    ScopedServiceHandle manager(OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CREATE_SERVICE));
+    if (manager.get() == nullptr) fail(L"Could not open the Service Control Manager: " + win32ErrorMessage(GetLastError()));
+    const auto target = savedCredentialServiceTarget();
+    const auto command = L"\"" + target.wstring() + L"\"";
+    ScopedServiceHandle service(CreateServiceW(manager.get(),
+        unlock_windows::saved_credential::kServiceName,
+        L"Unlock Windows saved credential (VM test)",
+        SERVICE_START | SERVICE_QUERY_STATUS | DELETE,
+        SERVICE_WIN32_OWN_PROCESS, SERVICE_AUTO_START, SERVICE_ERROR_NORMAL,
+        command.c_str(), nullptr, nullptr, nullptr, L"LocalSystem", nullptr));
+    if (service.get() == nullptr) fail(L"Could not register the saved credential service: " + win32ErrorMessage(GetLastError()));
+    checkWin32(StartServiceW(service.get(), 0, nullptr), L"Could not start the saved credential service");
+    SERVICE_STATUS_PROCESS status{};
+    DWORD bytes = 0;
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        checkWin32(QueryServiceStatusEx(service.get(), SC_STATUS_PROCESS_INFO,
+            reinterpret_cast<LPBYTE>(&status), sizeof(status), &bytes),
+            L"Could not query the saved credential service");
+        if (status.dwCurrentState == SERVICE_RUNNING) return;
+        if (status.dwCurrentState == SERVICE_STOPPED) {
+            fail(L"The saved credential service stopped before reaching Running.");
+        }
+        Sleep(100);
+    }
+    fail(L"The saved credential service did not reach Running within 10 seconds.");
+}
+
+void WindowsAdapter::removeSavedCredentialService() const {
+    ScopedServiceHandle manager(OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT));
+    if (manager.get() == nullptr) fail(L"Could not open the Service Control Manager: " + win32ErrorMessage(GetLastError()));
+    ScopedServiceHandle service(OpenServiceW(manager.get(), unlock_windows::saved_credential::kServiceName,
+        SERVICE_STOP | SERVICE_QUERY_STATUS | SERVICE_QUERY_CONFIG | DELETE));
+    if (service.get() == nullptr) {
+        if (GetLastError() == ERROR_SERVICE_DOES_NOT_EXIST) return;
+        fail(L"Could not open the saved credential service: " + win32ErrorMessage(GetLastError()));
+    }
+    DWORD configurationBytes = 0;
+    QueryServiceConfigW(service.get(), nullptr, 0, &configurationBytes);
+    if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || configurationBytes < sizeof(QUERY_SERVICE_CONFIGW)) {
+        fail(L"Could not inspect the saved credential service configuration.");
+    }
+    std::vector<std::byte> configuration(configurationBytes);
+    if (!QueryServiceConfigW(service.get(),
+            reinterpret_cast<LPQUERY_SERVICE_CONFIGW>(configuration.data()),
+            configurationBytes, &configurationBytes)) {
+        fail(L"Could not read the saved credential service configuration.");
+    }
+    const auto* config = reinterpret_cast<const QUERY_SERVICE_CONFIGW*>(configuration.data());
+    const auto expectedCommand = L"\"" + savedCredentialServiceTarget().wstring() + L"\"";
+    if (config->lpBinaryPathName == nullptr || _wcsicmp(config->lpBinaryPathName, expectedCommand.c_str()) != 0 ||
+        config->lpServiceStartName == nullptr || _wcsicmp(config->lpServiceStartName, L"LocalSystem") != 0 ||
+        config->dwServiceType != SERVICE_WIN32_OWN_PROCESS) {
+        fail(L"Refusing to remove a service whose executable, account, or type differs from this installation.");
+    }
+    SERVICE_STATUS_PROCESS status{};
+    DWORD bytes = 0;
+    checkWin32(QueryServiceStatusEx(service.get(), SC_STATUS_PROCESS_INFO,
+        reinterpret_cast<LPBYTE>(&status), sizeof(status), &bytes),
+        L"Could not query the saved credential service");
+    if (status.dwCurrentState != SERVICE_STOPPED) {
+        SERVICE_STATUS ignored{};
+        if (!ControlService(service.get(), SERVICE_CONTROL_STOP, &ignored) &&
+            GetLastError() != ERROR_SERVICE_NOT_ACTIVE) {
+            fail(L"Could not stop the saved credential service: " + win32ErrorMessage(GetLastError()));
+        }
+        for (int attempt = 0; attempt < 100; ++attempt) {
+            checkWin32(QueryServiceStatusEx(service.get(), SC_STATUS_PROCESS_INFO,
+                reinterpret_cast<LPBYTE>(&status), sizeof(status), &bytes),
+                L"Could not query the saved credential service after stop");
+            if (status.dwCurrentState == SERVICE_STOPPED) break;
+            Sleep(100);
+        }
+        if (status.dwCurrentState != SERVICE_STOPPED) fail(L"The saved credential service did not stop within 10 seconds.");
+    }
+    checkWin32(DeleteService(service.get()), L"Could not remove the saved credential service registration");
+    service.close();
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        ScopedServiceHandle probe(OpenServiceW(manager.get(),
+            unlock_windows::saved_credential::kServiceName, SERVICE_QUERY_STATUS));
+        if (probe.get() == nullptr && GetLastError() == ERROR_SERVICE_DOES_NOT_EXIST) return;
+        Sleep(100);
+    }
+    fail(L"The saved credential service registration was not removed within 10 seconds.");
+}
+
+void WindowsAdapter::clearSavedCredential() const {
+    unlock_windows::saved_credential::Packet reply;
+    if (!unlock_windows::saved_credential::call(
+            unlock_windows::saved_credential::Operation::clearForRemoval,
+            unlock_windows::saved_credential::SensitiveBytes{}, reply) ||
+        reply.result != unlock_windows::saved_credential::Result::success) {
+        fail(L"The saved credential service did not confirm deletion. Component removal is paused.");
+    }
 }
 
 bool WindowsAdapter::continuationTaskExists() const {
@@ -893,7 +1037,7 @@ ComponentSnapshot WindowsAdapter::inspect() const {
             snapshot.statePhase = state->phase;
             snapshot.stateLastError = state->lastError;
             snapshot.stateValid = isKnownPhase(static_cast<DWORD>(state->phase)) &&
-                state->schemaVersion == 2;
+                state->schemaVersion == 3;
             if (!snapshot.stateValid) {
                 snapshot.stateError = L"The saved transaction state has an unsupported schema or phase.";
             }
@@ -906,9 +1050,45 @@ ComponentSnapshot WindowsAdapter::inspect() const {
 
     try {
         snapshot.credentialProviderDllPresent = fileExists(credentialProviderTarget());
+        snapshot.savedCredentialServiceExePresent = fileExists(savedCredentialServiceTarget());
         snapshot.lsaDllPresent = fileExists(lsaTarget());
         snapshot.credentialProviderRegistered = registryKeyExists(kCredentialProviderRegistryPath);
         snapshot.credentialProviderClsidRegistered = registryKeyExists(kCredentialProviderClsidRegistryPath);
+        ScopedServiceHandle manager(OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT));
+        if (manager.get() == nullptr) fail(L"Could not inspect the Service Control Manager.");
+        ScopedServiceHandle service(OpenServiceW(manager.get(),
+            unlock_windows::saved_credential::kServiceName, SERVICE_QUERY_STATUS | SERVICE_QUERY_CONFIG));
+        if (service.get() != nullptr) {
+            snapshot.savedCredentialServiceRegistered = true;
+            DWORD configurationBytes = 0;
+            QueryServiceConfigW(service.get(), nullptr, 0, &configurationBytes);
+            if (GetLastError() != ERROR_INSUFFICIENT_BUFFER ||
+                configurationBytes < sizeof(QUERY_SERVICE_CONFIGW)) {
+                fail(L"Could not inspect the saved credential service configuration.");
+            }
+            std::vector<std::byte> configuration(configurationBytes);
+            checkWin32(QueryServiceConfigW(service.get(),
+                reinterpret_cast<LPQUERY_SERVICE_CONFIGW>(configuration.data()),
+                configurationBytes, &configurationBytes),
+                L"Could not read the saved credential service configuration");
+            const auto* config = reinterpret_cast<const QUERY_SERVICE_CONFIGW*>(configuration.data());
+            const auto expectedCommand = L"\"" + savedCredentialServiceTarget().wstring() + L"\"";
+            snapshot.savedCredentialServiceMatchesInstallation =
+                config->lpBinaryPathName != nullptr &&
+                _wcsicmp(config->lpBinaryPathName, expectedCommand.c_str()) == 0 &&
+                config->lpServiceStartName != nullptr &&
+                _wcsicmp(config->lpServiceStartName, L"LocalSystem") == 0 &&
+                config->dwServiceType == SERVICE_WIN32_OWN_PROCESS &&
+                config->dwStartType == SERVICE_AUTO_START;
+            SERVICE_STATUS_PROCESS status{};
+            DWORD bytes = 0;
+            checkWin32(QueryServiceStatusEx(service.get(), SC_STATUS_PROCESS_INFO,
+                reinterpret_cast<LPBYTE>(&status), sizeof(status), &bytes),
+                L"Could not inspect the saved credential service state");
+            snapshot.savedCredentialServiceRunning = status.dwCurrentState == SERVICE_RUNNING;
+        } else if (GetLastError() != ERROR_SERVICE_DOES_NOT_EXIST) {
+            fail(L"Could not inspect the saved credential service registration.");
+        }
         snapshot.lsaPackageRegistered = containsMultiString(readAuthenticationPackages(), kLsaModuleName);
         snapshot.continuationTaskPresent = continuationTaskExists();
     } catch (const ComponentError& error) {

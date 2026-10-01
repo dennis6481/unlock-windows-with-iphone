@@ -2,12 +2,16 @@
 
 #include <initguid.h>
 #include "UnlockCredentialProvider.h"
+#include "SavedCredentialIpc.h"
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <cwchar>
 #include <cstring>
 #include <cstdint>
 #include <new>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <propkey.h>
@@ -23,8 +27,9 @@ using unlock_windows::credential_provider::kUnlockCredentialProviderClsid;
 constexpr DWORD kIconField = 0;
 constexpr DWORD kTitleField = 1;
 constexpr DWORD kPasswordField = 2;
-constexpr DWORD kSubmitField = 3;
-constexpr DWORD kFieldCount = 4;
+constexpr DWORD kSavedCredentialField = 3;
+constexpr DWORD kSubmitField = 4;
+constexpr DWORD kFieldCount = 5;
 
 struct FieldDefinition final {
     DWORD id;
@@ -37,7 +42,15 @@ const FieldDefinition kFields[] = {
     {kIconField, CPFT_TILE_IMAGE, nullptr, CPFG_CREDENTIAL_PROVIDER_LOGO},
     {kTitleField, CPFT_LARGE_TEXT, L"MSA password probe", GUID{}},
     {kPasswordField, CPFT_PASSWORD_TEXT, L"Microsoft account password", GUID{}},
+    {kSavedCredentialField, CPFT_CHECKBOX, L"Use saved credential (VM test)", GUID{}},
     {kSubmitField, CPFT_SUBMIT_BUTTON, L"Test unlock", GUID{}},
+};
+
+struct TemporaryPassword final {
+    std::vector<wchar_t> value;
+    ~TemporaryPassword() {
+        if (!value.empty()) SecureZeroMemory(value.data(), value.size() * sizeof(wchar_t));
+    }
 };
 
 std::atomic<ULONG> gObjectCount{0};
@@ -272,7 +285,8 @@ HRESULT writeIdentityReport(
     const DWORD consoleSessionId,
     const wchar_t* consoleIdentityStage,
     const std::wstring& consoleAccountName,
-    const std::wstring& consoleSid
+    const std::wstring& consoleSid,
+    const wchar_t* savedIdentityCapture
 ) {
     wchar_t tempDirectory[MAX_PATH]{};
     const auto tempLength = GetTempPathW(MAX_PATH, tempDirectory);
@@ -300,6 +314,7 @@ HRESULT writeIdentityReport(
         L"consoleAccountName=" + consoleAccountName + L"\r\n" +
         L"consoleSidStatus=" + std::to_wstring(static_cast<unsigned long>(consoleStatus)) + L"\r\n" +
         L"consoleSid=" + consoleSid + L"\r\n" +
+        L"savedIdentityCapture=" + savedIdentityCapture + L"\r\n" +
         L"passwordRecorded=no\r\n";
     const auto file = CreateFileW(
         path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS,
@@ -480,8 +495,11 @@ public:
 
     HRESULT STDMETHODCALLTYPE SetDeselected() override {
         clearPassword(password_);
+        useSavedCredential_ = false;
         if (events_ != nullptr) {
-            return events_->SetFieldString(this, kPasswordField, L"");
+            const auto status = events_->SetFieldString(this, kPasswordField, L"");
+            if (FAILED(status)) return status;
+            return events_->SetFieldCheckbox(this, kSavedCredentialField, FALSE, L"Use saved credential (VM test)");
         }
         return S_OK;
     }
@@ -504,6 +522,7 @@ public:
                 *state = CPFS_DISPLAY_IN_SELECTED_TILE;
                 *interactiveState = CPFIS_FOCUSED;
                 return S_OK;
+            case kSavedCredentialField:
             case kSubmitField:
                 *state = CPFS_DISPLAY_IN_SELECTED_TILE;
                 *interactiveState = CPFIS_NONE;
@@ -552,17 +571,16 @@ public:
     }
 
     HRESULT STDMETHODCALLTYPE GetCheckboxValue(
-        DWORD,
+        DWORD fieldId,
         BOOL* checked,
         LPWSTR* label
     ) override {
-        if (checked != nullptr) {
-            *checked = FALSE;
-        }
-        if (label != nullptr) {
-            *label = nullptr;
-        }
-        return E_INVALIDARG;
+        if (checked == nullptr || label == nullptr) return E_POINTER;
+        *checked = FALSE;
+        *label = nullptr;
+        if (fieldId != kSavedCredentialField) return E_INVALIDARG;
+        *checked = useSavedCredential_ ? TRUE : FALSE;
+        return copyString(L"Use saved credential (VM test)", label);
     }
 
     HRESULT STDMETHODCALLTYPE GetSubmitButtonValue(
@@ -618,8 +636,14 @@ public:
         return S_OK;
     }
 
-    HRESULT STDMETHODCALLTYPE SetCheckboxValue(DWORD, BOOL) override {
-        return E_INVALIDARG;
+    HRESULT STDMETHODCALLTYPE SetCheckboxValue(DWORD fieldId, BOOL checked) override {
+        if (fieldId != kSavedCredentialField) return E_INVALIDARG;
+        useSavedCredential_ = checked != FALSE;
+        if (useSavedCredential_) {
+            clearPassword(password_);
+            if (events_ != nullptr) return events_->SetFieldString(this, kPasswordField, L"");
+        }
+        return S_OK;
     }
 
     HRESULT STDMETHODCALLTYPE SetComboBoxSelectedValue(DWORD, DWORD) override {
@@ -646,7 +670,7 @@ public:
         *optionalStatusIcon = CPSI_WARNING;
         *response = CPGSR_NO_CREDENTIAL_NOT_FINISHED;
 
-        if (password_ == nullptr || password_[0] == L'\0') {
+        if (!useSavedCredential_ && (password_ == nullptr || password_[0] == L'\0')) {
             clearPassword(password_);
             return copyString(L"Enter the Microsoft account password for this VM probe.", optionalStatusText);
         }
@@ -691,10 +715,56 @@ public:
             );
         }
 
+        TemporaryPassword savedPassword;
+        LPWSTR passwordForPacking = password_;
+        if (useSavedCredential_) {
+            if (!savedNonceAvailable_) {
+                clearPassword(password_);
+                return copyString(L"No current saved-credential identity nonce is available. Reopen the lock screen tile.",
+                    optionalStatusText);
+            }
+            unlock_windows::saved_credential::SensitiveBytes request;
+            unlock_windows::saved_credential::Packet reply;
+            try {
+                unlock_windows::saved_credential::Identity identity{
+                    userSid_, qualifiedUserName_, providerId_
+                };
+                if (!unlock_windows::saved_credential::encodeIdentity(identity, request)) {
+                    clearPassword(password_);
+                    return copyString(L"The saved-credential identity cannot be encoded.", optionalStatusText);
+                }
+                request.value.insert(request.value.end(), savedNonce_.begin(), savedNonce_.end());
+                if (!unlock_windows::saved_credential::call(
+                        unlock_windows::saved_credential::Operation::claimCredential,
+                        std::move(request), reply
+                    ) || reply.result != unlock_windows::saved_credential::Result::success ||
+                    reply.payload.value.empty() || reply.payload.value.size() > 2048 ||
+                    reply.payload.value.size() % sizeof(wchar_t) != 0) {
+                    clearPassword(password_);
+                    return copyString(L"Saved credential claim was refused. Re-authorize one VM test on the desktop.",
+                        optionalStatusText);
+                }
+                const auto chars = reply.payload.value.size() / sizeof(wchar_t);
+                savedPassword.value.resize(chars + 1, L'\0');
+                std::memcpy(savedPassword.value.data(), reply.payload.value.data(), reply.payload.value.size());
+                if (savedPassword.value[0] == L'\0' ||
+                    std::find(savedPassword.value.begin(), savedPassword.value.begin() + chars, L'\0') !=
+                        savedPassword.value.begin() + chars) {
+                    clearPassword(password_);
+                    return copyString(L"Saved credential response is malformed.", optionalStatusText);
+                }
+                passwordForPacking = savedPassword.value.data();
+                reply.payload.clear();
+            } catch (const std::bad_alloc&) {
+                clearPassword(password_);
+                return E_OUTOFMEMORY;
+            }
+        }
+
         constexpr DWORD flags = CRED_PACK_PROTECTED_CREDENTIALS | CRED_PACK_ID_PROVIDER_CREDENTIALS;
         DWORD size = 0;
         const auto sized = CredPackAuthenticationBufferW(
-            flags, const_cast<LPWSTR>(qualifiedUserName_.c_str()), password_, nullptr, &size
+            flags, const_cast<LPWSTR>(qualifiedUserName_.c_str()), passwordForPacking, nullptr, &size
         );
         if (sized || GetLastError() != ERROR_INSUFFICIENT_BUFFER || size == 0) {
             clearPassword(password_);
@@ -711,7 +781,7 @@ public:
             return E_OUTOFMEMORY;
         }
         const auto packedResult = CredPackAuthenticationBufferW(
-            flags, const_cast<LPWSTR>(qualifiedUserName_.c_str()), password_, packed, &size
+            flags, const_cast<LPWSTR>(qualifiedUserName_.c_str()), passwordForPacking, packed, &size
         );
         clearPassword(password_);
         if (!packedResult) {
@@ -764,12 +834,17 @@ public:
         const std::wstring& sid,
         const std::wstring& primarySid,
         const std::wstring& qualifiedName,
-        DWORD consoleSessionId
+        const GUID& providerId,
+        DWORD consoleSessionId,
+        const std::array<std::uint8_t, unlock_windows::saved_credential::kNonceSize>& savedNonce,
+        bool savedNonceAvailable
     ) noexcept {
         if (sid.empty() || primarySid.empty() || qualifiedName.empty()) {
             userSid_.clear();
             primarySid_.clear();
             qualifiedUserName_.clear();
+            savedNonce_.fill(0);
+            savedNonceAvailable_ = false;
             consoleSessionId_ = 0xffffffff;
             return E_INVALIDARG;
         }
@@ -777,7 +852,11 @@ public:
             userSid_ = sid;
             primarySid_ = primarySid;
             qualifiedUserName_ = qualifiedName;
+            providerId_ = providerId;
             consoleSessionId_ = consoleSessionId;
+            savedNonce_ = savedNonce;
+            savedNonceAvailable_ = savedNonceAvailable;
+            useSavedCredential_ = false;
         } catch (const std::bad_alloc&) {
             return E_OUTOFMEMORY;
         }
@@ -789,6 +868,10 @@ public:
         userSid_.clear();
         primarySid_.clear();
         qualifiedUserName_.clear();
+        providerId_ = GUID{};
+        savedNonce_.fill(0);
+        savedNonceAvailable_ = false;
+        useSavedCredential_ = false;
         consoleSessionId_ = 0xffffffff;
     }
 
@@ -798,8 +881,12 @@ private:
     std::wstring userSid_;
     std::wstring primarySid_;
     std::wstring qualifiedUserName_;
+    GUID providerId_{};
+    std::array<std::uint8_t, unlock_windows::saved_credential::kNonceSize> savedNonce_{};
+    bool savedNonceAvailable_ = false;
     DWORD consoleSessionId_ = 0xffffffff;
     LPWSTR password_ = nullptr;
+    bool useSavedCredential_ = false;
 };
 
 class UnlockCredentialProvider final : public ICredentialProvider,
@@ -996,10 +1083,34 @@ public:
         } catch (const std::bad_alloc&) {
             return E_OUTOFMEMORY;
         }
+        const wchar_t* savedIdentityCapture = L"not-attempted";
+        std::array<std::uint8_t, unlock_windows::saved_credential::kNonceSize> savedNonce{};
+        bool savedNonceAvailable = false;
+        if (SUCCEEDED(consoleStatus) && consoleSid == sidValue && sidValue == primarySid) {
+            unlock_windows::saved_credential::SensitiveBytes request;
+            unlock_windows::saved_credential::Packet reply;
+            try {
+                unlock_windows::saved_credential::Identity identity{sidValue, qualifiedName, providerId};
+                if (unlock_windows::saved_credential::encodeIdentity(identity, request) &&
+                    unlock_windows::saved_credential::call(
+                        unlock_windows::saved_credential::Operation::captureIdentity,
+                        std::move(request), reply, 250
+                    ) && reply.result == unlock_windows::saved_credential::Result::success &&
+                    reply.payload.value.size() == savedNonce.size()) {
+                    std::copy_n(reply.payload.value.begin(), savedNonce.size(), savedNonce.begin());
+                    savedNonceAvailable = true;
+                    savedIdentityCapture = L"accepted";
+                } else {
+                    savedIdentityCapture = L"unavailable-or-rejected";
+                }
+            } catch (const std::bad_alloc&) {
+                savedIdentityCapture = L"out-of-memory";
+            }
+        }
         result = writeIdentityReport(
             sidValue, primarySid, qualifiedName, userName, providerId,
             consoleStatus, consoleSessionId, consoleIdentityStage,
-            consoleAccountName, consoleSid
+            consoleAccountName, consoleSid, savedIdentityCapture
         );
         if (FAILED(result)) {
             return result;
@@ -1011,7 +1122,8 @@ public:
             return E_UNEXPECTED;
         }
         result = credential_->setUserIdentity(
-            sidValue, primarySid, qualifiedName, consoleSessionId
+            sidValue, primarySid, qualifiedName, providerId, consoleSessionId,
+            savedNonce, savedNonceAvailable
         );
         if (SUCCEEDED(result)) {
             hasUserSid_ = true;

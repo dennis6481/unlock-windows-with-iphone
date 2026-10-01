@@ -493,8 +493,10 @@ private:
                     details = L"The components have been disabled. Windows needs to restart to complete removal. The remaining component files will be removed after you sign in. Select Restart to restart now, or Finish to close the wizard.";
                     break;
                 case WizardAction::cleanup:
-                    instruction = L"Removal complete";
-                    details = L"The components have been completely removed from Windows.";
+                    instruction = result.statePreserved
+                        ? L"Components removed; credential cleanup unconfirmed"
+                        : L"Removal complete";
+                    details = result.message;
                     break;
                 case WizardAction::recover:
                 case WizardAction::resetStaleState:
@@ -657,8 +659,30 @@ int APIENTRY wWinMain(
     int result = 1;
     try {
         const std::wstring arguments = commandLine == nullptr ? L"" : commandLine;
+        if (arguments == L"--emergency-remove") {
+            if (MessageBoxW(nullptr,
+                    L"EMERGENCY REMOVAL (VM ONLY)\r\n\r\n"
+                    L"This will remove the installed components even if deletion of the locally saved credential cannot be confirmed. "
+                    L"A persistent warning will remain in the wizard state. Restore a VM snapshot if possible. Continue?",
+                    kWindowTitle, MB_YESNO | MB_DEFBUTTON2 | MB_ICONWARNING) != IDYES) {
+                result = 1;
+            } else {
+                WindowsAdapter adapter(currentModulePath());
+                ComponentTransaction transaction(adapter);
+                const auto operation = transaction.emergencyRemove();
+                MessageBoxW(nullptr, operation.message.c_str(), kWindowTitle,
+                    MB_OK | (operation.success ? MB_ICONWARNING : MB_ICONERROR));
+                if (operation.success && operation.rebootRequired &&
+                    MessageBoxW(nullptr, L"Restart Windows now to finish component removal?",
+                        kWindowTitle, MB_YESNO | MB_ICONQUESTION) == IDYES) {
+                    adapter.restartWindows();
+                }
+                result = operation.success ? 0 : 1;
+            }
+        } else {
         WizardSession session(instance, arguments.find(L"--resume-uninstall") != std::wstring::npos);
         result = session.show();
+        }
     } catch (const std::exception& error) {
         MessageBoxW(nullptr, exceptionText(error).c_str(), kWindowTitle, MB_OK | MB_ICONERROR);
     } catch (...) {

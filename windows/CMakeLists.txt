@@ -50,6 +50,45 @@ add_library(unlock_service_ipc STATIC
     UnlockService/UnlockServiceIpc.cpp
 )
 
+add_library(unlock_saved_credential_ipc STATIC
+    SavedCredential/SavedCredentialIpc.cpp
+)
+target_include_directories(unlock_saved_credential_ipc PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/SavedCredential
+)
+target_compile_features(unlock_saved_credential_ipc PUBLIC cxx_std_20)
+target_compile_definitions(unlock_saved_credential_ipc PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(unlock_saved_credential_ipc PUBLIC advapi32)
+
+add_executable(unlock_saved_credential_service
+    SavedCredential/SavedCredentialService.cpp
+    SavedCredential/SavedCredentialVault.cpp
+)
+target_compile_features(unlock_saved_credential_service PRIVATE cxx_std_20)
+target_compile_definitions(unlock_saved_credential_service PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(unlock_saved_credential_service PRIVATE
+    unlock_saved_credential_ipc advapi32 wtsapi32 crypt32 bcrypt
+)
+
+add_executable(unlock_saved_credential_manager WIN32
+    SavedCredential/SavedCredentialManager.cpp
+)
+target_compile_features(unlock_saved_credential_manager PRIVATE cxx_std_20)
+target_compile_definitions(unlock_saved_credential_manager PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(unlock_saved_credential_manager PRIVATE
+    unlock_saved_credential_ipc advapi32 credui ole32 user32
+)
+
+if(BUILD_TESTING)
+    add_executable(unlock_saved_credential_tests
+        SavedCredentialTests/main.cpp
+    )
+    target_compile_features(unlock_saved_credential_tests PRIVATE cxx_std_20)
+    target_compile_definitions(unlock_saved_credential_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_link_libraries(unlock_saved_credential_tests PRIVATE unlock_saved_credential_ipc)
+    add_test(NAME unlock_saved_credential_tests COMMAND unlock_saved_credential_tests)
+endif()
+
 target_include_directories(unlock_service_ipc
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/UnlockService
@@ -275,6 +314,7 @@ add_executable(unlock_windows_components_wizard WIN32
 target_include_directories(unlock_windows_components_wizard
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/ComponentsWizard
+        ${CMAKE_CURRENT_SOURCE_DIR}/SavedCredential
 )
 
 target_compile_features(unlock_windows_components_wizard PRIVATE cxx_std_20)
@@ -291,6 +331,7 @@ target_link_libraries(
         shell32
         taskschd
         user32
+        unlock_saved_credential_ipc
 )
 
 if(MSVC)
@@ -328,11 +369,12 @@ add_library(unlock_credential_provider SHARED
 target_include_directories(unlock_credential_provider
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/CredentialProvider
+        ${CMAKE_CURRENT_SOURCE_DIR}/SavedCredential
 )
 
 target_compile_features(unlock_credential_provider PRIVATE cxx_std_20)
 target_compile_definitions(unlock_credential_provider PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_libraries(unlock_credential_provider PRIVATE ole32 secur32 gdi32 credui wtsapi32 advapi32)
+target_link_libraries(unlock_credential_provider PRIVATE unlock_saved_credential_ipc ole32 secur32 gdi32 credui wtsapi32 advapi32)
 if(MSVC)
     target_link_options(unlock_credential_provider PRIVATE
         /EXPORT:DllGetClassObject

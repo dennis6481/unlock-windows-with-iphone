@@ -20,30 +20,37 @@ The implementation is split into:
 
 - ComponentState: pure state snapshot and recovery-plan decisions;
 - WindowsAdapter: registry, System32, PE architecture, Task Scheduler and UAC
-  operations;
+  operations, including saved-credential service control;
 - ComponentTransaction: installation, registration removal, post-restart
   cleanup, rollback and stale-state recovery;
 - main.cpp: Property Sheet page lifecycle only.
 
 The state record is stored at
 HKLM\SOFTWARE\UnlockWindowsWithIPhone\ComponentsWizard. It contains the
-schema version, current phase, transaction ID,
+schema version, current phase, transaction ID, credential-cleanup status,
 wizard path, timestamp and last error. Unknown files or registrations without
 a valid transaction record are never deleted automatically.
 
 Installation writes an Installing record before changing the machine and
 changes it to Installed only after verification. If rollback cannot finish,
-RecoveryRequired is preserved. The Gate A/B wizard installs only the
-Credential Provider; it does not register or load a custom LSA package.
-Uninstall removes the Credential Provider registration, registers an
-interactive high-privilege logon task, and deletes the DLL only after restart.
+RecoveryRequired is preserved. The current VM wizard installs the Credential
+Provider and a LocalSystem saved-credential service; it does not register or
+load a custom LSA package. Normal uninstall first confirms deletion of the
+saved credential, then removes both registrations, registers an interactive
+high-privilege logon task, and deletes the remaining binaries after restart.
 The task invokes the internal
-resume-uninstall entry point. A failed cleanup keeps state for retry.
+resume-uninstall entry point. A failed cleanup keeps state for retry. The
+explicit `--emergency-remove` option can remove known components when the
+credential cannot be confirmed cleared; it retains `RemovedUnconfirmed` state
+and must not be interpreted as secret erasure.
 
-The installer creates System32 DLLs directly with normal file attributes and
+The installer creates System32 binaries directly with normal file attributes and
 copies bytes without inheriting source attributes. Windows 10 and later
-native x64 or ARM64 builds are accepted; the wizard, source DLLs and Windows
+native x64 or ARM64 builds are accepted; the wizard, source binaries and Windows
 architecture must match.
+
+The saved-credential path is implemented but has not been built or VM-tested
+in this change. See [the manual saved-credential VM procedure](SavedCredential/README.md).
 
 ## Build and tests
 

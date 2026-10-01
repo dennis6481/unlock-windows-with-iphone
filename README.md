@@ -1,4 +1,4 @@
-在 Windows 端可以运行的当前里程碑是协议验证工具、前台 GATT host、UnlockService IPC host、PairingTool、用于 Gate A/B 的 MSA 密码手动解锁 Credential Provider、原生 Components Wizard 和只读 LSA package lookup 工具。自定义 LSA 包仅保留为研究工具，不在当前产品链路中。Components Wizard 是 Windows 10+ 的唯一正常安装/卸载入口；此 Gate 只安装 Credential Provider，不改动 LSA 注册。安装会保存统一 HKLM 事务状态并在验证后提交，卸载先注销组件，重启后再由任务清理 DLL；失败时保留状态供恢复。
+Windows 端已有协议验证工具、前台 GATT host、UnlockService IPC host、PairingTool、已在 VM 验证手动 MSA 密码解锁的 Credential Provider、原生 Components Wizard 和只读 LSA package lookup 工具。自定义 LSA 包仅保留为研究工具，不在当前产品链路中。新增加的本机加密凭据服务及手动领取路径目前仅完成代码实现，尚未构建或在 VM 验证；Components Wizard 将同时安装该服务和 Credential Provider，不改动 LSA 注册。
 # Unlock Windows with iPhone
 
 这个项目探索并实现一条明确的认证链路：
@@ -309,6 +309,10 @@ one HKLM transaction record, deterministic rollback and a post-restart
 cleanup task. PowerShell is limited to read-only diagnostics and invoking the
 native recovery entry point; it no longer performs the component transaction
 or maintains JSON backups.
+The current VM branch adds a dedicated LocalSystem saved-credential service to
+the same transaction. Normal removal requires confirmed credential deletion;
+`--emergency-remove` is a warned component-removal path that retains an
+unconfirmed-credential diagnostic state when deletion cannot be verified.
 
 ## MSA password-backed unlock branch
 
@@ -317,19 +321,24 @@ an existing Microsoft Account console session. Gate A/B now uses a diagnostic
 Credential Provider tile that reads the qualified user name supplied by
 LogonUI, accepts a password entered at the VM lock screen, and sends a protected
 online-identity buffer to the built-in Negotiate package. The Components Wizard
-installs only this Credential Provider; it does not install the custom LSA
+installs this Credential Provider and a dedicated saved-credential service; it does not install the custom LSA
 authentication package. The VM confirmed that the MSA password tile unlocks
 the existing console session with the same user SID; native PIN sign-in remains
 available, and an incorrect password is rejected. A same-session comparison
 of desktop `whoami /all` output showed no differences, but the separate
-read-only desktop/linked-token probe is still outstanding. No password is
-stored and no automatic iPhone unlock is implemented at this gate. Gate C
-(LocalSystem DPAPI storage) is the next engineering step; Gate D (one-shot
-iPhone approval and automatic submission) remains unimplemented. See
-[Gate A/B instructions](windows/CredentialProvider/README.md).
+read-only desktop/linked-token probe is still outstanding. That successful VM
+test used a password entered at the lock screen; it did **not** validate the
+new encrypted saved-credential path. The latter is implemented for one-time
+manual VM testing but has not yet been built or run. iPhone approval and
+automatic submission remain unimplemented. See the
+[manual credential probe](windows/CredentialProvider/README.md) and
+[saved-credential procedure](windows/SavedCredential/README.md).
 
 References for this branch:
 
 - [Microsoft V2 Credential Provider sample](https://github.com/microsoft/Windows-classic-samples/blob/main/Samples/CredentialProvider/cpp/CSampleCredential.cpp)
 - [ICredentialProviderUser identity properties](https://learn.microsoft.com/en-us/windows/win32/api/credentialprovider/nf-credentialprovider-icredentialprovideruser-getstringvalue)
 - [CredPackAuthenticationBuffer](https://learn.microsoft.com/en-us/windows/win32/api/wincred/nf-wincred-credpackauthenticationbuffera)
+- [LocalSystem DPAPI protection](https://learn.microsoft.com/en-us/windows/win32/api/dpapi/nf-dpapi-cryptprotectdata)
+- [WTS session lock state](https://learn.microsoft.com/en-us/windows/win32/api/wtsapi32/ns-wtsapi32-wtsinfoex_level1_w)
+- [Windows named-pipe security](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights)

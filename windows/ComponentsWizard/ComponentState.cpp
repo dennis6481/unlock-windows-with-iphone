@@ -9,6 +9,8 @@ bool ComponentSnapshot::hasKnownArtifacts() const noexcept {
         lsaDllPresent ||
         credentialProviderRegistered ||
         credentialProviderClsidRegistered ||
+        savedCredentialServiceExePresent ||
+        savedCredentialServiceRegistered ||
         lsaPackageRegistered ||
         continuationTaskPresent;
 }
@@ -21,6 +23,10 @@ bool ComponentSnapshot::isCompleteInstallation() const noexcept {
     return credentialProviderDllPresent &&
         credentialProviderRegistered &&
         credentialProviderClsidRegistered &&
+        savedCredentialServiceExePresent &&
+        savedCredentialServiceRegistered &&
+        savedCredentialServiceMatchesInstallation &&
+        savedCredentialServiceRunning &&
         !lsaDllPresent &&
         !lsaPackageRegistered;
 }
@@ -39,6 +45,8 @@ const wchar_t* wizardPhaseName(const WizardPhase phase) noexcept {
             return L"CleaningUp";
         case WizardPhase::recoveryRequired:
             return L"RecoveryRequired";
+        case WizardPhase::removedUnconfirmed:
+            return L"RemovedUnconfirmed";
         default:
             return L"Unknown";
     }
@@ -168,6 +176,14 @@ RecoveryPlan determineRecoveryPlan(const ComponentSnapshot& snapshot) {
                 L"Repair previous operation",
                 L"The previous operation did not finish. The wizard will keep the recovery information and try to restore Windows safely.",
                 true,
+            };
+
+        case WizardPhase::removedUnconfirmed:
+            return {
+                WizardAction::blocked,
+                L"Components removed; credential cleanup unconfirmed",
+                L"Emergency removal removed the components, but deletion of the saved credential was not confirmed. The recovery record remains for diagnosis. Restore the VM snapshot before reinstalling.",
+                false,
             };
 
         case WizardPhase::none:

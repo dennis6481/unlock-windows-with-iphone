@@ -208,7 +208,7 @@ Components Wizard 当前已可用，UI 细节暂时冻结。除非安装、卸�
   `whoami /user` returns the same SID after manual MSA password unlock.
 - [ ] If iPhone enrollment is present in the same VM, cross-check its account
   SID separately; Gate B does not require enrollment.
-- [x] Make the VM Components Wizard install only the Credential Provider; a
+- [x] Make the VM Components Wizard avoid custom LSA registration; a
   pre-existing custom LSA installation blocks this installer.
 - [x] Build on the development machine, deploy to a disposable VM, and verify
   manual MSA password unlock of the existing console session. Native PIN
@@ -218,9 +218,11 @@ Components Wizard 当前已可用，UI 细节暂时冻结。除非安装、卸�
   produced no differences.
 - [ ] Run the read-only desktop/linked-token probe once for a strict native
   token baseline; the same-session `whoami /all` check does not replace it.
-- [ ] Only after Gate B succeeds: implement LocalSystem user-scope DPAPI storage
-  for a local copy of the MSA credential and a service-mediated manual submit.
-- [ ] Only after Gate C succeeds: bind iPhone approval to SID and console
+- [ ] Build and VM-validate the saved-credential branch: LocalSystem user-scope
+  DPAPI record bound to SID + Windows QualifiedUserName + ProviderID; console
+  identity snapshot; one-time manual release; native unlock; and normal or
+  emergency wizard removal. Implementation is present but unbuilt/unrun.
+- [ ] Only after the saved-credential path succeeds: bind iPhone approval to SID and console
   session, atomically consume it in the service, release plaintext once to
   LogonUI, and trigger automatic submission.
 - [ ] Validate wrong password, replay, wrong SID/session, non-LogonUI client,

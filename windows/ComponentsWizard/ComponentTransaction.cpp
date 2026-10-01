@@ -43,7 +43,7 @@ ComponentTransaction::ComponentTransaction(WindowsAdapter& adapter) : adapter_(a
 
 WizardState ComponentTransaction::newState(const WizardPhase phase) const {
     WizardState state;
-    state.schemaVersion = 2;
+    state.schemaVersion = 3;
     state.phase = phase;
     state.transactionId = processTransactionId();
     state.wizardPath = adapter_.wizardPath().wstring();
@@ -81,6 +81,7 @@ std::wstring ComponentTransaction::errorText(const std::exception& error) const 
 OperationResult ComponentTransaction::install(const ProgressCallback& progress) {
     WizardState state;
     bool stateWritten = false;
+    bool serviceStarted = false;
     try {
         adapter_.assertSupportedAdministratorEnvironment();
         const auto before = adapter_.inspect();
@@ -95,8 +96,13 @@ OperationResult ComponentTransaction::install(const ProgressCallback& progress) 
         stateWritten = true;
         adapter_.writeState(state);
 
-        report(progress, 35, L"Installing the Credential Provider...");
-        adapter_.copyNativeDll(adapter_.credentialProviderSource(), adapter_.credentialProviderTarget());
+        report(progress, 25, L"Installing saved credential service and Credential Provider...");
+        adapter_.copyNativeBinary(adapter_.savedCredentialServiceSource(), adapter_.savedCredentialServiceTarget());
+        adapter_.copyNativeBinary(adapter_.credentialProviderSource(), adapter_.credentialProviderTarget());
+
+        report(progress, 60, L"Starting the saved credential service...");
+        adapter_.createSavedCredentialService();
+        serviceStarted = true;
 
         report(progress, 80, L"Finishing the installation...");
         adapter_.createCredentialProviderRegistration(adapter_.credentialProviderTarget());
@@ -119,15 +125,29 @@ OperationResult ComponentTransaction::install(const ProgressCallback& progress) 
         }
 
         std::vector<std::wstring> rollbackErrors;
+        if (!serviceStarted) {
+            state.credentialCleanupConfirmed = true;
+        } else {
+            try {
+                adapter_.clearSavedCredential();
+                state.credentialCleanupConfirmed = true;
+            } catch (const std::exception& rollbackError) {
+                rollbackErrors.push_back(errorText(rollbackError));
+            }
+        }
         try {
             adapter_.removeCredentialProviderRegistration();
         } catch (const std::exception& rollbackError) {
             rollbackErrors.push_back(errorText(rollbackError));
         }
-        try {
-            adapter_.deleteDllIfPresent(adapter_.credentialProviderTarget());
-        } catch (const std::exception& rollbackError) {
-            rollbackErrors.push_back(errorText(rollbackError));
+        if (state.credentialCleanupConfirmed) {
+            try {
+                adapter_.removeSavedCredentialService();
+                adapter_.deleteBinaryIfPresent(adapter_.savedCredentialServiceTarget());
+                adapter_.deleteBinaryIfPresent(adapter_.credentialProviderTarget());
+            } catch (const std::exception& rollbackError) {
+                rollbackErrors.push_back(errorText(rollbackError));
+            }
         }
 
         if (rollbackErrors.empty()) {
@@ -160,6 +180,9 @@ OperationResult ComponentTransaction::beginUninstall(const ProgressCallback& pro
             return failure(L"There is no complete installation transaction to uninstall.", currentState.has_value());
         }
         state = *currentState;
+        report(progress, 10, L"Confirming saved credential deletion...");
+        adapter_.clearSavedCredential();
+        state.credentialCleanupConfirmed = true;
         state.phase = WizardPhase::uninstallPendingReboot;
         state.lastError.clear();
         stateWritten = true;
@@ -167,12 +190,14 @@ OperationResult ComponentTransaction::beginUninstall(const ProgressCallback& pro
 
         report(progress, 20, L"Disabling the components...");
         adapter_.removeCredentialProviderRegistration();
+        adapter_.removeSavedCredentialService();
 
         report(progress, 75, L"Checking the changes...");
         const auto afterRegistration = adapter_.inspect();
         if (!afterRegistration.observationValid ||
             afterRegistration.credentialProviderRegistered ||
-            afterRegistration.credentialProviderClsidRegistered) {
+            afterRegistration.credentialProviderClsidRegistered ||
+            afterRegistration.savedCredentialServiceRegistered) {
             throw ComponentError(L"The component registrations could not be fully removed.");
         }
 
@@ -201,6 +226,56 @@ OperationResult ComponentTransaction::beginUninstall(const ProgressCallback& pro
     }
 }
 
+OperationResult ComponentTransaction::emergencyRemove(const ProgressCallback& progress) {
+    WizardState state;
+    bool stateWritten = false;
+    try {
+        adapter_.assertSupportedAdministratorEnvironment();
+        const auto currentState = adapter_.readState();
+        if (!currentState ||
+            (currentState->phase != WizardPhase::installed &&
+             currentState->phase != WizardPhase::recoveryRequired &&
+             currentState->phase != WizardPhase::installing)) {
+            return failure(L"Emergency removal requires a known installed or recoverable transaction.",
+                currentState.has_value());
+        }
+        state = *currentState;
+        state.phase = WizardPhase::uninstallPendingReboot;
+        state.emergencyRemoval = true;
+        state.credentialCleanupConfirmed = false;
+        stateWritten = true;
+        adapter_.writeState(state);
+        report(progress, 10, L"Attempting saved credential deletion...");
+        try {
+            adapter_.clearSavedCredential();
+            state.credentialCleanupConfirmed = true;
+        } catch (const std::exception& error) {
+            state.lastError = L"Saved credential deletion not confirmed: " + errorText(error);
+        }
+        adapter_.writeState(state);
+        report(progress, 40, L"Disabling known components...");
+        adapter_.removeCredentialProviderRegistration();
+        adapter_.removeSavedCredentialService();
+        adapter_.registerContinuationTask(state);
+        report(progress, 100, L"Emergency removal ready for restart.");
+        return OperationResult{true, true, true,
+            state.credentialCleanupConfirmed
+                ? L"Components disabled; saved credential deletion confirmed. Restart to remove remaining files."
+                : L"Components disabled; saved credential deletion NOT confirmed. Restart to remove remaining files; the warning will be retained."};
+    } catch (const std::exception& error) {
+        const auto message = errorText(error);
+        if (stateWritten) {
+            state.phase = WizardPhase::recoveryRequired;
+            state.lastError += L"\r\nEmergency removal failed: " + message;
+            try { adapter_.writeState(state); }
+            catch (const std::exception& stateError) {
+                return failure(message + L"; could not preserve state: " + errorText(stateError), true);
+            }
+        }
+        return failure(message, stateWritten);
+    }
+}
+
 OperationResult ComponentTransaction::completeUninstall(const ProgressCallback& progress) {
     WizardState state;
     bool stateWritten = false;
@@ -213,16 +288,22 @@ OperationResult ComponentTransaction::completeUninstall(const ProgressCallback& 
         }
         state = *currentState;
         state.phase = WizardPhase::cleaningUp;
+        if (!state.credentialCleanupConfirmed && !state.emergencyRemoval) {
+            return failure(L"Saved credential deletion was not confirmed; normal uninstall cannot report complete.", true);
+        }
         state.lastError.clear();
         stateWritten = true;
         adapter_.writeState(state);
 
         report(progress, 30, L"Removing the remaining component files...");
-        adapter_.deleteDllIfPresent(adapter_.credentialProviderTarget());
+        adapter_.deleteBinaryIfPresent(adapter_.credentialProviderTarget());
+        adapter_.deleteBinaryIfPresent(adapter_.savedCredentialServiceTarget());
         report(progress, 80, L"Checking the removal...");
         const auto after = adapter_.inspect();
         if (!after.observationValid ||
             after.credentialProviderDllPresent ||
+            after.savedCredentialServiceExePresent ||
+            after.savedCredentialServiceRegistered ||
             after.credentialProviderRegistered ||
             after.credentialProviderClsidRegistered) {
             throw ComponentError(L"Uninstall verification found remaining component files or registrations.");
@@ -234,9 +315,18 @@ OperationResult ComponentTransaction::completeUninstall(const ProgressCallback& 
         if (!afterTask.observationValid || afterTask.continuationTaskPresent) {
             throw ComponentError(L"The cleanup task could not be removed.");
         }
+        if (!state.credentialCleanupConfirmed) {
+            state.phase = WizardPhase::removedUnconfirmed;
+            state.lastError = L"Components removed; saved credential deletion was not confirmed.";
+            adapter_.writeState(state);
+            report(progress, 100, L"Components removed; credential cleanup unconfirmed.");
+            return OperationResult{true, false, true,
+                L"Components removed. Saved credential deletion was NOT confirmed; recovery state remains."};
+        }
         adapter_.clearState();
         report(progress, 100, L"Removal complete.");
-        return OperationResult{true, false, false, L"The components have been completely removed from Windows."};
+        return OperationResult{true, false, false,
+            L"Components removed; saved credential deletion confirmed."};
     } catch (const std::exception& error) {
         const auto message = errorText(error);
         if (stateWritten) {
@@ -271,11 +361,23 @@ OperationResult ComponentTransaction::recover(const ProgressCallback& progress) 
         stateWritten = true;
         adapter_.writeState(state);
 
+        report(progress, 10, L"Confirming saved credential deletion...");
+        const auto observed = adapter_.inspect();
+        if (!observed.observationValid) {
+            throw ComponentError(L"Could not inspect the saved credential service before recovery.");
+        }
+        if (observed.savedCredentialServiceRunning || !state.credentialCleanupConfirmed) {
+            adapter_.clearSavedCredential();
+        }
+        state.credentialCleanupConfirmed = true;
+        adapter_.writeState(state);
         report(progress, 20, L"Removing the Credential Provider registration...");
         adapter_.removeCredentialProviderRegistration();
+        adapter_.removeSavedCredentialService();
         report(progress, 45, L"Removing incomplete components...");
         report(progress, 70, L"Cleaning up the interrupted operation...");
-        adapter_.deleteDllIfPresent(adapter_.credentialProviderTarget());
+        adapter_.deleteBinaryIfPresent(adapter_.credentialProviderTarget());
+        adapter_.deleteBinaryIfPresent(adapter_.savedCredentialServiceTarget());
         adapter_.removeContinuationTask();
 
         const auto after = adapter_.inspect();

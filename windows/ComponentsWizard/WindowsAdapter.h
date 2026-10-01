@@ -36,8 +36,10 @@ struct EnvironmentStatus final {
     Architecture nativeArchitecture = Architecture::unknown;
     Architecture wizardArchitecture = Architecture::unknown;
     Architecture credentialProviderSourceArchitecture = Architecture::unknown;
+    Architecture savedCredentialServiceSourceArchitecture = Architecture::unknown;
     Architecture lsaSourceArchitecture = Architecture::unknown;
     Architecture credentialProviderTargetArchitecture = Architecture::unknown;
+    Architecture savedCredentialServiceTargetArchitecture = Architecture::unknown;
     Architecture lsaTargetArchitecture = Architecture::unknown;
 };
 
@@ -49,8 +51,10 @@ public:
 
     [[nodiscard]] const std::filesystem::path& wizardPath() const noexcept;
     [[nodiscard]] std::filesystem::path credentialProviderSource() const;
+    [[nodiscard]] std::filesystem::path savedCredentialServiceSource() const;
     [[nodiscard]] std::filesystem::path lsaSource() const;
     [[nodiscard]] std::filesystem::path credentialProviderTarget() const;
+    [[nodiscard]] std::filesystem::path savedCredentialServiceTarget() const;
     [[nodiscard]] std::filesystem::path lsaTarget() const;
 
     [[nodiscard]] EnvironmentStatus environment() const;
@@ -65,11 +69,14 @@ public:
     void writeAuthenticationPackages(const std::vector<std::byte>& value) const;
     [[nodiscard]] std::vector<std::byte> addLsaModule(const std::vector<std::byte>& value) const;
 
-    void copyNativeDll(const std::filesystem::path& source, const std::filesystem::path& target) const;
-    void deleteDllIfPresent(const std::filesystem::path& target) const;
+    void copyNativeBinary(const std::filesystem::path& source, const std::filesystem::path& target) const;
+    void deleteBinaryIfPresent(const std::filesystem::path& target) const;
 
     void createCredentialProviderRegistration(const std::filesystem::path& target) const;
     void removeCredentialProviderRegistration() const;
+    void createSavedCredentialService() const;
+    void removeSavedCredentialService() const;
+    void clearSavedCredential() const;
 
     [[nodiscard]] bool continuationTaskExists() const;
     void registerContinuationTask(const WizardState& state) const;

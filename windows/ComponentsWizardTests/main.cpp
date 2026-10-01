@@ -38,6 +38,10 @@ void testCompleteInstallationRequestsUninstall() {
     snapshot.credentialProviderDllPresent = true;
     snapshot.credentialProviderRegistered = true;
     snapshot.credentialProviderClsidRegistered = true;
+    snapshot.savedCredentialServiceExePresent = true;
+    snapshot.savedCredentialServiceRegistered = true;
+    snapshot.savedCredentialServiceMatchesInstallation = true;
+    snapshot.savedCredentialServiceRunning = true;
     const auto plan = determineRecoveryPlan(snapshot);
     expect(plan.action == WizardAction::uninstall, "complete installation should request uninstall");
 }
@@ -67,6 +71,10 @@ void testInstalledStateWithCleanupTaskRequestsRecovery() {
     snapshot.credentialProviderDllPresent = true;
     snapshot.credentialProviderRegistered = true;
     snapshot.credentialProviderClsidRegistered = true;
+    snapshot.savedCredentialServiceExePresent = true;
+    snapshot.savedCredentialServiceRegistered = true;
+    snapshot.savedCredentialServiceMatchesInstallation = true;
+    snapshot.savedCredentialServiceRunning = true;
     snapshot.continuationTaskPresent = true;
     const auto plan = determineRecoveryPlan(snapshot);
     expect(plan.action == WizardAction::recover, "an unexpected task must not make installation look complete");
@@ -90,6 +98,19 @@ void testUnknownArtifactsAreBlocked() {
     expect(!plan.safeToAutomate, "unknown artifacts must not be safe to automate");
 }
 
+void testServiceMismatchRequestsRecovery() {
+    auto snapshot = baseState(WizardPhase::installed);
+    snapshot.credentialProviderDllPresent = true;
+    snapshot.credentialProviderRegistered = true;
+    snapshot.credentialProviderClsidRegistered = true;
+    snapshot.savedCredentialServiceExePresent = true;
+    snapshot.savedCredentialServiceRegistered = true;
+    snapshot.savedCredentialServiceRunning = true;
+    const auto plan = determineRecoveryPlan(snapshot);
+    expect(plan.action == WizardAction::recover,
+        "wrong saved credential service configuration must not look installed");
+}
+
 void testPreviousLsaInstallationIsNotMistakenForProbe() {
     auto snapshot = baseState(WizardPhase::installed);
     snapshot.credentialProviderDllPresent = true;
@@ -111,6 +132,20 @@ void testInvalidStateIsBlocked() {
     expect(plan.action == WizardAction::blocked, "invalid state must be blocked");
 }
 
+void testOrphanedSavedCredentialServiceIsBlocked() {
+    ComponentSnapshot snapshot;
+    snapshot.savedCredentialServiceRegistered = true;
+    const auto plan = determineRecoveryPlan(snapshot);
+    expect(plan.action == WizardAction::blocked,
+        "unowned saved credential service must not be removed automatically");
+}
+
+void testUnconfirmedEmergencyRemovalRemainsVisible() {
+    const auto plan = determineRecoveryPlan(baseState(WizardPhase::removedUnconfirmed));
+    expect(plan.action == WizardAction::blocked,
+        "unconfirmed credential deletion must leave a diagnostic state");
+}
+
 } // namespace
 
 int main() {
@@ -118,6 +153,7 @@ int main() {
     testCompleteInstallationRequestsUninstall();
     testOrphanedInstalledStateResets();
     testPartialInstallationRequestsRecovery();
+    testServiceMismatchRequestsRecovery();
     testPendingRebootRequestsCleanup();
     testInstalledStateWithCleanupTaskRequestsRecovery();
     testCleaningStateRequestsCleanup();
@@ -125,6 +161,8 @@ int main() {
     testUnknownArtifactsAreBlocked();
     testPreviousLsaInstallationIsNotMistakenForProbe();
     testInvalidStateIsBlocked();
+    testOrphanedSavedCredentialServiceIsBlocked();
+    testUnconfirmedEmergencyRemovalRemainsVisible();
     std::cout << "ComponentsWizard state tests passed.\n";
     return EXIT_SUCCESS;
 }

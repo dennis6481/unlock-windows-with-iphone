@@ -218,10 +218,20 @@ Components Wizard 当前已可用，UI 细节暂时冻结。除非安装、卸�
   produced no differences.
 - [ ] Run the read-only desktop/linked-token probe once for a strict native
   token baseline; the same-session `whoami /all` check does not replace it.
-- [ ] Build and VM-validate the saved-credential branch: LocalSystem user-scope
-  DPAPI record bound to SID + Windows QualifiedUserName + ProviderID; console
-  identity snapshot; one-time manual release; native unlock; and normal or
-  emergency wizard removal. Implementation is present but unbuilt/unrun.
+- [x] Build and VM-validate the saved-credential normal path: the LocalSystem
+  service and Credential Provider were installed, identity capture and manager
+  Refresh worked repeatedly, and a fresh one-test authorization released the
+  saved MSA password for manual submission without typing it at the tile.
+  Windows unlocked the existing console SID and SessionId. The pipe client
+  handles immediate overlapped completion and busy-instance retries; the
+  service waits for a bounded full-reply acknowledgment before disconnecting
+  and preserves an authorized nonce across snapshot refresh.
+- [ ] Complete the remaining saved-credential acceptance tests: confirm the
+  on-disk DPAPI record and persistence across service restart, that grants
+  do not survive restart or permit replay, identity-change and wrong-caller
+  rejection, native PIN/password recovery, and normal/emergency wizard removal.
+  Earlier "claim refused" and active-console errors occurred before Windows
+  password validation and do not establish the replay result.
 - [ ] Only after the saved-credential path succeeds: bind iPhone approval to SID and console
   session, atomically consume it in the service, release plaintext once to
   LogonUI, and trigger automatic submission.

@@ -5,9 +5,11 @@
 The V2 Credential Provider has already demonstrated manual password unlock of
 an existing Microsoft Account console session in a disposable Windows VM. Its
 new saved-credential checkbox can request one service-mediated password release
-for **manual** submission; that new path is implemented but not yet built or
-validated. It does not call UnlockService, auto-submit, or construct a Windows
-token.
+for **manual** submission. That path also unlocked the existing VM console
+session after a fresh one-test authorization, with no password typed at the
+tile and the same SID and session ID afterward. Replay and service-restart
+behavior remain unverified. It does not call UnlockService, auto-submit, or
+construct a Windows token.
 
 At LogonUI enumeration, it reads `GetSid()`, `PKEY_Identity_PrimarySid`,
 `PKEY_Identity_QualifiedUserName`, `PKEY_Identity_UserName`, and
@@ -22,6 +24,13 @@ was removed from the Credential Provider because it requires LocalSystem and
 instead. If either query fails, the tile fails closed and the report records
 `consoleIdentityStage` and `consoleSidStatus`. Never include a password or a
 serialized credential in a shared diagnostic report.
+
+`savedIdentityCapture` in that report describes the enumeration-time attempt.
+LogonUI can enumerate before the service observes the session as locked, so a
+manual saved-credential submission retries identity capture after the user
+clicks Test unlock. The service still requires the same console SID, LogonUI
+client, and locked session. A failed retry returns a visible error without
+releasing a password.
 
 The password tile calls `CredPackAuthenticationBufferW` **inside LogonUI** with
 `CRED_PACK_PROTECTED_CREDENTIALS | CRED_PACK_ID_PROVIDER_CREDENTIALS`, the
@@ -43,7 +52,9 @@ rejected. The desktop SID and session ID were unchanged, and `whoami /all`
 showed no difference between the PIN- and MSA-password-unlocked desktop.
 This is not a direct comparison of `TokenLinkedToken`; the separate read-only
 desktop/linked-token baseline remains to be run once. This earlier result did
-not involve a stored password.
+not involve a stored password. A later VM run did unlock with a freshly
+authorized saved password, no password typed at the tile, and the same SID and
+session ID afterward. Replay and service-restart checks remain separate.
 
 ## VM procedure
 

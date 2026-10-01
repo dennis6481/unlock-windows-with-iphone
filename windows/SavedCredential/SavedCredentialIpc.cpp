@@ -15,6 +15,7 @@ namespace {
 
 constexpr std::uint32_t kMagic = 0x31434347;
 constexpr std::uint16_t kVersion = 1;
+constexpr std::uint32_t kAckMagic = 0x314b4341;
 
 #pragma pack(push, 1)
 struct Header final {
@@ -24,8 +25,14 @@ struct Header final {
     std::uint32_t result;
     std::uint32_t size;
 };
+struct ReplyAcknowledgment final {
+    std::uint32_t magic;
+    std::uint16_t version;
+    std::uint16_t operation;
+};
 #pragma pack(pop)
 static_assert(sizeof(Header) == 16);
+static_assert(sizeof(ReplyAcknowledgment) == 8);
 
 void append(SensitiveBytes& target, const void* source, const std::size_t size) {
     const auto* bytes = static_cast<const std::uint8_t*>(source);
@@ -45,7 +52,11 @@ bool readExact(const HANDLE pipe, void* output, const DWORD size) {
     DWORD total = 0;
     while (total < size) {
         DWORD read = 0;
-        if (!ReadFile(pipe, cursor + total, size - total, &read, nullptr) || read == 0) return false;
+        if (!ReadFile(pipe, cursor + total, size - total, &read, nullptr)) return false;
+        if (read == 0) {
+            SetLastError(ERROR_BROKEN_PIPE);
+            return false;
+        }
         total += read;
     }
     return true;
@@ -56,7 +67,11 @@ bool writeExact(const HANDLE pipe, const void* input, const DWORD size) {
     DWORD total = 0;
     while (total < size) {
         DWORD written = 0;
-        if (!WriteFile(pipe, cursor + total, size - total, &written, nullptr) || written == 0) return false;
+        if (!WriteFile(pipe, cursor + total, size - total, &written, nullptr)) return false;
+        if (written == 0) {
+            SetLastError(ERROR_BROKEN_PIPE);
+            return false;
+        }
         total += written;
     }
     return true;
@@ -78,25 +93,31 @@ bool transferExactWithTimeout(const HANDLE pipe, void* buffer, const DWORD size,
         if (!started && GetLastError() == ERROR_IO_PENDING) {
             const DWORD wait = WaitForSingleObject(event, waitMs);
             if (wait != WAIT_OBJECT_0) {
+                const DWORD error = wait == WAIT_TIMEOUT ? ERROR_TIMEOUT : GetLastError();
                 CancelIoEx(pipe, &pending);
                 DWORD ignored = 0;
                 GetOverlappedResult(pipe, &pending, &ignored, TRUE);
                 CloseHandle(event);
+                SetLastError(error);
                 return false;
             }
             if (!GetOverlappedResult(pipe, &pending, &transferred, FALSE)) {
+                const DWORD error = GetLastError();
                 CloseHandle(event);
+                SetLastError(error);
                 return false;
             }
         } else if (!started) {
+            const DWORD error = GetLastError();
             CloseHandle(event);
-            return false;
-        } else if (!GetOverlappedResult(pipe, &pending, &transferred, FALSE)) {
-            CloseHandle(event);
+            SetLastError(error);
             return false;
         }
         CloseHandle(event);
-        if (transferred == 0) return false;
+        if (transferred == 0) {
+            SetLastError(ERROR_BROKEN_PIPE);
+            return false;
+        }
         total += transferred;
     }
     return true;
@@ -113,10 +134,13 @@ bool writePacketWithTimeout(const HANDLE pipe, const Packet& packet, const DWORD
 
 bool readPacketWithTimeout(const HANDLE pipe, Packet& packet, const DWORD waitMs) {
     Header header{};
-    if (!transferExactWithTimeout(pipe, &header, sizeof(header), false, waitMs) ||
-        header.magic != kMagic || header.version != kVersion || header.size > kMaxPacket ||
+    if (!transferExactWithTimeout(pipe, &header, sizeof(header), false, waitMs)) return false;
+    if (header.magic != kMagic || header.version != kVersion || header.size > kMaxPacket ||
         header.operation < static_cast<std::uint16_t>(Operation::captureIdentity) ||
-        header.operation > static_cast<std::uint16_t>(Operation::clearForRemoval)) return false;
+        header.operation > static_cast<std::uint16_t>(Operation::clearForRemoval)) {
+        SetLastError(ERROR_INVALID_DATA);
+        return false;
+    }
     packet.payload.clear();
     packet.payload.value.resize(header.size);
     if (header.size != 0 && !transferExactWithTimeout(pipe,
@@ -256,23 +280,110 @@ bool readPacket(const HANDLE pipe, Packet& packet) {
     return true;
 }
 
-bool call(const Operation operation, SensitiveBytes&& request, Packet& reply, const DWORD waitMs) {
-    if (request.value.size() > kMaxPacket || !WaitNamedPipeW(kPipeName, waitMs)) return false;
-    const HANDLE pipe = CreateFileW(kPipeName, 0x0012019B, 0, nullptr, OPEN_EXISTING,
-        FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr);
-    if (pipe == INVALID_HANDLE_VALUE) return false;
+bool awaitReplyAcknowledgment(const HANDLE pipe, const Operation operation, const DWORD waitMs) {
+    const ULONGLONG deadline = GetTickCount64() + waitMs;
+    for (;;) {
+        DWORD available = 0;
+        if (!PeekNamedPipe(pipe, nullptr, 0, nullptr, &available, nullptr)) return false;
+        if (available >= sizeof(ReplyAcknowledgment)) {
+            ReplyAcknowledgment acknowledgment{};
+            if (!readExact(pipe, &acknowledgment, sizeof(acknowledgment))) return false;
+            if (acknowledgment.magic != kAckMagic || acknowledgment.version != kVersion ||
+                acknowledgment.operation != static_cast<std::uint16_t>(operation)) {
+                SetLastError(ERROR_INVALID_DATA);
+                return false;
+            }
+            return true;
+        }
+        const ULONGLONG now = GetTickCount64();
+        if (now >= deadline) {
+            SetLastError(ERROR_TIMEOUT);
+            return false;
+        }
+        Sleep(static_cast<DWORD>(std::min<ULONGLONG>(10, deadline - now)));
+    }
+}
+
+const wchar_t* callStageName(const CallStage stage) {
+    switch (stage) {
+    case CallStage::none: return L"none";
+    case CallStage::requestValidation: return L"request-validation";
+    case CallStage::waitForPipe: return L"wait-for-pipe";
+    case CallStage::openPipe: return L"open-pipe";
+    case CallStage::serverVerification: return L"server-verification";
+    case CallStage::requestWrite: return L"request-write";
+    case CallStage::replyRead: return L"reply-read";
+    case CallStage::replyValidation: return L"reply-validation";
+    case CallStage::replyAcknowledgment: return L"reply-acknowledgment";
+    }
+    return L"unknown";
+}
+
+bool call(const Operation operation, SensitiveBytes&& request, Packet& reply, const DWORD waitMs,
+          CallDiagnostics* const diagnostics) {
+    if (diagnostics != nullptr) *diagnostics = {};
+    const auto failed = [diagnostics](const CallStage stage, const DWORD error) {
+        if (diagnostics != nullptr) *diagnostics = {stage, error};
+        SetLastError(error);
+        return false;
+    };
+    if (request.value.size() > kMaxPacket) {
+        return failed(CallStage::requestValidation, ERROR_INVALID_PARAMETER);
+    }
+    const ULONGLONG deadline = GetTickCount64() + waitMs;
+    HANDLE pipe = INVALID_HANDLE_VALUE;
+    for (;;) {
+        const ULONGLONG now = GetTickCount64();
+        const DWORD remaining = now < deadline ? static_cast<DWORD>(deadline - now) : 0;
+        if (!WaitNamedPipeW(kPipeName, remaining)) {
+            return failed(CallStage::waitForPipe, GetLastError());
+        }
+        pipe = CreateFileW(kPipeName, 0x0012019B, 0, nullptr, OPEN_EXISTING,
+            FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr);
+        if (pipe != INVALID_HANDLE_VALUE) break;
+        const DWORD error = GetLastError();
+        if (error != ERROR_PIPE_BUSY || GetTickCount64() >= deadline) {
+            return failed(CallStage::openPipe, error);
+        }
+    }
     if (!isExpectedServer(pipe)) {
         CloseHandle(pipe);
-        return false;
+        return failed(CallStage::serverVerification, ERROR_ACCESS_DENIED);
     }
     Packet outbound;
     outbound.operation = operation;
     outbound.payload = std::move(request);
-    const bool okay = writePacketWithTimeout(pipe, outbound, waitMs) &&
-        readPacketWithTimeout(pipe, reply, waitMs) &&
-        reply.operation == operation;
+    CallStage failureStage = CallStage::none;
+    DWORD failureError = NO_ERROR;
+    if (!writePacketWithTimeout(pipe, outbound, waitMs)) {
+        failureStage = CallStage::requestWrite;
+        failureError = GetLastError();
+    } else if (!readPacketWithTimeout(pipe, reply, waitMs)) {
+        failureStage = CallStage::replyRead;
+        failureError = GetLastError();
+    } else if (reply.operation != operation) {
+        failureStage = CallStage::replyValidation;
+        failureError = ERROR_INVALID_DATA;
+    } else {
+        ReplyAcknowledgment acknowledgment{kAckMagic, kVersion,
+            static_cast<std::uint16_t>(operation)};
+        if (!transferExactWithTimeout(pipe, &acknowledgment,
+                sizeof(acknowledgment), true, waitMs)) {
+            const DWORD error = GetLastError();
+            if (diagnostics != nullptr) {
+                *diagnostics = {CallStage::replyAcknowledgment, error};
+            }
+            const std::wstring message = L"saved credential reply acknowledgment failed; win32=" +
+                std::to_wstring(error);
+            OutputDebugStringW(message.c_str());
+        }
+    }
     CloseHandle(pipe);
-    return okay;
+    if (failureStage != CallStage::none) {
+        reply.payload.clear();
+        return failed(failureStage, failureError);
+    }
+    return true;
 }
 
 } // namespace unlock_windows::saved_credential

@@ -266,15 +266,25 @@ public:
                 if (!decodeIdentity(request.payload.value.data(), request.payload.value.size(), identity) ||
                     identity.sid != console.sid) return response;
                 const ULONGLONG now = GetTickCount64();
+                const bool reuseAuthorizedNonce = snapshot_ && grant_ &&
+                    snapshot_->session == console.session &&
+                    sameIdentity(snapshot_->identity, identity) &&
+                    grant_->session == console.session &&
+                    sameIdentity(grant_->identity, identity) &&
+                    grant_->nonce == snapshot_->nonce && now < grant_->expiresAt;
                 if (!snapshot_ || snapshot_->session != console.session ||
                     !sameIdentity(snapshot_->identity, identity) || now >= snapshot_->expiresAt) {
                     snapshot_ = Snapshot{identity, console.session, now + kSnapshotLifetimeMs, {}};
-                    if (BCryptGenRandom(nullptr, snapshot_->nonce.data(), kNonceSize,
-                            BCRYPT_USE_SYSTEM_PREFERRED_RNG) < 0) {
-                        snapshot_.reset();
-                        fail("saved credential snapshot RNG failed");
+                    if (reuseAuthorizedNonce) {
+                        snapshot_->nonce = grant_->nonce;
+                    } else {
+                        if (BCryptGenRandom(nullptr, snapshot_->nonce.data(), kNonceSize,
+                                BCRYPT_USE_SYSTEM_PREFERRED_RNG) < 0) {
+                            snapshot_.reset();
+                            fail("saved credential snapshot RNG failed");
+                        }
+                        grant_.reset();
                     }
-                    grant_.reset();
                 } else {
                     snapshot_->expiresAt = now + kSnapshotLifetimeMs;
                 }
@@ -414,7 +424,13 @@ void WINAPI serviceMain(DWORD, LPWSTR*) {
                 Packet request;
                 if (readPacket(pipe.value, request) && request.result == Result::success) {
                     auto response = handler.process(pipe.value, request);
-                    if (!writePacket(pipe.value, response)) OutputDebugStringW(L"saved credential response write failed");
+                    if (!writePacket(pipe.value, response)) {
+                        OutputDebugStringW(L"saved credential response write failed");
+                    } else if (!awaitReplyAcknowledgment(pipe.value, request.operation, 2000)) {
+                        const std::wstring message = L"saved credential reply acknowledgment failed; win32=" +
+                            std::to_wstring(GetLastError());
+                        OutputDebugStringW(message.c_str());
+                    }
                 } else {
                     OutputDebugStringW(L"saved credential request read failed");
                 }

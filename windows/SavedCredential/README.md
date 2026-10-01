@@ -4,9 +4,11 @@
 
 This prototype stores a local copy of an MSA password for **manual unlock of an
 existing physical-console session**. It is not an iPhone approval path and does
-not auto-submit. The code has received static review only; it has **not** been
-built, installed, or validated in a VM as part of this change. Keep a usable
-native Windows PIN/password tile and a disposable VM snapshot.
+not auto-submit. The first VM run confirmed installation and identity display.
+A later VM run used a freshly authorized saved credential, without typing a
+password at the tile, to unlock the existing console SID and session. Keep a
+usable native Windows PIN/password tile and a disposable VM snapshot; replay
+and service-restart behavior remain unverified.
 
 The identity source is the existing Credential Provider's current LogonUI user
 enumeration: SID, PrimarySid, Windows-supplied QualifiedUserName and ProviderID.
@@ -18,6 +20,32 @@ over-the-shoulder UAC. The encrypted record binds the SID, exact qualified
 name, and ProviderID. LogonUI receives the fresh snapshot nonce and returns it
 with the manual claim. A changed online identity requires re-enrollment even
 if its local SID remains the same.
+
+The Credential Provider first requests the identity nonce during user
+enumeration so the manager can see the snapshot after a native unlock. If that
+request runs before the service reports the console as locked, a manual saved
+credential submission retries capture before claiming the password. The
+`savedIdentityCapture` report field records only the enumeration-time result;
+the submission retry remains subject to the service's locked-session and
+identity checks. A retry failure does not consume or release the credential.
+The pipe client handles immediately completed and pending overlapped I/O
+separately. If the five-minute snapshot expires while a 120-second test grant
+is still valid, a matching locked-console capture keeps that grant's nonce;
+an identity or session change still revokes the grant.
+
+The first VM run also showed intermittent manager Refresh transport failures.
+The service previously disconnected its only pipe instance immediately after
+writing a reply, which could discard unread reply bytes. It now waits at most
+two seconds for an acknowledgment sent only after the client has read the full
+reply, then disconnects. A missing acknowledgment is diagnostic, not a reason
+to replay an operation or restore a consumed test grant. The manager displays
+the failing IPC stage and Win32 code on Refresh; `reply-read` points at reply
+delivery, whereas `wait-for-pipe` or `open-pipe` points at connection pressure.
+The client also retries a `CreateFileW`/`ERROR_PIPE_BUSY` race within its
+existing timeout. The updated binaries were deployed in the VM and repeated
+manager Refresh was stable. The earlier claim-refused and active-console
+messages do not by themselves prove a wrong password or one-shot replay
+rejection; the latter remains a separate test.
 
 The `UnlockWindowsSavedCredentialService` runs as LocalSystem. Its vault is
 `%ProgramData%\UnlockWindowsSavedCredential\saved-credential.dat`; both the
@@ -46,10 +74,11 @@ attacker who already controls SYSTEM.
 1. Build on the development machine. Copy the prebuilt
    `unlock_windows_components_wizard.exe`, `unlock_credential_provider.dll`,
    `unlock_saved_credential_service.exe`, and
-   `unlock_saved_credential_manager.exe` into one VM folder. The VM does not
-   need a compiler. The wizard installs the service and Credential Provider;
-   the manager stays in the VM folder. Do not install alongside an old custom
-   LSA package or overwrite a loaded Credential Provider DLL.
+   `unlock_saved_credential_manager.exe` from the **same build** into one VM
+   folder. The VM does not need a compiler. The wizard installs the service and
+   Credential Provider; the manager stays in the VM folder. Do not install
+   alongside an old custom LSA package or overwrite a loaded Credential
+   Provider DLL.
 2. Run the wizard elevated, restart as requested, and sign in with native
    PIN/password. Lock the **existing** session, wait for the MSA tile to
    enumerate, then unlock with the native PIN/password. Launch the manager
@@ -88,4 +117,7 @@ attacker who already controls SYSTEM.
 - [WTSQuerySessionInformationW](https://learn.microsoft.com/en-us/windows/win32/api/wtsapi32/nf-wtsapi32-wtsquerysessioninformationw)
 - [WTSINFOEX_LEVEL1_W lock state](https://learn.microsoft.com/en-us/windows/win32/api/wtsapi32/ns-wtsapi32-wtsinfoex_level1_w)
 - [Named pipe security](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights)
+- [DisconnectNamedPipe unread-data behavior](https://learn.microsoft.com/en-us/windows/win32/api/namedpipeapi/nf-namedpipeapi-disconnectnamedpipe)
+- [PeekNamedPipe](https://learn.microsoft.com/en-us/windows/win32/api/namedpipeapi/nf-namedpipeapi-peeknamedpipe)
+- [Named pipe client connection handling](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-client)
 - [ImpersonateNamedPipeClient](https://learn.microsoft.com/en-us/windows/win32/api/namedpipeapi/nf-namedpipeapi-impersonatenamedpipeclient)

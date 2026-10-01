@@ -718,17 +718,28 @@ public:
         TemporaryPassword savedPassword;
         LPWSTR passwordForPacking = password_;
         if (useSavedCredential_) {
-            if (!savedNonceAvailable_) {
-                clearPassword(password_);
-                return copyString(L"No current saved-credential identity nonce is available. Reopen the lock screen tile.",
-                    optionalStatusText);
-            }
-            unlock_windows::saved_credential::SensitiveBytes request;
-            unlock_windows::saved_credential::Packet reply;
             try {
                 unlock_windows::saved_credential::Identity identity{
                     userSid_, qualifiedUserName_, providerId_
                 };
+                if (!savedNonceAvailable_) {
+                    unlock_windows::saved_credential::SensitiveBytes captureRequest;
+                    unlock_windows::saved_credential::Packet captureReply;
+                    if (!unlock_windows::saved_credential::encodeIdentity(identity, captureRequest) ||
+                        !unlock_windows::saved_credential::call(
+                            unlock_windows::saved_credential::Operation::captureIdentity,
+                            std::move(captureRequest), captureReply
+                        ) || captureReply.result != unlock_windows::saved_credential::Result::success ||
+                        captureReply.payload.value.size() != savedNonce_.size()) {
+                        clearPassword(password_);
+                        return copyString(L"Saved credential identity capture failed while submitting. Use the native PIN, then try a new test.",
+                            optionalStatusText);
+                    }
+                    std::copy_n(captureReply.payload.value.begin(), savedNonce_.size(), savedNonce_.begin());
+                    savedNonceAvailable_ = true;
+                }
+                unlock_windows::saved_credential::SensitiveBytes request;
+                unlock_windows::saved_credential::Packet reply;
                 if (!unlock_windows::saved_credential::encodeIdentity(identity, request)) {
                     clearPassword(password_);
                     return copyString(L"The saved-credential identity cannot be encoded.", optionalStatusText);

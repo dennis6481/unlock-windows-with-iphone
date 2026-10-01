@@ -49,8 +49,15 @@ copies bytes without inheriting source attributes. Windows 10 and later
 native x64 or ARM64 builds are accepted; the wizard, source binaries and Windows
 architecture must match.
 
-The saved-credential path is implemented but has not been built or VM-tested
-in this change. See [the manual saved-credential VM procedure](SavedCredential/README.md).
+The saved-credential path has been built and installed in a VM. After a fresh
+one-test authorization, the Credential Provider used the saved credential
+without manual password entry and unlocked the existing SID and console
+session. Repeated manager Refresh was stable after the pipe completion,
+grant-nonce, and bounded full-reply acknowledgment changes. Refresh reports
+the failing IPC stage and Win32 code if a transport failure recurs. Replay
+rejection, service-restart persistence, identity-change rejection, and failure
+recovery still need separate VM evidence.
+See [the manual saved-credential VM procedure](SavedCredential/README.md).
 
 ## Build and tests
 

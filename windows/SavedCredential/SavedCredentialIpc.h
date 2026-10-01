@@ -65,12 +65,32 @@ struct Packet final {
     SensitiveBytes payload;
 };
 
+enum class CallStage {
+    none,
+    requestValidation,
+    waitForPipe,
+    openPipe,
+    serverVerification,
+    requestWrite,
+    replyRead,
+    replyValidation,
+    replyAcknowledgment,
+};
+
+struct CallDiagnostics final {
+    CallStage stage = CallStage::none;
+    DWORD win32Error = NO_ERROR;
+};
+
 [[nodiscard]] bool encodeIdentity(const Identity& identity, SensitiveBytes& output);
 [[nodiscard]] bool decodeIdentity(const std::uint8_t* data, std::size_t size, Identity& output);
 [[nodiscard]] bool encodeStatus(const StatusPayload& status, SensitiveBytes& output);
 [[nodiscard]] bool decodeStatus(const std::uint8_t* data, std::size_t size, StatusPayload& output);
 [[nodiscard]] bool writePacket(HANDLE pipe, const Packet& packet);
 [[nodiscard]] bool readPacket(HANDLE pipe, Packet& packet);
-[[nodiscard]] bool call(Operation operation, SensitiveBytes&& request, Packet& reply, DWORD waitMs = 2000);
+[[nodiscard]] bool awaitReplyAcknowledgment(HANDLE pipe, Operation operation, DWORD waitMs);
+[[nodiscard]] const wchar_t* callStageName(CallStage stage);
+[[nodiscard]] bool call(Operation operation, SensitiveBytes&& request, Packet& reply,
+    DWORD waitMs = 2000, CallDiagnostics* diagnostics = nullptr);
 
 } // namespace unlock_windows::saved_credential

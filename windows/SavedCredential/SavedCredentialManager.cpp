@@ -53,17 +53,19 @@ bool refresh(const HWND window) {
     Packet response;
     SensitiveBytes request;
     StatusPayload value;
-    const bool connected = call(Operation::status, std::move(request), response);
+    CallDiagnostics diagnostics;
+    const bool connected = call(Operation::status, std::move(request), response, 2000, &diagnostics);
     const bool accepted = connected && response.result == Result::success;
     if (!accepted ||
         !decodeStatus(response.payload.value.data(), response.payload.value.size(), value)) {
         gUi.snapshotAvailable = false;
-        const wchar_t* message = !connected
-            ? L"Saved credential service is unavailable or failed server verification. No operation can proceed."
+        const std::wstring message = !connected
+            ? L"Saved credential IPC failed at " + std::wstring(callStageName(diagnostics.stage)) +
+                L" (Win32 " + std::to_wstring(diagnostics.win32Error) + L"). No operation can proceed."
             : response.result == Result::rejected
                 ? L"No current LogonUI identity snapshot or the console is not unlocked. Lock this console, unlock with native PIN/password, then Refresh."
                 : L"Saved credential service returned an error or malformed identity status. No operation can proceed.";
-        SetWindowTextW(gUi.information, message);
+        SetWindowTextW(gUi.information, message.c_str());
         EnableWindow(GetDlgItem(window, kSet), FALSE);
         EnableWindow(GetDlgItem(window, kUpdate), FALSE);
         EnableWindow(GetDlgItem(window, kArm), FALSE);
@@ -81,11 +83,15 @@ bool refresh(const HWND window) {
         showError(window, L"Account provider ID cannot be displayed.");
         return false;
     }
-    const std::wstring details = L"Console account SID: " + gUi.status.identity.sid +
+    std::wstring details = L"Console account SID: " + gUi.status.identity.sid +
         L"\r\nWindows QualifiedUserName: " + gUi.status.identity.qualifiedUserName +
         L"\r\nAccount provider: " + provider +
         L"\r\nSaved copy: " + (gUi.status.credentialPresent ? L"present" : L"absent") +
         L"\r\nConfirm this is the account you intend to unlock.";
+    if (diagnostics.stage == CallStage::replyAcknowledgment) {
+        details += L"\r\nReply received, but acknowledgment failed (Win32 " +
+            std::to_wstring(diagnostics.win32Error) + L").";
+    }
     SetWindowTextW(gUi.information, details.c_str());
     EnableWindow(GetDlgItem(window, kSet), !gUi.status.credentialPresent);
     EnableWindow(GetDlgItem(window, kUpdate), gUi.status.credentialPresent);

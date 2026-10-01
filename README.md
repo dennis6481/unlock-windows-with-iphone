@@ -1,4 +1,4 @@
-Windows 端已有协议验证工具、前台 GATT host、UnlockService IPC host、PairingTool、已在 VM 验证手动 MSA 密码解锁的 Credential Provider、原生 Components Wizard 和只读 LSA package lookup 工具。自定义 LSA 包仅保留为研究工具，不在当前产品链路中。本机加密凭据服务及手动领取路径已在 VM 中成功解锁已有控制台会话，解锁前后的 SID 和 SessionId 一致；VM 还验证了成功领取后不能重放、服务重启使旧测试授权失效而保存的凭据仍可用，以及正常卸载时向导确认清除凭据。身份变化和非 LogonUI 调用方的拒绝测试仍未完成。Components Wizard 同时安装该服务和 Credential Provider，不改动 LSA 注册。
+Windows 端已有协议验证工具、前台 GATT host、PairingTool、Credential Provider、原生 Components Wizard 和只读 LSA package lookup 工具。自定义 LSA 包仅保留为研究工具，不在当前解锁链路中。VM 已验证本机加密凭据的手动领取及一次性测试授权；2026-10-02 实体机又验证了锁屏下 iPhone 签名获批后，手动点击磁贴、不输入密码即可解锁已有会话，原生密码入口仍可用。这不是后台自动解锁，也不代表所有拒绝路径已验收。身份变化、非 LogonUI 调用方等负面测试仍未完成。Components Wizard 同时安装保存凭据服务和 Credential Provider，不改动 LSA 注册。
 # Unlock Windows with iPhone
 
 这个项目探索并实现一条明确的认证链路：
@@ -35,7 +35,7 @@ Windows 端已有协议验证工具、前台 GATT host、UnlockService IPC host�
 - 注册到 LSASS 并完成真实 token/锁屏流程的无密码 LSA Authentication Package。
 - “检测到 iPhone 后自动解锁”的端到端流程。
 
-Windows 侧当前没有生产安装包、后台服务或可交付的登录组件；前台 GATT、IPC、受保护公钥登记、配对确认工具、VM-only Credential Provider/LSA 注册脚本和测试 shell 可以在 Windows SDK 环境中编译验证。
+Windows 侧已有可安装的测试用 LocalSystem 保存凭据服务和 Credential Provider，并完成一次实体机手动手机批准解锁；仍没有可交付的生产安装包或后台自动解锁。前台 GATT、IPC、受保护公钥登记、配对确认工具及独立的 LSA 研究工具保留在仓库中。
 
 不会用软件私钥、密码硬编码、静默重试或吞掉异常来伪造这些功能。某个阶段未实现或系统拒绝访问时，App/服务应报告明确错误。
 
@@ -208,7 +208,7 @@ Windows Hello / WebAuthn 可以作为交互式登录或凭据能力的研究方�
 
 ## Windows：安装方式
 
-完整 Windows 组件尚未实现，因此现在没有可交付的 Windows MSI、服务或生产登录组件，也不应把原型注册到日常使用系统。当前仓库已经有协议/CNG 库、前台 GATT host、IPC host、PairingTool、Credential Provider shell、build-only LSA package 和仅供 VM 使用的注册回滚脚本；登录组件仍只能在一次性 VM 中构建和验证。
+完整的后台自动解锁组件尚未实现，也没有可交付的生产 MSI。当前 Components Wizard 可安装测试用 LocalSystem 服务和 Credential Provider；前台 GATT + 实体 iPhone 已在锁屏下完成手动批准解锁。自定义 LSA 包仅用于隔离研究，测试组件不应因这次成功就被视为适合日常使用系统的产品版本。
 
 下一阶段的开发环境预期为：
 
@@ -247,16 +247,12 @@ Windows SDK 目标已在当前 Windows 环境完成构建和本机 CTest 验证�
 
 ## Windows：使用方法（当前阶段）
 
-当前还不能完成端到端自动解锁，因为 Windows 认证组件尚未实现。当前原型可以先按下面的流程登记公钥并验证 BLE/IPC 链路：
+当前还没有自动提交。以下手动手机批准路径已在实体机锁屏状态下端到端解锁已有会话；旧的 `unlock_service_host` 只用于独立协议诊断，不参与保存凭据解锁：
 
-1. 启动 `unlock_service_host` 和前台 `unlock_gatt_host`。
-2. 在 iPhone 点击“准备密钥”，再点击“登记到 Windows”；Windows 通知显示候选公钥指纹，确认与 iPhone 指纹一致后点击 Confirm enrollment。
-3. iPhone 再点击“开始连接”；它通过 GATT 发送 assertion，UnlockService 从受保护登记存储加载公钥并返回验证结果。
-4. 后续再安装带 package identity 的 `GattHost`，并将 `UnlockService` 转换为受保护的 Windows Service。
-5. 锁屏时由认证链路生成 challenge，iPhone 返回签名 assertion。
-6. `UnlockService` 和 `LSAAuthenticationPackage` 独立验证 assertion，并将公钥映射到指定 Windows 用户。
-7. 认证包返回 Windows 登录 Token；Windows Hello/PIN/密码仍可作为用户主动选择的 fallback。
-8. 任一验证、超时、权限或系统 API 错误都停止本次自动解锁并保留明确日志。
+1. Components Wizard 安装保存凭据 LocalSystem 服务与 Credential Provider；在已解锁控制台登记本机 MSA 凭据副本，使用提升权限运行的 PairingTool 确认并登记同一账户 SID 的 iPhone 公钥。
+2. 在控制台启动前台 `unlock_gatt_host`，锁定已有会话；iPhone App 前台点击“开始连接”。GATT 只转送 challenge 和签名 assertion，LocalSystem 服务负责验签、SID/session 核对及短期一次性批准。
+3. 手机显示 `unlock_approved` 仅表示批准已就绪。用户仍需手动选择锁屏磁贴的保存凭据选项并提交；Credential Provider 在 LogonUI 内打包凭据，交由原生 Negotiate 完成解锁。原生 PIN/密码入口保持可用。
+4. 错误签名、过期、重放、身份或会话不匹配、服务不可用时拒绝本次批准；后台 GATT 与自动提交留待后续阶段。测试步骤及未验收边界见 `windows/GattHost/README.md` 和 `windows/SavedCredential/README.md`。
 
 ## 当前验证状态
 
@@ -294,7 +290,7 @@ LSA 包属于系统级登录组件。未完成隔离测试、签名、账户映�
 - `windows/UnlockService/UnlockServiceCore` 已独立实现 challenge 新鲜度、单次使用、assertion JSON 解析、P-256 公钥指纹匹配和 CNG 验签；`unlock_service_host` 通过同用户 named pipe 使用它，并从 DPAPI/ACL 保护的登记文件加载公钥及其当前 Windows 用户 SID。
 - `unlock_pairing_tool` 已实现 Windows 通知确认按钮；iOS 可通过 GATT 发送登记候选公钥，但没有点击 Confirm 就不会写入公钥。
 - Windows 本机的 `unlock_protocol_tests`、`unlock_service_tests`、`unlock_service_ipc_tests` 和 `unlock_enrollment_store_tests` 均已通过；全部 Windows 目标已完成 SDK 构建。
-- SID 记录已经落地。一次性 Windows 11 ARM VM 中 LSA package 已能 lookup 到 package ID，Credential Provider tile 已显示；旧 DLL 因 x64 架构不匹配且拒绝 `CPUS_LOGON` 而只显示 PIN。当前 tile 点击后已到达 LSA lookup，但尚无待消费的 iPhone approval。无密码 token 构造仍处于上述 Known issue 的暂停状态；approval 交接、后台/锁屏生命周期和真正的 Windows Service 尚未形成端到端解锁链路。
+- 历史 LSA 研究：一次性 Windows 11 ARM VM 中曾完成 package lookup，但无密码 token 构造仍受上述 Known issue 阻塞，未进入当前产品链路。当前保存凭据服务已在实体机验证手机批准后的手动解锁；后台蓝牙生命周期、自动提交和完整负面测试尚未完成。
 
 ## License
 
@@ -315,6 +311,15 @@ the same transaction. Normal removal requires confirmed credential deletion;
 unconfirmed-credential diagnostic state when deletion cannot be verified.
 
 ## MSA password-backed unlock branch
+
+The 2 Oct 2026 physical-machine test exposed a client permission issue:
+the unelevated GATT host could not verify the LocalSystem pipe server through
+`OpenProcessToken`. The first correction still returned server-verification
+access denied on retest. The source now uses SCM service identity/running PID
+and the connected pipe's server PID/session without opening the SYSTEM process.
+Logs include the verification substep and Windows error. After rebuilding,
+the unelevated foreground GATT host reached the service on the locked physical
+machine and relayed an accepted challenge and signed assertion.
 
 The active engineering branch tests Windows-native password authentication for
 an existing Microsoft Account console session. Gate A/B now uses a diagnostic
@@ -343,8 +348,18 @@ direct inspection of the DPAPI ciphertext. Identity-change and non-LogonUI
 caller rejection, emergency removal, and the desktop/linked-token baseline
 remain unverified. An attempted claim at first logon after a full Windows
 reboot was refused, but first logon is outside the existing-session unlock
-milestone and does not prove why the request was refused. iPhone approval and
-automatic submission remain unimplemented. See the
+milestone and does not prove why the request was refused. The
+iPhone-to-saved-credential bridge puts signature verification and a
+one-time grant inside the LocalSystem service; GATT only transports messages
+and the tile still requires manual submission. On 2 Oct 2026, the operator
+reported `unlock_approved` on the phone, followed by a manual saved-credential
+tile submission without typing a password and a successful existing-session
+unlock on the physical machine. Native password entry remained usable. An
+earlier attempt reached Windows but was rejected as an invalid username or
+password; the next claim was refused, consistent with one-use grant
+consumption. A later successful attempt does not establish the exact cause of
+the earlier password rejection. Automatic submission and full negative-path
+acceptance remain unimplemented/unverified. See the
 [manual credential probe](windows/CredentialProvider/README.md) and
 [saved-credential procedure](windows/SavedCredential/README.md).
 

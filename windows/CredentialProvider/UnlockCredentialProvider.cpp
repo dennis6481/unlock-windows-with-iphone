@@ -42,7 +42,7 @@ const FieldDefinition kFields[] = {
     {kIconField, CPFT_TILE_IMAGE, nullptr, CPFG_CREDENTIAL_PROVIDER_LOGO},
     {kTitleField, CPFT_LARGE_TEXT, L"MSA password probe", GUID{}},
     {kPasswordField, CPFT_PASSWORD_TEXT, L"Microsoft account password", GUID{}},
-    {kSavedCredentialField, CPFT_CHECKBOX, L"Use saved credential (VM test)", GUID{}},
+    {kSavedCredentialField, CPFT_CHECKBOX, L"Use authorized saved credential", GUID{}},
     {kSubmitField, CPFT_SUBMIT_BUTTON, L"Test unlock", GUID{}},
 };
 
@@ -499,7 +499,7 @@ public:
         if (events_ != nullptr) {
             const auto status = events_->SetFieldString(this, kPasswordField, L"");
             if (FAILED(status)) return status;
-            return events_->SetFieldCheckbox(this, kSavedCredentialField, FALSE, L"Use saved credential (VM test)");
+            return events_->SetFieldCheckbox(this, kSavedCredentialField, FALSE, L"Use authorized saved credential");
         }
         return S_OK;
     }
@@ -580,7 +580,7 @@ public:
         *label = nullptr;
         if (fieldId != kSavedCredentialField) return E_INVALIDARG;
         *checked = useSavedCredential_ ? TRUE : FALSE;
-        return copyString(L"Use saved credential (VM test)", label);
+        return copyString(L"Use authorized saved credential", label);
     }
 
     HRESULT STDMETHODCALLTYPE GetSubmitButtonValue(
@@ -722,22 +722,20 @@ public:
                 unlock_windows::saved_credential::Identity identity{
                     userSid_, qualifiedUserName_, providerId_
                 };
-                if (!savedNonceAvailable_) {
-                    unlock_windows::saved_credential::SensitiveBytes captureRequest;
-                    unlock_windows::saved_credential::Packet captureReply;
-                    if (!unlock_windows::saved_credential::encodeIdentity(identity, captureRequest) ||
-                        !unlock_windows::saved_credential::call(
-                            unlock_windows::saved_credential::Operation::captureIdentity,
-                            std::move(captureRequest), captureReply
-                        ) || captureReply.result != unlock_windows::saved_credential::Result::success ||
-                        captureReply.payload.value.size() != savedNonce_.size()) {
-                        clearPassword(password_);
-                        return copyString(L"Saved credential identity capture failed while submitting. Use the native PIN, then try a new test.",
-                            optionalStatusText);
-                    }
-                    std::copy_n(captureReply.payload.value.begin(), savedNonce_.size(), savedNonce_.begin());
-                    savedNonceAvailable_ = true;
+                unlock_windows::saved_credential::SensitiveBytes captureRequest;
+                unlock_windows::saved_credential::Packet captureReply;
+                if (!unlock_windows::saved_credential::encodeIdentity(identity, captureRequest) ||
+                    !unlock_windows::saved_credential::call(
+                        unlock_windows::saved_credential::Operation::captureIdentity,
+                        std::move(captureRequest), captureReply
+                    ) || captureReply.result != unlock_windows::saved_credential::Result::success ||
+                    captureReply.payload.value.size() != savedNonce_.size()) {
+                    clearPassword(password_);
+                    return copyString(L"Saved credential identity capture failed while submitting. Use the native PIN, then request a new approval.",
+                        optionalStatusText);
                 }
+                std::copy_n(captureReply.payload.value.begin(), savedNonce_.size(), savedNonce_.begin());
+                savedNonceAvailable_ = true;
                 unlock_windows::saved_credential::SensitiveBytes request;
                 unlock_windows::saved_credential::Packet reply;
                 if (!unlock_windows::saved_credential::encodeIdentity(identity, request)) {
@@ -752,7 +750,7 @@ public:
                     reply.payload.value.empty() || reply.payload.value.size() > 2048 ||
                     reply.payload.value.size() % sizeof(wchar_t) != 0) {
                     clearPassword(password_);
-                    return copyString(L"Saved credential claim was refused. Re-authorize one VM test on the desktop.",
+                    return copyString(L"Saved credential claim was refused. Request a new iPhone approval or authorize a new manual test.",
                         optionalStatusText);
                 }
                 const auto chars = reply.payload.value.size() / sizeof(wchar_t);

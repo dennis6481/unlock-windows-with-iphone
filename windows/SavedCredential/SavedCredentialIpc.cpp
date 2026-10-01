@@ -3,6 +3,7 @@
 #include "SavedCredentialIpc.h"
 
 #include <sddl.h>
+#include <winsvc.h>
 
 #include <algorithm>
 #include <cstring>
@@ -137,7 +138,7 @@ bool readPacketWithTimeout(const HANDLE pipe, Packet& packet, const DWORD waitMs
     if (!transferExactWithTimeout(pipe, &header, sizeof(header), false, waitMs)) return false;
     if (header.magic != kMagic || header.version != kVersion || header.size > kMaxPacket ||
         header.operation < static_cast<std::uint16_t>(Operation::captureIdentity) ||
-        header.operation > static_cast<std::uint16_t>(Operation::clearForRemoval)) {
+        header.operation > static_cast<std::uint16_t>(Operation::reloadPhoneEnrollment)) {
         SetLastError(ERROR_INVALID_DATA);
         return false;
     }
@@ -150,38 +151,82 @@ bool readPacketWithTimeout(const HANDLE pipe, Packet& packet, const DWORD waitMs
     return true;
 }
 
-bool isExpectedServer(const HANDLE pipe) {
+struct ScopedService final {
+    SC_HANDLE value;
+    explicit ScopedService(SC_HANDLE handle) : value(handle) {}
+    ScopedService(const ScopedService&) = delete;
+    ScopedService& operator=(const ScopedService&) = delete;
+    ~ScopedService() {
+        const DWORD error = GetLastError();
+        if (value != nullptr) CloseServiceHandle(value);
+        SetLastError(error);
+    }
+};
+
+bool isExpectedServer(const HANDLE pipe, CallDiagnostics* const diagnostics) {
+    const auto step = [diagnostics](const wchar_t* name) {
+        if (diagnostics != nullptr) diagnostics->serverCheck = name;
+    };
+    const auto mismatch = []() {
+        SetLastError(ERROR_ACCESS_DENIED);
+        return false;
+    };
     ULONG pid = 0;
+    step(L"pipe-server-pid");
     if (!GetNamedPipeServerProcessId(pipe, &pid)) return false;
-    const HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-    if (process == nullptr) return false;
-    wchar_t image[MAX_PATH]{};
-    DWORD imageSize = MAX_PATH;
+    step(L"scm-connect");
+    ScopedService manager(OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT));
+    if (manager.value == nullptr) return false;
+    step(L"scm-open-service");
+    ScopedService service(OpenServiceW(manager.value, kServiceName,
+        SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS));
+    if (service.value == nullptr) return false;
+    SERVICE_STATUS_PROCESS status{};
+    DWORD bytes = 0;
+    step(L"scm-running-pid");
+    if (!QueryServiceStatusEx(service.value, SC_STATUS_PROCESS_INFO,
+            reinterpret_cast<LPBYTE>(&status), sizeof(status), &bytes)) return false;
+    if (status.dwCurrentState != SERVICE_RUNNING || status.dwProcessId != pid ||
+        status.dwServiceType != SERVICE_WIN32_OWN_PROCESS) return mismatch();
+
+    DWORD configBytes = 0;
+    step(L"scm-config-size");
+    if (QueryServiceConfigW(service.value, nullptr, 0, &configBytes) ||
+        GetLastError() != ERROR_INSUFFICIENT_BUFFER ||
+        configBytes < sizeof(QUERY_SERVICE_CONFIGW) || configBytes > 64 * 1024) return mismatch();
+    std::vector<std::uint8_t> configBuffer(configBytes);
+    const auto config = reinterpret_cast<LPQUERY_SERVICE_CONFIGW>(configBuffer.data());
+    step(L"scm-config");
+    if (!QueryServiceConfigW(service.value, config, configBytes, &configBytes)) return false;
+
+    step(L"system-directory");
     wchar_t systemDirectory[MAX_PATH]{};
     const UINT systemSize = GetSystemDirectoryW(systemDirectory, MAX_PATH);
-    DWORD session = 0xffffffff;
-    const bool pathValid = QueryFullProcessImageNameW(process, 0, image, &imageSize) &&
-        systemSize > 0 && systemSize < MAX_PATH &&
-        _wcsicmp(image, (std::wstring(systemDirectory) + L"\\" + kServiceExeName).c_str()) == 0 &&
-        ProcessIdToSessionId(pid, &session) && session == 0;
-    HANDLE token = nullptr;
-    const bool tokenOpened = pathValid && OpenProcessToken(process, TOKEN_QUERY, &token);
-    bool systemUser = false;
-    if (tokenOpened) {
-        DWORD bytes = 0;
-        GetTokenInformation(token, TokenUser, nullptr, 0, &bytes);
-        std::vector<std::uint8_t> buffer(bytes);
-        PSID systemSid = nullptr;
-        if (bytes >= sizeof(TOKEN_USER) &&
-            GetTokenInformation(token, TokenUser, buffer.data(), bytes, &bytes) &&
-            ConvertStringSidToSidW(L"S-1-5-18", &systemSid)) {
-            systemUser = EqualSid(reinterpret_cast<TOKEN_USER*>(buffer.data())->User.Sid, systemSid);
-        }
-        if (systemSid != nullptr) LocalFree(systemSid);
-        CloseHandle(token);
-    }
-    CloseHandle(process);
-    return systemUser;
+    if (systemSize == 0) return false;
+    if (systemSize >= MAX_PATH) return mismatch();
+    const auto expectedImage = std::wstring(systemDirectory) + L"\\" + kServiceExeName;
+    const auto expectedCommand = L"\"" + expectedImage + L"\"";
+    step(L"scm-service-identity");
+    if (config->dwServiceType != SERVICE_WIN32_OWN_PROCESS ||
+        config->lpServiceStartName == nullptr ||
+        _wcsicmp(config->lpServiceStartName, L"LocalSystem") != 0 ||
+        config->lpBinaryPathName == nullptr ||
+        _wcsicmp(config->lpBinaryPathName, expectedCommand.c_str()) != 0) return mismatch();
+    ULONG session = 0xffffffff;
+    step(L"pipe-server-session");
+    if (!GetNamedPipeServerSessionId(pipe, &session)) return false;
+    if (session != 0) return mismatch();
+    ULONG currentPid = 0;
+    step(L"pipe-recheck-pid");
+    if (!GetNamedPipeServerProcessId(pipe, &currentPid)) return false;
+    step(L"scm-recheck-pid");
+    if (!QueryServiceStatusEx(service.value, SC_STATUS_PROCESS_INFO,
+            reinterpret_cast<LPBYTE>(&status), sizeof(status), &bytes)) return false;
+    if (currentPid != pid || status.dwProcessId != pid ||
+        status.dwCurrentState != SERVICE_RUNNING ||
+        status.dwServiceType != SERVICE_WIN32_OWN_PROCESS) return mismatch();
+    step(L"");
+    return true;
 }
 
 } // namespace
@@ -271,7 +316,7 @@ bool readPacket(const HANDLE pipe, Packet& packet) {
     if (!readExact(pipe, &header, sizeof(header)) || header.magic != kMagic ||
         header.version != kVersion || header.size > kMaxPacket ||
         header.operation < static_cast<std::uint16_t>(Operation::captureIdentity) ||
-        header.operation > static_cast<std::uint16_t>(Operation::clearForRemoval)) return false;
+        header.operation > static_cast<std::uint16_t>(Operation::reloadPhoneEnrollment)) return false;
     packet.payload.clear();
     packet.payload.value.resize(header.size);
     if (header.size != 0 && !readExact(pipe, packet.payload.value.data(), header.size)) return false;
@@ -319,11 +364,15 @@ const wchar_t* callStageName(const CallStage stage) {
     return L"unknown";
 }
 
-bool call(const Operation operation, SensitiveBytes&& request, Packet& reply, const DWORD waitMs,
-          CallDiagnostics* const diagnostics) {
+bool callOnPipe(const wchar_t* const pipeName, const Operation operation,
+                SensitiveBytes&& request, Packet& reply, const DWORD waitMs,
+                CallDiagnostics* const diagnostics) {
     if (diagnostics != nullptr) *diagnostics = {};
     const auto failed = [diagnostics](const CallStage stage, const DWORD error) {
-        if (diagnostics != nullptr) *diagnostics = {stage, error};
+        if (diagnostics != nullptr) {
+            diagnostics->stage = stage;
+            diagnostics->win32Error = error;
+        }
         SetLastError(error);
         return false;
     };
@@ -335,10 +384,10 @@ bool call(const Operation operation, SensitiveBytes&& request, Packet& reply, co
     for (;;) {
         const ULONGLONG now = GetTickCount64();
         const DWORD remaining = now < deadline ? static_cast<DWORD>(deadline - now) : 0;
-        if (!WaitNamedPipeW(kPipeName, remaining)) {
+        if (!WaitNamedPipeW(pipeName, remaining)) {
             return failed(CallStage::waitForPipe, GetLastError());
         }
-        pipe = CreateFileW(kPipeName, 0x0012019B, 0, nullptr, OPEN_EXISTING,
+        pipe = CreateFileW(pipeName, 0x0012019B, 0, nullptr, OPEN_EXISTING,
             FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr);
         if (pipe != INVALID_HANDLE_VALUE) break;
         const DWORD error = GetLastError();
@@ -346,9 +395,10 @@ bool call(const Operation operation, SensitiveBytes&& request, Packet& reply, co
             return failed(CallStage::openPipe, error);
         }
     }
-    if (!isExpectedServer(pipe)) {
+    if (!isExpectedServer(pipe, diagnostics)) {
+        const DWORD error = GetLastError();
         CloseHandle(pipe);
-        return failed(CallStage::serverVerification, ERROR_ACCESS_DENIED);
+        return failed(CallStage::serverVerification, error);
     }
     Packet outbound;
     outbound.operation = operation;
@@ -384,6 +434,20 @@ bool call(const Operation operation, SensitiveBytes&& request, Packet& reply, co
         return failed(failureStage, failureError);
     }
     return true;
+}
+
+bool call(const Operation operation, SensitiveBytes&& request, Packet& reply, const DWORD waitMs,
+          CallDiagnostics* const diagnostics) {
+    return callOnPipe(kPipeName, operation, std::move(request), reply, waitMs, diagnostics);
+}
+
+bool callPhone(const Operation operation, SensitiveBytes&& request, Packet& reply, const DWORD waitMs,
+               CallDiagnostics* const diagnostics) {
+    if (operation != Operation::issuePhoneChallenge && operation != Operation::submitPhoneAssertion) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    return callOnPipe(kPhonePipeName, operation, std::move(request), reply, waitMs, diagnostics);
 }
 
 } // namespace unlock_windows::saved_credential

@@ -2,6 +2,8 @@
 
 #include "SavedCredentialIpc.h"
 #include "SavedCredentialVault.h"
+#include "EnrollmentStore.h"
+#include "UnlockServiceCore.h"
 
 #include <WtsApi32.h>
 #include <bcrypt.h>
@@ -13,10 +15,15 @@
 #include <cwchar>
 #include <exception>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
+#include <utility>
 #include <vector>
+#include <winrt/base.h>
 
 namespace {
 
@@ -26,6 +33,8 @@ constexpr ULONGLONG kGrantLifetimeMs = 120 * 1000;
 constexpr ACCESS_MASK kClientPipeRights = 0x0012019B;
 
 std::atomic_bool gStopping{false};
+std::atomic<ULONGLONG> gConsoleGeneration{0};
+std::atomic_bool gPipeFailed{false};
 SERVICE_STATUS_HANDLE gStatusHandle = nullptr;
 SERVICE_STATUS gStatus{};
 
@@ -245,13 +254,43 @@ struct Grant final {
     DWORD session = 0xffffffff;
     ULONGLONG expiresAt = 0;
     std::array<std::uint8_t, kNonceSize> nonce{};
+    ULONGLONG consoleGeneration = 0;
+    bool phone = false;
 };
+
+struct PhoneChallenge final {
+    Identity identity;
+    DWORD session = 0xffffffff;
+    ULONGLONG consoleGeneration = 0;
+};
+
+std::int64_t nowMilliseconds() {
+    FILETIME now{};
+    GetSystemTimeAsFileTime(&now);
+    ULARGE_INTEGER ticks{};
+    ticks.LowPart = now.dwLowDateTime;
+    ticks.HighPart = now.dwHighDateTime;
+    constexpr std::uint64_t offset = 116444736000000000ULL;
+    return static_cast<std::int64_t>((ticks.QuadPart - offset) / 10000ULL);
+}
+
+void setText(SensitiveBytes& target, const std::string& value) {
+    target.value.assign(value.begin(), value.end());
+}
+
+std::string phoneResult(const char* const status, const bool authenticated = false) {
+    return std::string("{\"authenticated\":") + (authenticated ? "true" : "false") +
+        ",\"status\":\"" + status + "\"}";
+}
+
+enum class Endpoint { credential, phone };
 
 class Handler final {
 public:
-    Handler() : vault_() {}
+    Handler() : vault_() { reloadEnrollment(); }
 
-    Packet process(const HANDLE pipe, Packet& request) {
+    Packet process(const HANDLE pipe, Packet& request, const Endpoint endpoint) {
+        std::lock_guard lock(mutex_);
         Packet response;
         response.operation = request.operation;
         response.result = Result::rejected;
@@ -260,18 +299,26 @@ public:
             const auto console = currentConsole();
             if (client.session != console.session) return response;
             if (removing_ && request.operation != Operation::clearForRemoval) return response;
+            if (endpoint == Endpoint::phone) {
+                if (client.logonUi || client.userSid != console.sid || !console.locked) return response;
+                if (request.operation != Operation::issuePhoneChallenge &&
+                    request.operation != Operation::submitPhoneAssertion) return response;
+                processPhone(request, console, response);
+                return response;
+            }
+            if (request.operation == Operation::issuePhoneChallenge ||
+                request.operation == Operation::submitPhoneAssertion) return response;
             if (request.operation == Operation::captureIdentity) {
                 if (!client.logonUi || !console.locked) return response;
                 Identity identity;
                 if (!decodeIdentity(request.payload.value.data(), request.payload.value.size(), identity) ||
                     identity.sid != console.sid) return response;
                 const ULONGLONG now = GetTickCount64();
-                const bool reuseAuthorizedNonce = snapshot_ && grant_ &&
-                    snapshot_->session == console.session &&
-                    sameIdentity(snapshot_->identity, identity) &&
+                const bool reuseAuthorizedNonce = grant_ &&
                     grant_->session == console.session &&
                     sameIdentity(grant_->identity, identity) &&
-                    grant_->nonce == snapshot_->nonce && now < grant_->expiresAt;
+                    grant_->consoleGeneration == gConsoleGeneration.load() &&
+                    now < grant_->expiresAt;
                 if (!snapshot_ || snapshot_->session != console.session ||
                     !sameIdentity(snapshot_->identity, identity) || now >= snapshot_->expiresAt) {
                     snapshot_ = Snapshot{identity, console.session, now + kSnapshotLifetimeMs, {}};
@@ -287,6 +334,7 @@ public:
                     }
                 } else {
                     snapshot_->expiresAt = now + kSnapshotLifetimeMs;
+                    if (reuseAuthorizedNonce) snapshot_->nonce = grant_->nonce;
                 }
                 response.payload.value.assign(snapshot_->nonce.begin(), snapshot_->nonce.end());
             } else if (request.operation == Operation::status) {
@@ -312,15 +360,18 @@ public:
                     request.payload.value.data() + kNonceSize + sizeof(passwordBytes),
                     passwordBytes, request.operation == Operation::updateCredential);
                 grant_.reset();
+                phoneChallenge_.reset();
             } else if (request.operation == Operation::clearCredential) {
                 if (!client.admin || console.locked || !request.payload.value.empty()) return response;
                 vault_.clear();
                 grant_.reset();
+                phoneChallenge_.reset();
             } else if (request.operation == Operation::clearForRemoval) {
                 if (!client.admin || console.locked || !request.payload.value.empty()) return response;
                 vault_.clear();
                 grant_.reset();
                 snapshot_.reset();
+                phoneChallenge_.reset();
                 removing_ = true;
             } else if (request.operation == Operation::armTest) {
                 if (!client.admin || console.locked || !freshSnapshot(console) ||
@@ -331,10 +382,17 @@ public:
                 const auto stored = vault_.storedIdentity();
                 if (!stored || !sameIdentity(*stored, snapshot_->identity)) return response;
                 grant_ = Grant{*stored, console.session, GetTickCount64() + kGrantLifetimeMs,
-                    snapshot_->nonce};
+                    snapshot_->nonce, gConsoleGeneration.load()};
+                phoneChallenge_.reset();
+            } else if (request.operation == Operation::reloadPhoneEnrollment) {
+                if (!client.admin || console.locked || !request.payload.value.empty()) return response;
+                reloadEnrollment();
+                grant_.reset();
+                phoneChallenge_.reset();
             } else if (request.operation == Operation::claimCredential) {
                 if (!client.logonUi || !console.locked || !grant_ ||
-                    grant_->session != console.session || GetTickCount64() >= grant_->expiresAt) return response;
+                    grant_->session != console.session || GetTickCount64() >= grant_->expiresAt ||
+                    grant_->consoleGeneration != gConsoleGeneration.load()) return response;
                 Identity identity;
                 if (request.payload.value.size() <= kNonceSize ||
                     !decodeIdentity(request.payload.value.data(),
@@ -346,7 +404,9 @@ public:
                 ULONG currentPipePid = 0;
                 if (!GetNamedPipeClientProcessId(pipe, &currentPipePid) ||
                     currentPipePid != client.pid ||
-                    WaitForSingleObject(client.process.value, 0) != WAIT_TIMEOUT) return response;
+                    WaitForSingleObject(client.process.value, 0) != WAIT_TIMEOUT ||
+                    grant_->consoleGeneration != gConsoleGeneration.load() ||
+                    (grant_->phone && !enrollmentMatches())) return response;
                 grant_.reset();
                 response.payload = vault_.release(identity);
             } else {
@@ -363,36 +423,161 @@ public:
     }
 
 private:
+    void reloadEnrollment() {
+        phoneCore_.clearEnrolledPublicKey();
+        enrolledSid_.clear();
+        enrolledKey_.clear();
+        const auto record = enrollmentStore_.load();
+        if (!record) return;
+        phoneCore_.setEnrolledPublicKey(record->publicKey);
+        enrolledKey_ = record->publicKey;
+        enrolledSid_ = record->accountSid;
+        std::string sidAscii;
+        sidAscii.reserve(enrolledSid_.size());
+        for (const wchar_t character : enrolledSid_) {
+            if (character < L'!' || character > L'~') fail("enrollment SID is not ASCII");
+            sidAscii.push_back(static_cast<char>(character));
+        }
+        phoneCore_.setEnrolledAccountSid(std::move(sidAscii));
+    }
+
+    bool enrollmentMatches() const {
+        const auto current = enrollmentStore_.load();
+        return current && !enrolledSid_.empty() && current->accountSid == enrolledSid_ &&
+            current->publicKey == enrolledKey_;
+    }
+
+    void processPhone(Packet& request, const Console& console, Packet& response) {
+        const ULONGLONG generation = gConsoleGeneration.load();
+        if (request.operation == Operation::issuePhoneChallenge) {
+            if (!request.payload.value.empty() || enrolledSid_ != console.sid ||
+                !enrollmentMatches()) return;
+            const auto stored = vault_.storedIdentity();
+            if (!stored || stored->sid != console.sid) return;
+            if (grant_ && GetTickCount64() < grant_->expiresAt &&
+                grant_->consoleGeneration == generation) return;
+            grant_.reset();
+            phoneChallenge_.reset();
+            const auto issued = phoneCore_.issueChallenge(nowMilliseconds());
+            if (generation != gConsoleGeneration.load()) return;
+            phoneChallenge_ = PhoneChallenge{*stored, console.session, generation};
+            setText(response.payload, issued.json);
+            response.result = Result::success;
+            return;
+        }
+        if (request.payload.value.empty() || request.payload.value.size() > 4096 ||
+            !phoneChallenge_ || phoneChallenge_->session != console.session ||
+            phoneChallenge_->consoleGeneration != generation ||
+            phoneChallenge_->identity.sid != enrolledSid_ || !enrollmentMatches() ||
+            phoneChallenge_->identity.sid != console.sid) return;
+        const auto stored = vault_.storedIdentity();
+        if (!stored || !sameIdentity(*stored, phoneChallenge_->identity)) return;
+        const std::string assertion(request.payload.value.begin(), request.payload.value.end());
+        const auto result = phoneCore_.verifyAssertion(assertion, nowMilliseconds());
+        if (!result.unlockApproved()) {
+            setText(response.payload, phoneResult(unlock_windows::service::assertionCodeName(result.code)));
+            response.result = Result::success;
+            return;
+        }
+        const auto approved = phoneCore_.consumeUnlockApproval(nowMilliseconds());
+        if (!approved || std::wstring(approved->accountSid.begin(), approved->accountSid.end()) !=
+                phoneChallenge_->identity.sid || generation != gConsoleGeneration.load()) {
+            phoneChallenge_.reset();
+            return;
+        }
+        std::array<std::uint8_t, kNonceSize> nonce{};
+        if (snapshot_ && snapshot_->session == console.session &&
+            sameIdentity(snapshot_->identity, *stored) && GetTickCount64() < snapshot_->expiresAt) {
+            nonce = snapshot_->nonce;
+        } else if (BCryptGenRandom(nullptr, nonce.data(), kNonceSize,
+                BCRYPT_USE_SYSTEM_PREFERRED_RNG) < 0) {
+            fail("phone grant nonce RNG failed");
+        }
+        grant_ = Grant{*stored, console.session, GetTickCount64() + kGrantLifetimeMs,
+            nonce, generation, true};
+        phoneChallenge_.reset();
+        setText(response.payload, phoneResult("unlock_approved", true));
+        response.result = Result::success;
+    }
+
     bool freshSnapshot(const Console& console) const {
         return snapshot_ && snapshot_->session == console.session &&
             snapshot_->identity.sid == console.sid && GetTickCount64() < snapshot_->expiresAt;
     }
 
     Vault vault_;
+    unlock_windows::service::EnrollmentStore enrollmentStore_;
+    unlock_windows::service::UnlockServiceCore phoneCore_;
+    std::wstring enrolledSid_;
+    std::vector<std::uint8_t> enrolledKey_;
     std::optional<Snapshot> snapshot_;
     std::optional<Grant> grant_;
+    std::optional<PhoneChallenge> phoneChallenge_;
+    std::mutex mutex_;
     bool removing_ = false;
 };
 
 void reportServiceState(const DWORD state, const DWORD error = NO_ERROR) {
     gStatus.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
     gStatus.dwCurrentState = state;
-    gStatus.dwControlsAccepted = state == SERVICE_RUNNING ? SERVICE_ACCEPT_STOP : 0;
+    gStatus.dwControlsAccepted = state == SERVICE_RUNNING
+        ? SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SESSIONCHANGE : 0;
     gStatus.dwWin32ExitCode = error;
     gStatus.dwWaitHint = state == SERVICE_STOP_PENDING ? 5000 : 0;
     SetServiceStatus(gStatusHandle, &gStatus);
 }
 
-DWORD WINAPI serviceControl(const DWORD control, DWORD, void*, void*) {
+void wakePipe(const wchar_t* const name) {
+    const HANDLE wake = CreateFileW(name, kClientPipeRights, 0, nullptr,
+        OPEN_EXISTING, SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr);
+    if (wake != INVALID_HANDLE_VALUE) CloseHandle(wake);
+}
+
+DWORD WINAPI serviceControl(const DWORD control, const DWORD eventType, void*, void*) {
     if (control == SERVICE_CONTROL_STOP) {
         gStopping = true;
         reportServiceState(SERVICE_STOP_PENDING);
-        const HANDLE wake = CreateFileW(kPipeName, kClientPipeRights, 0, nullptr,
-            OPEN_EXISTING, SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr);
-        if (wake != INVALID_HANDLE_VALUE) CloseHandle(wake);
+        wakePipe(kPipeName);
+        wakePipe(kPhonePipeName);
+        return NO_ERROR;
+    }
+    if (control == SERVICE_CONTROL_SESSIONCHANGE) {
+        if (eventType == WTS_SESSION_UNLOCK || eventType == WTS_SESSION_LOGOFF ||
+            eventType == WTS_CONSOLE_DISCONNECT || eventType == WTS_REMOTE_DISCONNECT) {
+            ++gConsoleGeneration;
+        }
         return NO_ERROR;
     }
     return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+void servePipe(const HANDLE pipe, Handler& handler, const Endpoint endpoint) {
+    while (!gStopping) {
+        const bool connected = ConnectNamedPipe(pipe, nullptr) ||
+            GetLastError() == ERROR_PIPE_CONNECTED;
+        if (!connected) {
+            if (!gStopping) gPipeFailed = true;
+            gStopping = true;
+            wakePipe(endpoint == Endpoint::phone ? kPipeName : kPhonePipeName);
+            return;
+        }
+        if (!gStopping) {
+            Packet request;
+            if (readPacket(pipe, request) && request.result == Result::success) {
+                auto response = handler.process(pipe, request, endpoint);
+                if (!writePacket(pipe, response)) {
+                    OutputDebugStringW(L"saved credential response write failed");
+                } else if (!awaitReplyAcknowledgment(pipe, request.operation, 2000)) {
+                    const std::wstring message = L"saved credential reply acknowledgment failed; win32=" +
+                        std::to_wstring(GetLastError());
+                    OutputDebugStringW(message.c_str());
+                }
+            } else {
+                OutputDebugStringW(L"saved credential request read failed");
+            }
+        }
+        DisconnectNamedPipe(pipe);
+    }
 }
 
 void WINAPI serviceMain(DWORD, LPWSTR*) {
@@ -415,29 +600,36 @@ void WINAPI serviceMain(DWORD, LPWSTR*) {
         LocalFree(descriptor);
         Handle pipe(rawPipe);
         if (pipe.value == INVALID_HANDLE_VALUE) fail("saved credential pipe creation failed");
+        descriptor = nullptr;
+        if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                L"D:P(A;;GA;;;SY)(A;;0x0012019B;;;AU)", SDDL_REVISION_1,
+                &descriptor, nullptr)) fail("phone approval pipe ACL creation failed");
+        attributes.lpSecurityDescriptor = descriptor;
+        const HANDLE rawPhonePipe = CreateNamedPipeW(kPhonePipeName,
+            PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+            1, kMaxPacket + 16, kMaxPacket + 16, 0, &attributes);
+        LocalFree(descriptor);
+        Handle phonePipe(rawPhonePipe);
+        if (phonePipe.value == INVALID_HANDLE_VALUE) fail("phone approval pipe creation failed");
         reportServiceState(SERVICE_RUNNING);
-        while (!gStopping) {
-            const bool connected = ConnectNamedPipe(pipe.value, nullptr) ||
-                GetLastError() == ERROR_PIPE_CONNECTED;
-            if (!connected) fail("saved credential pipe connection failed");
-            if (!gStopping) {
-                Packet request;
-                if (readPacket(pipe.value, request) && request.result == Result::success) {
-                    auto response = handler.process(pipe.value, request);
-                    if (!writePacket(pipe.value, response)) {
-                        OutputDebugStringW(L"saved credential response write failed");
-                    } else if (!awaitReplyAcknowledgment(pipe.value, request.operation, 2000)) {
-                        const std::wstring message = L"saved credential reply acknowledgment failed; win32=" +
-                            std::to_wstring(GetLastError());
-                        OutputDebugStringW(message.c_str());
-                    }
-                } else {
-                    OutputDebugStringW(L"saved credential request read failed");
-                }
+        std::thread phoneThread([&]() {
+            try {
+                winrt::init_apartment(winrt::apartment_type::multi_threaded);
+                servePipe(phonePipe.value, handler, Endpoint::phone);
+                winrt::uninit_apartment();
+            } catch (...) {
+                gPipeFailed = true;
+                gStopping = true;
+                wakePipe(kPipeName);
             }
-            DisconnectNamedPipe(pipe.value);
-        }
-        reportServiceState(SERVICE_STOPPED);
+        });
+        servePipe(pipe.value, handler, Endpoint::credential);
+        gStopping = true;
+        wakePipe(kPhonePipeName);
+        phoneThread.join();
+        reportServiceState(SERVICE_STOPPED,
+            gPipeFailed.load() ? ERROR_SERVICE_SPECIFIC_ERROR : NO_ERROR);
     } catch (const std::exception& error) {
         OutputDebugStringA(error.what());
         reportServiceState(SERVICE_STOPPED, ERROR_SERVICE_SPECIFIC_ERROR);

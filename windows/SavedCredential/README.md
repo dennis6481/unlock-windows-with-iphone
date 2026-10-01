@@ -1,9 +1,10 @@
 <!-- Created by Rui MA on 30 Sep 2026 -->
 
-# Saved Windows credential (VM prototype)
+# Saved Windows credential (manual unlock prototype)
 
 This prototype stores a local copy of an MSA password for **manual unlock of an
-existing physical-console session**. It is not an iPhone approval path and does
+existing physical-console session**. Its manually submitted iPhone-approval
+path unlocked an existing session on a physical machine on 2 Oct 2026; it does
 not auto-submit. The first VM run confirmed installation and identity display.
 A later VM run used a freshly authorized saved credential, without typing a
 password at the tile, to unlock the existing console SID and session. The VM
@@ -12,6 +13,54 @@ second time, a new authorization could, and an authorization issued before a
 service restart was refused afterward. Reauthorizing after that restart again
 unlocked with the saved credential. Keep a usable native Windows PIN/password
 tile and a disposable VM snapshot.
+
+## iPhone-approved manual submission (physical-machine success; negative tests pending)
+
+The same LocalSystem service now owns the iPhone challenge, P-256 verification,
+enrolled SID comparison and one-time credential grant. A separate local-only
+phone pipe accepts only challenge requests and signed assertions from the
+current console user/session; it never returns a password. The existing
+privileged pipe retains the LogonUI-only `claimCredential` operation and the
+administrator's independent `armTest` operation. GATT does not run the old
+`unlock_service_host` in this path. The pairing tool reloads the confirmed
+enrollment through the privileged pipe and must run elevated on the unlocked
+console; the stored iPhone SID must equal the saved-credential and console SID.
+Pipe clients verify the installed service through read-only SCM queries for its
+running PID, LocalSystem account and exact executable command, then compare
+the connected pipe's server PID/session with SCM's running own-process service.
+Normal GATT clients do not open the LocalSystem process or its token. After
+rebuilding, an unelevated foreground GATT client reached the service during a
+physical-machine lock-screen test.
+
+Challenge lifetime is 30 seconds; a verified assertion creates a one-use grant
+for at most 120 seconds. The service binds it to the existing locked console
+session and invalidates it after unlock/session change or service restart. The
+Credential Provider still uses its manual saved-credential checkbox and packs
+the password in LogonUI. It refreshes identity/nonce immediately before each
+manual claim, so a grant can be used even when the manager's five-minute
+snapshot or the tile's earlier nonce has expired. The exact
+QualifiedUserName and ProviderID still have to match the protected record at
+claim time. `unlock_approved` reports only that the grant was armed, not that
+Windows accepted the password or unlocked. The old VM test grant remains a
+separate regression entry point; no automatic submission is implemented.
+
+The earlier physical-machine BLE test proved only foreground transport. In a
+later 2 Oct 2026 run, the GATT host logged challenge issuance and signed
+assertion delivery, the iPhone reported `unlock_approved`, and a manual tile
+click with the saved-credential option and no typed password unlocked the
+existing Windows session. The operator also confirmed native password entry
+remained usable. An earlier phone-approved claim reached Windows but returned
+an invalid username/password message; the next claim was refused, consistent
+with one-use consumption. The generic refusal does not identify the precise
+service check. A later successful unlock does not identify why
+the earlier submitted credential was rejected. Do not treat these observations
+as proof of automatic/background behavior or untested rejection conditions.
+The service and Credential Provider use the same identity, session and grant
+rules on a VM and a physical Windows computer; there is no environment-specific
+code path. The previously completed saved-password unlock tests need not be
+repeated merely to test the new phone approval bridge. End-to-end phone testing
+still needs an existing saved credential on the chosen test computer, and a
+failed claim must leave the native PIN/password entry available.
 
 The identity source is the existing Credential Provider's current LogonUI user
 enumeration: SID, PrimarySid, Windows-supplied QualifiedUserName and ProviderID.
@@ -25,9 +74,9 @@ with the manual claim. A changed online identity requires re-enrollment even
 if its local SID remains the same.
 
 The Credential Provider first requests the identity nonce during user
-enumeration so the manager can see the snapshot after a native unlock. If that
-request runs before the service reports the console as locked, a manual saved
-credential submission retries capture before claiming the password. The
+enumeration so the manager can see the snapshot after a native unlock. Every
+manual saved-credential submission captures again immediately before claiming
+the password, including when the earlier capture succeeded. The
 `savedIdentityCapture` report field records only the enumeration-time result;
 the submission retry remains subject to the service's locked-session and
 identity checks. A retry failure does not consume or release the credential.
@@ -93,7 +142,7 @@ attacker who already controls SYSTEM.
    password. This sets a *local copy*; it does not change the online MSA
    password and does not yet prove that the copy can unlock Windows.
 4. Select **Authorize one test**, lock within 120 seconds, choose the MSA
-   tile's **Use saved credential (VM test)** checkbox, and click **Test
+   tile's **Use authorized saved credential** checkbox, and click **Test
    unlock**. Do not type a password in the tile for this test. Confirm the
    existing SID and console session are restored. A failed claim requires a
    new explicit authorization. Try an incorrect stored password at most once

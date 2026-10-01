@@ -1,7 +1,7 @@
 // Created by Rui MA on 26 Sep 2026
 // Modified by Rui MA on 26 Sep 2026
 
-#include "UnlockServiceIpc.h"
+#include "SavedCredentialIpc.h"
 
 #include <Windows.h>
 
@@ -19,6 +19,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -236,7 +237,7 @@ public:
                   << "[GattHost] challenge=" << to_string(kChallengeCharacteristicUuid) << "\n"
                   << "[GattHost] assertion=" << to_string(kAssertionCharacteristicUuid) << "\n"
                   << "[GattHost] result=" << to_string(kResultCharacteristicUuid) << "\n"
-                  << "[GattHost] transport-only foreground prototype; authentication is not implemented\n";
+                  << "[GattHost] transport-only foreground host; saved-credential service verifies signatures\n";
     }
 
     void stop() noexcept {
@@ -323,21 +324,32 @@ private:
     }
 
     void handleAuthenticationRequest() {
-        std::cout << "[GattHost] request frame received; asking UnlockService for challenge\n";
-        const auto response = unlock_windows::service::ipc::call(
-            unlock_windows::service::ipc::Operation::issueChallenge,
-            {}
-        );
-        if (response.status != unlock_windows::service::ipc::Status::success) {
-            throw std::runtime_error(
-                "UnlockService challenge request failed: " + response.payload
-            );
+        std::cout << "[GattHost] request frame received; asking saved-credential service for challenge\n";
+        unlock_windows::saved_credential::Packet response;
+        unlock_windows::saved_credential::CallDiagnostics diagnostics;
+        const bool received = unlock_windows::saved_credential::callPhone(
+                unlock_windows::saved_credential::Operation::issuePhoneChallenge,
+                unlock_windows::saved_credential::SensitiveBytes{}, response, 2000, &diagnostics);
+        if (!received || response.result != unlock_windows::saved_credential::Result::success ||
+            response.payload.value.empty()) {
+            const char* status = !received ? "service_unavailable" :
+                response.result == unlock_windows::saved_credential::Result::rejected ? "not_ready" : "service_error";
+            std::cerr << "[GattHost] phone challenge failed: " << status << "\n";
+            if (!received) {
+                std::wcerr << L"[GattHost] IPC stage="
+                    << unlock_windows::saved_credential::callStageName(diagnostics.stage)
+                    << L" check=" << diagnostics.serverCheck
+                    << L" win32=" << diagnostics.win32Error << L"\n";
+            }
+            logNotificationResults(resultCharacteristic_.NotifyValueAsync(
+                makeBuffer(std::string("{\"authenticated\":false,\"status\":\"") + status + "\"}")).get(), "result");
+            return;
         }
 
-        std::cout << "[GattHost] request accepted; challenge issued by UnlockService\n";
-        std::cout << "[GattHost] challenge notification length=" << response.payload.size() << "\n";
+        std::cout << "[GattHost] request accepted; service issued challenge\n";
+        std::cout << "[GattHost] challenge notification length=" << response.payload.value.size() << "\n";
         logNotificationResults(
-            challengeCharacteristic_.NotifyValueAsync(makeBuffer(response.payload)).get(),
+            challengeCharacteristic_.NotifyValueAsync(makeBuffer(bytesAsText(response.payload.value))).get(),
             "challenge"
         );
     }
@@ -378,20 +390,32 @@ private:
             }
 
             std::cout << "[GattHost] assertion frame received, length=" << bytes.size() << "\n";
-            const auto response = unlock_windows::service::ipc::call(
-                unlock_windows::service::ipc::Operation::verifyAssertion,
-                bytesAsText(bytes)
-            );
-            if (response.status != unlock_windows::service::ipc::Status::success) {
-                std::cerr << "[GattHost] UnlockService verification failed: "
-                          << response.payload << "\n";
+            unlock_windows::saved_credential::SensitiveBytes assertion;
+            assertion.value = bytes;
+            unlock_windows::saved_credential::Packet response;
+            unlock_windows::saved_credential::CallDiagnostics diagnostics;
+            const bool received = unlock_windows::saved_credential::callPhone(
+                unlock_windows::saved_credential::Operation::submitPhoneAssertion,
+                std::move(assertion), response, 2000, &diagnostics);
+            if (!received || response.result != unlock_windows::saved_credential::Result::success ||
+                response.payload.value.empty()) {
+                std::cerr << "[GattHost] signed assertion was not accepted by saved-credential service\n";
+                if (!received) {
+                    std::wcerr << L"[GattHost] IPC stage="
+                        << unlock_windows::saved_credential::callStageName(diagnostics.stage)
+                        << L" check=" << diagnostics.serverCheck
+                        << L" win32=" << diagnostics.win32Error << L"\n";
+                }
             } else {
-                std::cout << "[GattHost] UnlockService verification result received\n";
+                std::cout << "[GattHost] signed assertion result received from service\n";
             }
 
-            const std::string result = response.status == unlock_windows::service::ipc::Status::success
-                ? response.payload
-                : "{\"authenticated\":false,\"status\":\"service_unavailable\"}";
+            const char* failure = !received ? "service_unavailable" :
+                response.result == unlock_windows::saved_credential::Result::rejected ? "not_ready" : "service_error";
+            const std::string result = received && response.result == unlock_windows::saved_credential::Result::success &&
+                !response.payload.value.empty()
+                ? bytesAsText(response.payload.value)
+                : std::string("{\"authenticated\":false,\"status\":\"") + failure + "\"}";
             logNotificationResults(
                 resultCharacteristic_.NotifyValueAsync(makeBuffer(result)).get(),
                 "result"

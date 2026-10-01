@@ -13,6 +13,7 @@
 namespace unlock_windows::saved_credential {
 
 inline constexpr wchar_t kPipeName[] = L"\\\\.\\pipe\\unlock-windows-saved-credential-v1";
+inline constexpr wchar_t kPhonePipeName[] = L"\\\\.\\pipe\\unlock-windows-phone-approval-v1";
 inline constexpr wchar_t kServiceName[] = L"UnlockWindowsSavedCredentialService";
 inline constexpr wchar_t kServiceExeName[] = L"unlock_saved_credential_service.exe";
 inline constexpr std::size_t kMaxPacket = 16 * 1024;
@@ -27,6 +28,9 @@ enum class Operation : std::uint16_t {
     armTest = 6,
     claimCredential = 7,
     clearForRemoval = 8,
+    issuePhoneChallenge = 9,
+    submitPhoneAssertion = 10,
+    reloadPhoneEnrollment = 11,
 };
 
 enum class Result : std::uint32_t {
@@ -80,6 +84,7 @@ enum class CallStage {
 struct CallDiagnostics final {
     CallStage stage = CallStage::none;
     DWORD win32Error = NO_ERROR;
+    const wchar_t* serverCheck = L"";
 };
 
 [[nodiscard]] bool encodeIdentity(const Identity& identity, SensitiveBytes& output);
@@ -91,6 +96,8 @@ struct CallDiagnostics final {
 [[nodiscard]] bool awaitReplyAcknowledgment(HANDLE pipe, Operation operation, DWORD waitMs);
 [[nodiscard]] const wchar_t* callStageName(CallStage stage);
 [[nodiscard]] bool call(Operation operation, SensitiveBytes&& request, Packet& reply,
+    DWORD waitMs = 2000, CallDiagnostics* diagnostics = nullptr);
+[[nodiscard]] bool callPhone(Operation operation, SensitiveBytes&& request, Packet& reply,
     DWORD waitMs = 2000, CallDiagnostics* diagnostics = nullptr);
 
 } // namespace unlock_windows::saved_credential

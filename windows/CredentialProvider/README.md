@@ -11,7 +11,12 @@ tile and the same SID and session ID afterward. Later VM testing confirmed
 behavioral one-shot rejection and that a service restart invalidates a prior
 authorization while a new authorization can use the stored credential. Identity
 change and wrong-caller rejection remain unverified. It does not call
-UnlockService, auto-submit, or construct a Windows token.
+the old UnlockService, auto-submit, or construct a Windows token. The
+iPhone-approved grant uses the same manual claim and Negotiate packing path.
+On 2 Oct 2026, a physical-machine test unlocked an existing session after a
+phone approval and manual tile click, without entering a password at the tile.
+Native password entry remained available. Negative-path acceptance is still
+incomplete.
 
 At LogonUI enumeration, it reads `GetSid()`, `PKEY_Identity_PrimarySid`,
 `PKEY_Identity_QualifiedUserName`, `PKEY_Identity_UserName`, and

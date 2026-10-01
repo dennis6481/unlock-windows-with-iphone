@@ -2,7 +2,7 @@
 
 
 #include "EnrollmentStore.h"
-#include "UnlockServiceIpc.h"
+#include "SavedCredentialIpc.h"
 
 #include <Windows.h>
 #include <propvarutil.h>
@@ -250,6 +250,16 @@ bool showEnrollmentToast(const std::string& fingerprint) {
     return result == IDYES;
 }
 
+void reloadSavedCredentialEnrollment() {
+    unlock_windows::saved_credential::Packet response;
+    if (!unlock_windows::saved_credential::call(
+            unlock_windows::saved_credential::Operation::reloadPhoneEnrollment,
+            unlock_windows::saved_credential::SensitiveBytes{}, response) ||
+        response.result != unlock_windows::saved_credential::Result::success) {
+        throw std::runtime_error("saved-credential service enrollment reload failed; run elevated on the unlocked console");
+    }
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -265,7 +275,9 @@ int main(int argc, char* argv[]) {
                 std::cout << "Enrollment was not changed.\n";
                 return 1;
             }
+            reloadSavedCredentialEnrollment();
             store.remove();
+            reloadSavedCredentialEnrollment();
             std::cout << "Enrollment removed from the protected local store.\n";
             return 0;
         }
@@ -310,17 +322,9 @@ int main(int argc, char* argv[]) {
             return 3;
         }
 
+        reloadSavedCredentialEnrollment();
         store.save({publicKey, unlock_windows::service::EnrollmentStore::currentUserSid()});
-
-        const auto reload = unlock_windows::service::ipc::call(
-            unlock_windows::service::ipc::Operation::reloadEnrollment,
-            {}
-        );
-        if (reload.status != unlock_windows::service::ipc::Status::success) {
-            throw std::runtime_error(
-                "enrollment was saved, but UnlockService reload failed: " + reload.payload
-            );
-        }
+        reloadSavedCredentialEnrollment();
 
         std::cout << "Enrollment saved to the protected local store.\n";
         return 0;

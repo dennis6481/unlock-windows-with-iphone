@@ -45,11 +45,20 @@ void testStatusRoundTrip() {
     require(!decodeStatus(bytes.value.data(), bytes.value.size(), decoded), "invalid present flag must fail");
 }
 
+void testPhoneEndpointRejectsCredentialOperations() {
+    Packet reply;
+    require(!callPhone(Operation::claimCredential, SensitiveBytes{}, reply),
+        "phone endpoint must not expose credential claims");
+    require(GetLastError() == ERROR_INVALID_PARAMETER,
+        "phone endpoint operation rejection must be local and explicit");
+}
+
 } // namespace
 
 int main() {
     testIdentityRoundTrip();
     testStatusRoundTrip();
+    testPhoneEndpointRejectsCredentialOperations();
     std::cout << "Saved credential protocol tests passed.\n";
     return EXIT_SUCCESS;
 }

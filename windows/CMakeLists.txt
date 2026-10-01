@@ -66,9 +66,6 @@ add_executable(unlock_saved_credential_service
 )
 target_compile_features(unlock_saved_credential_service PRIVATE cxx_std_20)
 target_compile_definitions(unlock_saved_credential_service PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_libraries(unlock_saved_credential_service PRIVATE
-    unlock_saved_credential_ipc advapi32 wtsapi32 crypt32 bcrypt
-)
 
 add_executable(unlock_saved_credential_manager WIN32
     SavedCredential/SavedCredentialManager.cpp
@@ -124,6 +121,11 @@ target_include_directories(unlock_service_core
 target_compile_features(unlock_service_core PUBLIC cxx_std_20)
 target_compile_definitions(unlock_service_core PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(unlock_service_core PUBLIC unlock_protocol_crypto windowsapp bcrypt)
+
+target_link_libraries(unlock_saved_credential_service PRIVATE
+    unlock_saved_credential_ipc unlock_service_core unlock_enrollment_store
+    advapi32 wtsapi32 crypt32 bcrypt windowsapp
+)
 
 add_library(unlock_lsa_verifier STATIC
     LSAAuthenticationPackage/UnlockLsaLogonVerifier.cpp
@@ -196,7 +198,7 @@ add_executable(unlock_gatt_host
 
 target_compile_features(unlock_gatt_host PRIVATE cxx_std_20)
 target_compile_definitions(unlock_gatt_host PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_libraries(unlock_gatt_host PRIVATE unlock_service_ipc windowsapp bcrypt)
+target_link_libraries(unlock_gatt_host PRIVATE unlock_saved_credential_ipc windowsapp bcrypt)
 
 add_executable(unlock_service_host
     UnlockService/main.cpp
@@ -360,7 +362,7 @@ add_executable(unlock_pairing_tool
 
 target_compile_features(unlock_pairing_tool PRIVATE cxx_std_20)
 target_compile_definitions(unlock_pairing_tool PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_libraries(unlock_pairing_tool PRIVATE unlock_enrollment_store unlock_service_ipc windowsapp shell32 ole32 propsys)
+target_link_libraries(unlock_pairing_tool PRIVATE unlock_enrollment_store unlock_saved_credential_ipc windowsapp shell32 ole32 propsys)
 
 add_library(unlock_credential_provider SHARED
     CredentialProvider/UnlockCredentialProvider.cpp

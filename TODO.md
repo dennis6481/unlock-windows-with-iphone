@@ -10,6 +10,8 @@
 
 Components Wizard 当前已可用，UI 细节暂时冻结。除非安装、卸载或恢复流程出现功能性问题，不应在下列端到端主线完成前继续打磨 Wizard UI。
 
+当前里程碑（2026-10-02）：实体机已有会话锁屏时，前台 iPhone 签名获得 `unlock_approved`，用户手动点击保存凭据磁贴且未输入密码，Windows 成功解锁；原生密码入口仍可用。下面较早的自定义 LSA/VM 路线是历史研究计划，不是此刻的产品解锁路径。后台蓝牙与自动提交尚未完成。
+
 1. **完成并提交当前 Components Wizard 事务化改造**
    - 先修正提交前已发现的作者注释、README 重复、只读诊断和 PowerShell 兼容入口问题。
    - 保持 Wizard 仅管理当前 Credential Provider 和 LSA package，不在这一步顺带加入新服务。
@@ -242,9 +244,22 @@ Components Wizard 当前已可用，UI 细节暂时冻结。除非安装、卸�
   emergency wizard removal in disposable VM snapshots. Full Windows reboot
   first logon is outside this existing-session milestone and its refused claim
   does not substitute for these tests.
-- [ ] Only after the saved-credential path succeeds: bind iPhone approval to SID and console
-  session, atomically consume it in the service, release plaintext once to
-  LogonUI, and trigger automatic submission.
+- [x] In source, add a separate local-only phone transport endpoint and move
+  challenge issuance, signature verification and one-time grant authority into
+  the LocalSystem saved-credential service. Bind the grant to enrolled/saved/
+  console SID, existing locked session and lock generation; continue to release
+  plaintext only to the manually submitted LogonUI tile. The old foreground
+  UnlockService host is no longer in this credential path.
+- [x] Build and physically validate iPhone approval -> manual saved-credential
+  claim -> existing-session unlock without typing a password at the tile.
+  The 2 Oct 2026 operator report also confirmed native password entry remained
+  usable. This does not establish automatic unlock or every negative path.
+- [ ] Complete phone-bridge negative tests: wrong signature, expiration/replay,
+  enrolled/saved/console SID or session changes, and service restart before
+  claim. Verify each rejects release while native PIN/password remains usable.
+  The successful physical-machine run alone does not prove these conditions.
+- [ ] Only after the manual phone path is validated, implement
+  `CredentialsChanged()` and one-shot automatic submission.
 - [ ] Validate wrong password, replay, wrong SID/session, non-LogonUI client,
   offline behavior, and service failure while retaining native PIN/password
   recovery.

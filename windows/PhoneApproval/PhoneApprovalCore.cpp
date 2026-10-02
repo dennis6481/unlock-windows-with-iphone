@@ -1,6 +1,6 @@
 // Created by Rui MA on 26 Sep 2026
 
-#include "UnlockServiceCore.h"
+#include "PhoneApprovalCore.h"
 
 #include "UnlockCrypto.h"
 
@@ -21,7 +21,7 @@
 #include <utility>
 #include <vector>
 
-namespace unlock_windows::service {
+namespace unlock_windows::phone_approval {
 namespace {
 
 using winrt::Windows::Data::Json::JsonObject;
@@ -29,7 +29,6 @@ using winrt::Windows::Data::Json::JsonObject;
 constexpr std::size_t kRequestIdSize = 16;
 constexpr std::size_t kNonceSize = 32;
 constexpr std::size_t kRawPublicKeySize = 65;
-constexpr std::size_t kRawSignatureSize = 64;
 
 struct AlgorithmHandle final {
     BCRYPT_ALG_HANDLE value = nullptr;
@@ -129,23 +128,6 @@ struct HashHandle final {
         index++;
     }
     return outputIndex == result.size() ? std::optional{result} : std::nullopt;
-}
-
-[[nodiscard]] std::optional<std::array<std::uint8_t, protocol::kKeyIdSize>> parseKeyId(
-    const std::string_view value
-) {
-    if (value.size() != protocol::kKeyIdSize * 2 ||
-        !std::all_of(value.begin(), value.end(), isHex)) {
-        return std::nullopt;
-    }
-
-    std::array<std::uint8_t, protocol::kKeyIdSize> result{};
-    for (std::size_t index = 0; index < result.size(); ++index) {
-        result[index] = static_cast<std::uint8_t>(
-            (hexNibble(value[index * 2]) << 4) | hexNibble(value[index * 2 + 1])
-        );
-    }
-    return result;
 }
 
 [[nodiscard]] std::string base64Encode(const std::uint8_t* bytes, const std::size_t size) {
@@ -308,7 +290,7 @@ struct HashHandle final {
 
 } // namespace
 
-UnlockServiceCore::UnlockServiceCore(
+PhoneApprovalCore::PhoneApprovalCore(
     std::string audience,
     const std::int64_t challengeLifetimeMilliseconds,
     const std::int64_t unlockCooldownMilliseconds
@@ -318,11 +300,11 @@ UnlockServiceCore::UnlockServiceCore(
       unlockCooldownMilliseconds_(unlockCooldownMilliseconds) {
     if (audience_.empty() || audience_.size() > 64 ||
         challengeLifetimeMilliseconds_ <= 0 || unlockCooldownMilliseconds_ <= 0) {
-        throw std::invalid_argument("invalid UnlockServiceCore configuration");
+        throw std::invalid_argument("invalid PhoneApprovalCore configuration");
     }
 }
 
-IssuedChallenge UnlockServiceCore::issueChallenge(const std::int64_t issuedAtMilliseconds) {
+IssuedChallenge PhoneApprovalCore::issueChallenge(const std::int64_t issuedAtMilliseconds) {
     std::lock_guard lock(mutex_);
 
     protocol::FixedChallenge challenge;
@@ -350,7 +332,7 @@ IssuedChallenge UnlockServiceCore::issueChallenge(const std::int64_t issuedAtMil
     return IssuedChallenge{challenge, serializeChallenge(challenge)};
 }
 
-void UnlockServiceCore::setEnrolledPublicKey(std::vector<std::uint8_t> rawPublicKey) {
+void PhoneApprovalCore::setEnrolledPublicKey(std::vector<std::uint8_t> rawPublicKey) {
     if (rawPublicKey.size() != kRawPublicKeySize || rawPublicKey.front() != 0x04) {
         throw std::invalid_argument("enrolled public key must be a raw P-256 key");
     }
@@ -361,7 +343,7 @@ void UnlockServiceCore::setEnrolledPublicKey(std::vector<std::uint8_t> rawPublic
     lastUnlockApprovalMilliseconds_.reset();
 }
 
-void UnlockServiceCore::setEnrolledAccountSid(std::string accountSid) {
+void PhoneApprovalCore::setEnrolledAccountSid(std::string accountSid) {
     if (accountSid.empty()) {
         throw std::invalid_argument("enrolled account SID must not be empty");
     }
@@ -371,7 +353,7 @@ void UnlockServiceCore::setEnrolledAccountSid(std::string accountSid) {
     lastUnlockApprovalMilliseconds_.reset();
 }
 
-void UnlockServiceCore::clearEnrolledPublicKey() noexcept {
+void PhoneApprovalCore::clearEnrolledPublicKey() noexcept {
     std::lock_guard lock(mutex_);
     enrolledPublicKey_.reset();
     enrolledAccountSid_.reset();
@@ -379,7 +361,7 @@ void UnlockServiceCore::clearEnrolledPublicKey() noexcept {
     lastUnlockApprovalMilliseconds_.reset();
 }
 
-std::string UnlockServiceCore::requestIdString(const protocol::FixedChallenge& challenge) {
+std::string PhoneApprovalCore::requestIdString(const protocol::FixedChallenge& challenge) {
     constexpr char hex[] = "0123456789abcdef";
     std::string result;
     result.reserve(36);
@@ -393,7 +375,7 @@ std::string UnlockServiceCore::requestIdString(const protocol::FixedChallenge& c
     return result;
 }
 
-std::string UnlockServiceCore::serializeChallenge(const protocol::FixedChallenge& challenge) {
+std::string PhoneApprovalCore::serializeChallenge(const protocol::FixedChallenge& challenge) {
     std::ostringstream output;
     output << "{\"audience\":\"" << escapeJsonString(challenge.audience)
            << "\",\"issuedAtMilliseconds\":" << challenge.issuedAtMilliseconds
@@ -404,7 +386,7 @@ std::string UnlockServiceCore::serializeChallenge(const protocol::FixedChallenge
     return output.str();
 }
 
-AssertionResult UnlockServiceCore::verifyAssertion(
+AssertionResult PhoneApprovalCore::verifyAssertion(
     const std::string_view assertionJson,
     const std::int64_t nowMilliseconds
 ) {
@@ -453,17 +435,12 @@ AssertionResult UnlockServiceCore::verifyAssertion(
         if (keyId->size() != 64 || !std::all_of(keyId->begin(), keyId->end(), isHex)) {
             return {AssertionCode::invalid_key_id};
         }
-        const auto keyIdBytes = parseKeyId(*keyId);
-        if (!keyIdBytes) {
-            return {AssertionCode::invalid_key_id};
-        }
-
         const auto publicKey = base64Decode(*publicKeyEncoded);
         const auto signature = base64Decode(*signatureEncoded);
         if (!publicKey || publicKey->size() != kRawPublicKeySize || publicKey->front() != 0x04) {
             return {AssertionCode::invalid_public_key};
         }
-        if (!signature || signature->size() != kRawSignatureSize) {
+        if (!signature || signature->size() != protocol::kP256RawSignatureSize) {
             return {AssertionCode::invalid_signature_encoding};
         }
 
@@ -507,13 +484,7 @@ AssertionResult UnlockServiceCore::verifyAssertion(
             lastUnlockApprovalMilliseconds_ = nowMilliseconds;
 
             PendingUnlockApproval approval;
-            approval.challenge = *outstandingChallenge_;
-            approval.keyId = *keyIdBytes;
-            std::copy(
-                signature->begin(),
-                signature->end(),
-                approval.signature.begin()
-            );
+            approval.issuedAtMilliseconds = outstandingChallenge_->issuedAtMilliseconds;
             approval.accountSid = *enrolledAccountSid_;
             pendingUnlockApproval_ = std::move(approval);
         }
@@ -526,7 +497,7 @@ AssertionResult UnlockServiceCore::verifyAssertion(
     }
 }
 
-std::optional<PendingUnlockApproval> UnlockServiceCore::consumeUnlockApproval(
+std::optional<PendingUnlockApproval> PhoneApprovalCore::consumeUnlockApproval(
     const std::int64_t nowMilliseconds
 ) {
     std::lock_guard lock(mutex_);
@@ -536,8 +507,8 @@ std::optional<PendingUnlockApproval> UnlockServiceCore::consumeUnlockApproval(
 
     auto approval = std::move(pendingUnlockApproval_);
     pendingUnlockApproval_.reset();
-    if (nowMilliseconds < approval->challenge.issuedAtMilliseconds ||
-        nowMilliseconds - approval->challenge.issuedAtMilliseconds > challengeLifetimeMilliseconds_) {
+    if (nowMilliseconds < approval->issuedAtMilliseconds ||
+        nowMilliseconds - approval->issuedAtMilliseconds > challengeLifetimeMilliseconds_) {
         return std::nullopt;
     }
     return approval;
@@ -564,4 +535,4 @@ const char* assertionCodeName(const AssertionCode code) noexcept {
     return "unknown";
 }
 
-} // namespace unlock_windows::service
+} // namespace unlock_windows::phone_approval

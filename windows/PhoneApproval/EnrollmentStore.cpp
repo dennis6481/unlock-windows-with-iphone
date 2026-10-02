@@ -1,6 +1,4 @@
 // Created by Rui MA on 26 Sep 2026
-// Modified by Rui MA on 26 Sep 2026
-// Modified by Codex on 26 Sep 2026
 
 #include "EnrollmentStore.h"
 
@@ -19,7 +17,7 @@
 #include <utility>
 #include <vector>
 
-namespace unlock_windows::service {
+namespace unlock_windows::phone_approval {
 namespace {
 
 constexpr std::uint32_t kFileMagic = 0x324B4E45; // "ENK2" in little-endian memory
@@ -500,4 +498,4 @@ std::string EnrollmentStore::fingerprint(
     return result;
 }
 
-} // namespace unlock_windows::service
+} // namespace unlock_windows::phone_approval

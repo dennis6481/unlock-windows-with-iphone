@@ -24,7 +24,6 @@ public:
 
     [[nodiscard]] OperationResult install(const ProgressCallback& progress = {});
     [[nodiscard]] OperationResult beginUninstall(const ProgressCallback& progress = {});
-    [[nodiscard]] OperationResult emergencyRemove(const ProgressCallback& progress = {});
     [[nodiscard]] OperationResult completeUninstall(const ProgressCallback& progress = {});
     [[nodiscard]] OperationResult recover(const ProgressCallback& progress = {});
     [[nodiscard]] OperationResult resetStaleState();

@@ -15,7 +15,6 @@ $componentStatePath = 'HKLM:\SOFTWARE\UnlockWindowsWithIPhone\ComponentsWizard'
 $credentialProviderClsid = '{2F7A2DF4-75B4-4D8E-8A3B-0DA46C6E9112}'
 $credentialProviderPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers\$credentialProviderClsid"
 $clsidPath = "HKLM:\SOFTWARE\Classes\CLSID\$credentialProviderClsid"
-$lsaPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
 $taskName = 'UnlockWindowsWithIPhone-FinalizeUninstall'
 $savedCredentialServiceName = 'UnlockWindowsSavedCredentialService'
 $files = @(
@@ -23,10 +22,8 @@ $files = @(
     (Join-Path $BuildDirectory 'unlock_credential_provider.dll'),
     (Join-Path $BuildDirectory 'unlock_saved_credential_service.exe'),
     (Join-Path $BuildDirectory 'unlock_saved_credential_manager.exe'),
-    (Join-Path $BuildDirectory 'unlock_lsa_authentication_package.dll'),
     (Join-Path $env:windir 'System32\unlock_credential_provider.dll'),
-    (Join-Path $env:windir 'System32\unlock_saved_credential_service.exe'),
-    (Join-Path $env:windir 'System32\unlock_lsa_authentication_package.dll')
+    (Join-Path $env:windir 'System32\unlock_saved_credential_service.exe')
 )
 
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -34,7 +31,6 @@ $principal = [Security.Principal.WindowsPrincipal]::new($identity)
 $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 $savedCredentialService = Get-CimInstance Win32_Service -Filter "Name='$savedCredentialServiceName'" -ErrorAction Stop
 $state = Get-ItemProperty -LiteralPath $componentStatePath -ErrorAction SilentlyContinue
-$lsaValue = (Get-ItemProperty -LiteralPath $lsaPath -Name 'Authentication Packages' -ErrorAction SilentlyContinue).'Authentication Packages'
 
 Write-Host 'Unlock Windows with iPhone Components diagnostics' -ForegroundColor Cyan
 [PSCustomObject]@{
@@ -48,15 +44,12 @@ Write-Host 'Unlock Windows with iPhone Components diagnostics' -ForegroundColor 
     } else {
         $null
     }
-    LsaPackageRegistered = ($lsaValue -contains 'unlock_lsa_authentication_package')
-    LsaAuthenticationPackages = $lsaValue
     WizardStatePresent = $null -ne $state
     WizardSchemaVersion = if ($state) { $state.SchemaVersion } else { $null }
     WizardPhase = if ($state) { $state.Phase } else { $null }
     WizardTransactionId = if ($state) { $state.TransactionId } else { $null }
     WizardLastError = if ($state) { $state.LastError } else { $null }
     CredentialCleanupConfirmed = if ($state) { $state.CredentialCleanupConfirmed } else { $null }
-    EmergencyRemoval = if ($state) { $state.EmergencyRemoval } else { $null }
     SavedCredentialServicePresent = $null -ne $savedCredentialService
     SavedCredentialServiceState = if ($savedCredentialService) { $savedCredentialService.State } else { $null }
     SavedCredentialServiceStartName = if ($savedCredentialService) { $savedCredentialService.StartName } else { $null }

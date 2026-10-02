@@ -1,88 +1,27 @@
-<!-- Modified by Rui MA on 26 Sep 2026 -->
+<!-- Created by Rui MA on 26 Sep 2026 -->
 
-# GattHost
+# GATT host
 
-The foreground `unlock_gatt_host` is a transport for the installed LocalSystem
-saved-credential service. It advertises four characteristics, forwards the
-`0x01` request and signed assertion to that service, and notifies the iPhone
-of the result. The service, not GATT, issues the challenge, verifies the
-signature and controls the one-time credential grant. `unlock_approved` means
-the grant is ready for a manual lock-screen tile claim; it does not mean that
-Windows has unlocked. The old foreground `unlock_service_host` remains a
-separate protocol diagnostic and must not be run as part of this path.
+`unlock_gatt_host` 是当前 Windows BLE transport。它仍是前台进程，不保存公钥、不保存密码，也不自行验证签名。
 
-After a separately authorized build and Components Wizard installation, run
-the prebuilt GATT host in the signed-in console session before locking:
+它暴露项目定义的 service 和四个 characteristic：request、challenge、assertion、result。
+
+- request 只接受一个字节 `0x01`，请求 LocalSystem 服务签发 challenge。
+- challenge 将服务返回的 challenge JSON 通知给 iPhone。
+- assertion 将 iPhone 的 assertion 原样转交服务。
+- result 返回服务的认证结果，例如 `unlock_approved`、`not_ready` 或具体签名拒绝原因。
+
+公钥登记不经过 GATT。请在已解锁 Windows 控制台上以管理员身份运行 `unlock_pairing_tool`，人工核对指纹后登记。
+
+## 当前运行方式
 
 ```powershell
-windows/build/unlock_gatt_host.exe
+cd windows
+make run-gatt
 ```
 
-Install a saved MSA credential and enroll the iPhone public key for the same
-console account SID before expecting a phone grant. Run `unlock_pairing_tool`
-elevated on the unlocked console; it requires confirmation and asks the saved-
-credential service to reload the record. The GATT enrollment command launches
-the sibling pairing tool without elevation, so use the elevated tool directly
-unless GATT host itself was deliberately started elevated. Pairing and password
-storage are separate operations. An enrolled key on a different Windows
-installation/SID is not transferable as an authorization for this account.
+该目标会触发构建，仅在用户明确要求构建时运行。已有可执行文件时可直接启动 `unlock_gatt_host.exe`。
 
-Run the authentication host as the signed-in console user without elevation.
-On 2 Oct 2026, an unlocked elevated host reached the service and received
-`not_ready`, while the unelevated host reported `service_unavailable`. The
-installed service was Running as LocalSystem and matched the build's SHA-256.
-The client had required reading the LocalSystem process token, an inappropriate
-cross-account permission requirement for a normal desktop transport. The source
-now verifies the named pipe server PID/session against SCM's running service
-PID, LocalSystem configuration and exact configured System32 executable command.
-The first correction still queried the LocalSystem process and the physical
-retest returned `server-verification / win32=5`; that remaining cross-account
-process-query requirement has now been removed. The specific failing API in
-that retest was not captured. After rebuilding, an unelevated lock-screen run
-reached the service and relayed an accepted signed assertion. Ordinary users
-cannot register/reconfigure this service; the running own-process service PID
-from SCM is the identity authority.
-IPC failures now include `stage`, verification `check` and `win32` in the host log. `not_ready` while
-the console is unlocked is expected; `service_unavailable` indicates IPC or
-server-verification failure, before the service's challenge policy is applied.
+启动 host 后锁定 Windows，再从 iPhone 发起认证。出现 `unlock_approved` 后仍需在 120 秒内手动点击 Credential Provider 的 **Unlock** 按钮。
 
-On an existing locked session, keep the iPhone app in the foreground and tap
-**Start connection**. The phone signs the service's 30-second challenge; an
-accepted signature arms a 120-second, one-use credential grant. Manually select
-the Credential Provider tile's saved-credential checkbox and submit without
-typing the password. The LogonUI tile performs the native Negotiate packing;
-GATT neither handles plaintext nor invokes a Windows logon API. Missing vault,
-wrong enrolled SID, an unlocked console or a pending grant returns a failure
-status instead of a challenge. A failed claim requires another phone challenge.
-
-An earlier physical-machine lock-screen smoke test showed that the existing
-foreground host remained reachable while Windows was locked: the iPhone got a
-184-byte challenge, sent a 382-byte assertion, and the old verifier reported
-`unlock_approved`. That earlier run proved transport feasibility only. On
-2 Oct 2026, the rebuilt saved-credential bridge produced `unlock_approved` on
-the phone; manual submission of the saved-credential tile then unlocked the
-existing session without typing a password. This is a foreground, manually
-submitted result on one physical Windows computer, not background or automatic
-unlock acceptance. Native password entry remained usable.
-
-The foreground host is not a background GATT service; package identity,
-`bluetooth` capability and background lifecycle remain future work. Lock-screen
-reachability must be tested on each intended configuration, not inferred from
-the earlier physical-machine observation. The code has no VM-versus-physical
-machine mode: the physical machine is used because its BLE hardware can exercise
-the transport, while the previously completed VM tests establish the separate
-saved-password and native-unlock behavior.
-
-Request `0x02` plus a 65-byte P-256 public key still starts explicit enrollment
-through the sibling pairing tool and Windows confirmation; it never writes an
-enrollment key directly. Device name, advertisement and RSSI never authorize
-the release of a saved credential.
-
-Reference: [GattServiceProvider.CreateAsync and bluetooth capability](https://learn.microsoft.com/en-us/uwp/api/windows.devices.bluetooth.genericattributeprofile.gattserviceprovider.createasync).
-
-References for server verification:
-
-- [OpenProcessToken cross-account access requirements](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-openprocesstoken)
-- [SCM and service query access rights](https://learn.microsoft.com/en-us/windows/win32/services/service-security-and-access-rights)
-- [QueryServiceStatusEx running process ID](https://learn.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-queryservicestatusex)
-- [GetNamedPipeServerSessionId](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getnamedpipeserversessionid)
+下一步是在锁屏、注销、重启、蓝牙断线和 package identity 条件下验证后台实现；验证成功后应替换并删除此前台启动路径，不长期维护两套 transport。

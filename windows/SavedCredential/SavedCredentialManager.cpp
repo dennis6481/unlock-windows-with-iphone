@@ -19,7 +19,6 @@ constexpr int kRefresh = 101;
 constexpr int kSet = 102;
 constexpr int kUpdate = 103;
 constexpr int kClear = 104;
-constexpr int kArm = 105;
 
 struct UiState final {
     HWND information = nullptr;
@@ -68,7 +67,6 @@ bool refresh(const HWND window) {
         SetWindowTextW(gUi.information, message.c_str());
         EnableWindow(GetDlgItem(window, kSet), FALSE);
         EnableWindow(GetDlgItem(window, kUpdate), FALSE);
-        EnableWindow(GetDlgItem(window, kArm), FALSE);
         EnableWindow(GetDlgItem(window, kClear), connected && response.result == Result::rejected);
         return false;
     }
@@ -79,7 +77,6 @@ bool refresh(const HWND window) {
         gUi.snapshotAvailable = false;
         EnableWindow(GetDlgItem(window, kSet), FALSE);
         EnableWindow(GetDlgItem(window, kUpdate), FALSE);
-        EnableWindow(GetDlgItem(window, kArm), FALSE);
         showError(window, L"Account provider ID cannot be displayed.");
         return false;
     }
@@ -95,7 +92,6 @@ bool refresh(const HWND window) {
     SetWindowTextW(gUi.information, details.c_str());
     EnableWindow(GetDlgItem(window, kSet), !gUi.status.credentialPresent);
     EnableWindow(GetDlgItem(window, kUpdate), gUi.status.credentialPresent);
-    EnableWindow(GetDlgItem(window, kArm), gUi.status.credentialPresent);
     return true;
 }
 
@@ -106,7 +102,7 @@ void setOrUpdate(const HWND window, const bool update) {
     }
     if (MessageBoxW(window,
             L"Save a local encrypted copy of the actual Microsoft Account password for the displayed console user?\r\n"
-            L"This does not change the online account password. This VM test does not yet require iPhone approval.",
+            L"This does not change the online account password. Saving it does not create an unlock approval.",
             L"Confirm target identity", MB_YESNO | MB_ICONWARNING) != IDYES) return;
 
     CREDUI_INFOW prompt{};
@@ -127,7 +123,7 @@ void setOrUpdate(const HWND window, const bool update) {
     }
     BOOL save = FALSE;
     const DWORD promptStatus = CredUIPromptForCredentialsW(
-        &prompt, L"Unlock Windows saved credential (VM)", nullptr, 0,
+        &prompt, L"Unlock Windows saved credential", nullptr, 0,
         user.data(), static_cast<ULONG>(user.size()), password.value.data(),
         static_cast<ULONG>(password.value.size()), &save,
         CREDUI_FLAGS_DO_NOT_PERSIST | CREDUI_FLAGS_ALWAYS_SHOW_UI |
@@ -177,24 +173,6 @@ void clearCredential(const HWND window) {
     refresh(window);
 }
 
-void armTest(const HWND window) {
-    if (!gUi.snapshotAvailable || !gUi.status.credentialPresent) {
-        showError(window, L"A fresh identity snapshot and saved credential are required.");
-        return;
-    }
-    SensitiveBytes request;
-    request.value.assign(gUi.status.snapshotNonce.begin(), gUi.status.snapshotNonce.end());
-    Packet response;
-    if (!call(Operation::armTest, std::move(request), response) || response.result != Result::success) {
-        showError(window, L"One-time test authorization was rejected.");
-        return;
-    }
-    MessageBoxW(window,
-        L"One manual test is authorized for 120 seconds. Lock this console now, select the saved-credential test option, and click Test unlock.\r\n"
-        L"Any claim consumes this authorization before Windows checks the password.",
-        L"One-time VM test", MB_OK | MB_ICONINFORMATION);
-}
-
 LRESULT CALLBACK windowProcedure(const HWND window, const UINT message, const WPARAM key, const LPARAM detail) {
     if (message == WM_CREATE) {
         const HINSTANCE instance = reinterpret_cast<HINSTANCE>(GetWindowLongPtrW(window, GWLP_HINSTANCE));
@@ -206,7 +184,6 @@ LRESULT CALLBACK windowProcedure(const HWND window, const UINT message, const WP
             {kSet, L"Set credential", 130, 125},
             {kUpdate, L"Update stored", 262, 125},
             {kClear, L"Clear stored", 394, 125},
-            {kArm, L"Authorize one test", 526, 175},
         };
         for (const auto& button : buttons) {
             CreateWindowExW(0, L"BUTTON", button.label, WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
@@ -222,7 +199,6 @@ LRESULT CALLBACK windowProcedure(const HWND window, const UINT message, const WP
             case kSet: setOrUpdate(window, false); break;
             case kUpdate: setOrUpdate(window, true); break;
             case kClear: clearCredential(window); break;
-            case kArm: armTest(window); break;
             default: break;
         }
         return 0;
@@ -249,7 +225,7 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, LPWSTR, int show) {
     kind.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
     kind.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
     if (!RegisterClassW(&kind)) return 1;
-    const HWND window = CreateWindowExW(0, kind.lpszClassName, L"Saved Windows credential (VM test)",
+    const HWND window = CreateWindowExW(0, kind.lpszClassName, L"Saved Windows credential",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
         CW_USEDEFAULT, CW_USEDEFAULT, 740, 265,
         nullptr, nullptr, instance, nullptr);

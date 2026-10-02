@@ -3,7 +3,7 @@
 #include "SavedCredentialIpc.h"
 #include "SavedCredentialVault.h"
 #include "EnrollmentStore.h"
-#include "UnlockServiceCore.h"
+#include "PhoneApprovalCore.h"
 
 #include <WtsApi32.h>
 #include <bcrypt.h>
@@ -373,17 +373,6 @@ public:
                 snapshot_.reset();
                 phoneChallenge_.reset();
                 removing_ = true;
-            } else if (request.operation == Operation::armTest) {
-                if (!client.admin || console.locked || !freshSnapshot(console) ||
-                    request.payload.value.size() != kNonceSize ||
-                    std::memcmp(request.payload.value.data(), snapshot_->nonce.data(), kNonceSize) != 0) {
-                    return response;
-                }
-                const auto stored = vault_.storedIdentity();
-                if (!stored || !sameIdentity(*stored, snapshot_->identity)) return response;
-                grant_ = Grant{*stored, console.session, GetTickCount64() + kGrantLifetimeMs,
-                    snapshot_->nonce, gConsoleGeneration.load()};
-                phoneChallenge_.reset();
             } else if (request.operation == Operation::reloadPhoneEnrollment) {
                 if (!client.admin || console.locked || !request.payload.value.empty()) return response;
                 reloadEnrollment();
@@ -475,7 +464,7 @@ private:
         const std::string assertion(request.payload.value.begin(), request.payload.value.end());
         const auto result = phoneCore_.verifyAssertion(assertion, nowMilliseconds());
         if (!result.unlockApproved()) {
-            setText(response.payload, phoneResult(unlock_windows::service::assertionCodeName(result.code)));
+            setText(response.payload, phoneResult(unlock_windows::phone_approval::assertionCodeName(result.code)));
             response.result = Result::success;
             return;
         }
@@ -506,8 +495,8 @@ private:
     }
 
     Vault vault_;
-    unlock_windows::service::EnrollmentStore enrollmentStore_;
-    unlock_windows::service::UnlockServiceCore phoneCore_;
+    unlock_windows::phone_approval::EnrollmentStore enrollmentStore_;
+    unlock_windows::phone_approval::PhoneApprovalCore phoneCore_;
     std::wstring enrolledSid_;
     std::vector<std::uint8_t> enrolledKey_;
     std::optional<Snapshot> snapshot_;

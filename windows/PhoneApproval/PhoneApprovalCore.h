@@ -3,9 +3,7 @@
 #pragma once
 
 #include "SigningPayload.h"
-#include "UnlockLogonBuffer.h"
 
-#include <array>
 #include <cstdint>
 #include <mutex>
 #include <optional>
@@ -13,7 +11,7 @@
 #include <string_view>
 #include <vector>
 
-namespace unlock_windows::service {
+namespace unlock_windows::phone_approval {
 
 enum class AssertionCode {
     authenticated,
@@ -39,9 +37,7 @@ struct IssuedChallenge final {
 };
 
 struct PendingUnlockApproval final {
-    protocol::FixedChallenge challenge;
-    std::array<std::uint8_t, protocol::kKeyIdSize> keyId{};
-    std::array<std::uint8_t, protocol::kRawSignatureSize> signature{};
+    std::int64_t issuedAtMilliseconds = 0;
     std::string accountSid;
 };
 
@@ -58,19 +54,17 @@ struct AssertionResult final {
     }
 };
 
-// Owns the security state that must not live in the GATT transport process.
-// The current implementation keeps one outstanding challenge in memory. A
-// Windows Service persistence/IPC layer will wrap this core later.
-class UnlockServiceCore final {
+// Owns the phone-approval security state used by the Windows service.
+class PhoneApprovalCore final {
 public:
-    explicit UnlockServiceCore(
+    explicit PhoneApprovalCore(
         std::string audience = protocol::kUnlockAudience,
         std::int64_t challengeLifetimeMilliseconds = protocol::kChallengeLifetimeMilliseconds,
         std::int64_t unlockCooldownMilliseconds = 5'000
     );
 
-    UnlockServiceCore(const UnlockServiceCore&) = delete;
-    UnlockServiceCore& operator=(const UnlockServiceCore&) = delete;
+    PhoneApprovalCore(const PhoneApprovalCore&) = delete;
+    PhoneApprovalCore& operator=(const PhoneApprovalCore&) = delete;
 
     [[nodiscard]] IssuedChallenge issueChallenge(std::int64_t issuedAtMilliseconds);
 
@@ -80,14 +74,11 @@ public:
     );
 
     // Consumes the one-time approval created by a valid enrolled assertion.
-    // The service caller must convert it to UnlockLogonBuffer before handing
-    // it to a Credential Provider; an expired or already consumed approval is
-    // never returned.
+    // An expired or already consumed approval is never returned.
     [[nodiscard]] std::optional<PendingUnlockApproval> consumeUnlockApproval(
         std::int64_t nowMilliseconds
     );
 
-    // The real enrollment flow will load this value from protected storage.
     // Until a key is installed, no assertion is allowed to authenticate.
     void setEnrolledPublicKey(std::vector<std::uint8_t> rawPublicKey);
     void setEnrolledAccountSid(std::string accountSid);
@@ -120,4 +111,4 @@ private:
 
 [[nodiscard]] const char* assertionCodeName(AssertionCode code) noexcept;
 
-} // namespace unlock_windows::service
+} // namespace unlock_windows::phone_approval

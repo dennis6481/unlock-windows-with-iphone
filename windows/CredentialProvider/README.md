@@ -1,111 +1,21 @@
 <!-- Created by Rui MA on 27 Sep 2026 -->
 
-# MSA credential probe and saved-credential manual test
+# Credential Provider
 
-The V2 Credential Provider has already demonstrated manual password unlock of
-an existing Microsoft Account console session in a disposable Windows VM. Its
-new saved-credential checkbox can request one service-mediated password release
-for **manual** submission. That path also unlocked the existing VM console
-session after a fresh one-test authorization, with no password typed at the
-tile and the same SID and session ID afterward. Later VM testing confirmed
-behavioral one-shot rejection and that a service restart invalidates a prior
-authorization while a new authorization can use the stored credential. Identity
-change and wrong-caller rejection remain unverified. It does not call
-the old UnlockService, auto-submit, or construct a Windows token. The
-iPhone-approved grant uses the same manual claim and Negotiate packing path.
-On 2 Oct 2026, a physical-machine test unlocked an existing session after a
-phone approval and manual tile click, without entering a password at the tile.
-Native password entry remained available. Negative-path acceptance is still
-incomplete.
+`unlock_credential_provider.dll` 为 Windows 10+ 的 `CPUS_LOGON` 和 `CPUS_UNLOCK_WORKSTATION` 提供一个 **Unlock with iPhone** 磁贴。
 
-At LogonUI enumeration, it reads `GetSid()`, `PKEY_Identity_PrimarySid`,
-`PKEY_Identity_QualifiedUserName`, `PKEY_Identity_UserName`, and
-`GetProviderID()`. It writes these non-secret values, the active console
-session ID, the account name reported for that session, and its resolved SID
-to `unlock-msa-credential-probe.txt` in LogonUI's temporary directory
-(normally `%SystemRoot%\Temp`). It rejects a mismatched primary SID, a
-LogonUI process outside the active console session, or a selected SID that
-differs from the session account SID. The previous `WTSQueryUserToken` call
-was removed from the Credential Provider because it requires LocalSystem and
-`SeTcbPrivilege`; this gate uses session metadata and `LookupAccountNameW`
-instead. If either query fails, the tile fails closed and the report records
-`consoleIdentityStage` and `consoleSidStatus`. Never include a password or a
-serialized credential in a shared diagnostic report.
+当前磁贴只有图标、标题和 **Unlock** 按钮。它不接受手输密码，也没有“使用保存凭据”复选框或绕过手机批准的测试模式。
 
-`savedIdentityCapture` in that report describes the enumeration-time attempt.
-LogonUI can enumerate before the service observes the session as locked, so a
-manual saved-credential submission retries identity capture after the user
-clicks Test unlock. The service still requires the same console SID, LogonUI
-client, and locked session. A failed retry returns a visible error without
-releasing a password.
+提交时 Provider：
 
-The password tile calls `CredPackAuthenticationBufferW` **inside LogonUI** with
-`CRED_PACK_PROTECTED_CREDENTIALS | CRED_PACK_ID_PROVIDER_CREDENTIALS`, the
-exact qualified user name supplied by Windows, and the manually entered MSA
-password, or with the one-time password released by the saved-credential
-service. It submits the result to the built-in `Negotiate` authentication
-package. The password is wiped after the attempt or when the tile is deselected.
-This tests a Windows authentication path; a successful pack alone is not proof
-that MSA unlock works.
+1. 从 `ICredentialProviderSetUserArray` 获取 Windows 提供的 SID、Primary SID、QualifiedUserName 和 provider ID，并在当前 console 身份匹配时同步身份快照，供 Manager 的 Refresh 使用。
+2. 提交时再次核对当前 active console session 与 SID。
+3. 通过只允许 LogonUI 客户端的 named pipe 捕获本次身份 nonce。
+4. 领取服务中尚未消费且未过期的手机授权；领取动作会立即消费授权。
+5. 使用返回的保存密码构造 `CRED_PACK_PROTECTED_CREDENTIALS | CRED_PACK_ID_PROVIDER_CREDENTIALS` 缓冲区，并交给 Windows 原生 Negotiate 包。
 
-## VM result
+如果授权不存在、已消费、已过期，账户或 session 不匹配，或服务拒绝调用，Provider 不返回凭据，并显示错误。Windows 随后的密码校验失败不会恢复已经领取的授权。
 
-Gate B succeeded in the disposable VM: the manually entered MSA password
-unlocked the existing console session. The report recorded
-`consoleIdentityStage=complete`, `consoleSidStatus=0`, and matching `userSid`,
-`primarySid`, and `consoleSid`; `whoami /user` after unlock returned that same
-SID. Native PIN sign-in remained available, while an incorrect password was
-rejected. The desktop SID and session ID were unchanged, and `whoami /all`
-showed no difference between the PIN- and MSA-password-unlocked desktop.
-This is not a direct comparison of `TokenLinkedToken`; the separate read-only
-desktop/linked-token baseline remains to be run once. This earlier result did
-not involve a stored password. A later VM run did unlock with a freshly
-authorized saved password, no password typed at the tile, and the same SID and
-session ID afterward. Replay and service-restart checks remain separate.
+安装和卸载只由 `unlock_windows_components_wizard.exe` 负责。不要手工注册 DLL，也不要恢复已经删除的 PowerShell 安装脚本。
 
-## VM procedure
-
-1. Restore a disposable VM snapshot with the target MSA already signed in and
-   a working system password or PIN recovery option. An old custom LSA package
-   installation must be removed by restoring the snapshot; this wizard never
-   changes LSA registration. If the previous Gate A/B Credential Provider is
-   installed, restore its pre-install snapshot or use the wizard to uninstall
-   it, restart, and finish cleanup before installing the new DLL. Do not
-   overwrite a loaded DLL in System32.
-2. On the development machine, build with `cd windows` followed by
-   `make build-release` only after separately authorizing a build. Copy the
-   resulting wizard, Credential Provider DLL, saved-credential service EXE and
-   manager EXE to one VM folder. The VM needs no build tools.
-3. Run `unlock_windows_components_wizard.exe` as administrator in the VM. It
-   installs the Credential Provider and LocalSystem saved-credential service,
-   without registering a custom LSA package. Restart if requested.
-4. Sign in with the original Windows method, lock the workstation, choose the
-   **MSA password probe** tile, enter the actual MSA password, and select
-   **Test unlock**. Do not test the first login after reboot as Gate B.
-5. Read `%SystemRoot%\Temp\unlock-msa-credential-probe.txt` as administrator.
-   Confirm `consoleIdentityStage=complete`, `consoleSidStatus=0`, and that
-   `userSid`, `primarySid`, and `consoleSid` identify the same existing console
-   user. If the session account cannot be resolved, preserve the new stage and
-   status rather than bypassing the check. If an
-   iPhone public key is already enrolled, compare the reported user SID with
-   that enrollment's account SID; Gate B does not require enrollment. Retain
-   the authentication result and run `whoami /user` in the unlocked session to
-   confirm the same SID. Once Gate B succeeds, compare the desktop and linked
-   token with the existing read-only token probe once.
-6. Use the wizard's uninstall action and its post-restart cleanup before
-   restoring the VM snapshot. Leave the system password/PIN provider enabled.
-
-If the selected user is not the active console user, identity enumeration fails,
-or Negotiate rejects the credential, stop and preserve the status. For the new
-encrypted-copy workflow and its four separate acceptance properties, see the
-[saved Windows credential VM procedure](../SavedCredential/README.md). Do not
-consider that workflow validated on the strength of the earlier manual result.
-
-## References
-
-- [Microsoft V2 Credential Provider sample](https://github.com/microsoft/Windows-classic-samples/blob/main/Samples/CredentialProvider/cpp/CSampleCredential.cpp)
-- [ICredentialProviderUser::GetStringValue](https://learn.microsoft.com/en-us/windows/win32/api/credentialprovider/nf-credentialprovider-icredentialprovideruser-getstringvalue)
-- [CredPackAuthenticationBuffer](https://learn.microsoft.com/en-us/windows/win32/api/wincred/nf-wincred-credpackauthenticationbuffera)
-- [WTSQuerySessionInformationW](https://learn.microsoft.com/en-us/windows/win32/api/wtsapi32/nf-wtsapi32-wtsquerysessioninformationw)
-- [ProcessIdToSessionId](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-processidtosessionid)
-- [LookupAccountNameW](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-lookupaccountnamew)
+该实现已在物理 Windows 机器的已有 Microsoft Account 会话上完成一次“手机批准 + 手动点击磁贴 + 无需输入密码”的解锁验证。自动选择/提交和完整负面路径仍未验收。

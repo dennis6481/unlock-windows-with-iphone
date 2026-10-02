@@ -269,7 +269,7 @@ int main(int argc, char* argv[]) {
             return 2;
         }
 
-        unlock_windows::service::EnrollmentStore store;
+        unlock_windows::phone_approval::EnrollmentStore store;
         if (std::string_view(argv[1]) == "--clear") {
             if (!confirm("REMOVE")) {
                 std::cout << "Enrollment was not changed.\n";
@@ -310,11 +310,11 @@ int main(int argc, char* argv[]) {
         }
 
         std::cout << "Candidate public-key fingerprint: "
-                  << unlock_windows::service::EnrollmentStore::fingerprint(publicKey) << "\n"
+                  << unlock_windows::phone_approval::EnrollmentStore::fingerprint(publicKey) << "\n"
                   << "Compare this fingerprint with the one displayed by the iPhone.\n";
         winrt::init_apartment(winrt::apartment_type::single_threaded);
         const bool accepted = showEnrollmentToast(
-            unlock_windows::service::EnrollmentStore::fingerprint(publicKey)
+            unlock_windows::phone_approval::EnrollmentStore::fingerprint(publicKey)
         );
         winrt::uninit_apartment();
         if (!accepted) {
@@ -323,7 +323,7 @@ int main(int argc, char* argv[]) {
         }
 
         reloadSavedCredentialEnrollment();
-        store.save({publicKey, unlock_windows::service::EnrollmentStore::currentUserSid()});
+        store.save({publicKey, unlock_windows::phone_approval::EnrollmentStore::currentUserSid()});
         reloadSavedCredentialEnrollment();
 
         std::cout << "Enrollment saved to the protected local store.\n";

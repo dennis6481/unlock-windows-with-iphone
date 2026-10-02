@@ -1,17 +1,10 @@
-# Windows protocol verifier
+<!-- Created by Rui MA on 26 Sep 2026 -->
 
-`SigningPayload.cpp` and `UnlockCrypto.cpp` are the first Windows-side implementation of the authentication boundary. The former reconstructs the fixed signing bytes; the latter uses Windows CNG (`bcrypt.dll`) to verify the raw P-256 public key and raw `r || s` signature emitted by the iOS target.
+# Windows protocol code
 
-The verifier is deliberately independent of BLE, JSON parsing, the Windows Service, Credential Provider and LSA. Those layers must pass it the exact fixed binary signing payload described in [`../../protocol/README.md`](../../protocol/README.md).
+该目录只包含当前签名协议需要的 Windows 实现：
 
-`UnlockLogonBuffer.h` defines the package-specific `ProtocolSubmitBuffer` shared by the Credential Provider and the LSA package. It contains an enrolled key ID, challenge fields, the selected account SID and the iPhone signature, but never a Windows password. The LSA package must resolve the key ID to its protected enrollment record and compare the mapped SID; it must not trust the SID field by itself.
+- `SigningPayload`：按照根目录 `protocol/README.md` 构造固定二进制签名载荷。
+- `UnlockCrypto`：将 CryptoKit 的 SEC1 P-256 公钥导入 CNG，以 SHA-256 验证固定宽度 `r || s` 签名。
 
-Important rules:
-
-- The iOS public key is SEC1 uncompressed `0x04 || X || Y` (65 bytes).
-- The signature is fixed-width `r || s` (64 bytes), not DER.
-- The verifier hashes the signing payload with SHA-256 before calling `BCryptVerifySignature`.
-- Invalid arguments, invalid signatures and CNG failures are different results.
-- There is no software-key fallback and no “nearby device” acceptance path.
-
-This library does not yet register or load an LSA package. It is a reusable primitive for both `UnlockService` and the final `LSAAuthenticationPackage`, where the latter must perform its own verification rather than trust a desktop process.
+JSON 只是传输外壳，不参与签名字节构造。代码不会退回软件密钥或替代校验路径。

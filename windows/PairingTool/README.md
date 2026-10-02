@@ -26,4 +26,4 @@ To remove the enrolled key, the tool requires typing `REMOVE`:
 .\windows\build\unlock_pairing_tool.exe --clear
 ```
 
-This is a foreground prototype. It creates a per-user Start Menu shortcut with an AppUserModelID so the unpackaged desktop executable can use an interactive toast. If Windows accepts the toast but does not surface it, the tool falls back to a visible Yes/No confirmation dialog after a short timeout. The final installation should provide that identity through the packaged/installer deployment. The GATT host can pass a candidate key to this tool, but the key is never written without the Windows confirmation.
+This is a foreground prototype. It creates a per-user Start Menu shortcut with an AppUserModelID so the unpackaged desktop executable can use an interactive toast. If Windows accepts the toast but does not surface it, the tool falls back to a visible Yes/No confirmation dialog after a short timeout. The final installation should provide that identity through the packaged/installer deployment. The current GATT host does not pass enrollment data to this tool; copy the public key explicitly and confirm it on Windows.

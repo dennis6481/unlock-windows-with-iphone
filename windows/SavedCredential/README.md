@@ -1,204 +1,37 @@
-<!-- Created by Rui MA on 30 Sep 2026 -->
+<!-- Created by Rui MA on 01 Oct 2026 -->
 
-# Saved Windows credential (manual unlock prototype)
+# Saved credential service
 
-This prototype stores a local copy of an MSA password for **manual unlock of an
-existing physical-console session**. Its manually submitted iPhone-approval
-path unlocked an existing session on a physical machine on 2 Oct 2026; it does
-not auto-submit. The first VM run confirmed installation and identity display.
-A later VM run used a freshly authorized saved credential, without typing a
-password at the tile, to unlock the existing console SID and session. The VM
-operator subsequently confirmed that a used authorization could not unlock a
-second time, a new authorization could, and an authorization issued before a
-service restart was refused afterward. Reauthorizing after that restart again
-unlocked with the saved credential. Keep a usable native Windows PIN/password
-tile and a disposable VM snapshot.
+`unlock_saved_credential_service.exe` 是当前 Windows 解锁链的唯一长期状态所有者。它以 LocalSystem 运行并管理：
 
-## iPhone-approved manual submission (physical-machine success; negative tests pending)
+- 当前控制台账户身份快照；
+- DPAPI machine-scope 加密的 Microsoft Account 密码；
+- 已登记 iPhone 公钥和账户 SID；
+- challenge、防重放、签名验证；
+- 120 秒、单次领取的手机批准。
 
-The same LocalSystem service now owns the iPhone challenge, P-256 verification,
-enrolled SID comparison and one-time credential grant. A separate local-only
-phone pipe accepts only challenge requests and signed assertions from the
-current console user/session; it never returns a password. The existing
-privileged pipe retains the LogonUI-only `claimCredential` operation and the
-administrator's independent `armTest` operation. GATT does not run the old
-`unlock_service_host` in this path. The pairing tool reloads the confirmed
-enrollment through the privileged pipe and must run elevated on the unlocked
-console; the stored iPhone SID must equal the saved-credential and console SID.
-Pipe clients verify the installed service through read-only SCM queries for its
-running PID, LocalSystem account and exact executable command, then compare
-the connected pipe's server PID/session with SCM's running own-process service.
-Normal GATT clients do not open the LocalSystem process or its token. After
-rebuilding, an unelevated foreground GATT client reached the service during a
-physical-machine lock-screen test.
+## IPC 边界
 
-Challenge lifetime is 30 seconds; a verified assertion creates a one-use grant
-for at most 120 seconds. The service binds it to the existing locked console
-session and invalidates it after unlock/session change or service restart. The
-Credential Provider still uses its manual saved-credential checkbox and packs
-the password in LogonUI. It refreshes identity/nonce immediately before each
-manual claim, so a grant can be used even when the manager's five-minute
-snapshot or the tile's earlier nonce has expired. The exact
-QualifiedUserName and ProviderID still have to match the protected record at
-claim time. `unlock_approved` reports only that the grant was armed, not that
-Windows accepted the password or unlocked. The old VM test grant remains a
-separate regression entry point; no automatic submission is implemented.
+服务使用两条 named pipe：
 
-The earlier physical-machine BLE test proved only foreground transport. In a
-later 2 Oct 2026 run, the GATT host logged challenge issuance and signed
-assertion delivery, the iPhone reported `unlock_approved`, and a manual tile
-click with the saved-credential option and no typed password unlocked the
-existing Windows session. The operator also confirmed native password entry
-remained usable. An earlier phone-approved claim reached Windows but returned
-an invalid username/password message; the next claim was refused, consistent
-with one-use consumption. The generic refusal does not identify the precise
-service check. A later successful unlock does not identify why
-the earlier submitted credential was rejected. Do not treat these observations
-as proof of automatic/background behavior or untested rejection conditions.
-The service and Credential Provider use the same identity, session and grant
-rules on a VM and a physical Windows computer; there is no environment-specific
-code path. The previously completed saved-password unlock tests need not be
-repeated merely to test the new phone approval bridge. End-to-end phone testing
-still needs an existing saved credential on the chosen test computer, and a
-failed claim must leave the native PIN/password entry available.
+- phone pipe 只接受 `issuePhoneChallenge` 和 `submitPhoneAssertion`，供前台 GATT transport 使用；
+- saved-credential pipe 接受身份、密码维护和领取操作，并对管理员、物理 console、锁屏状态与 LogonUI 调用方分别校验。
 
-The identity source is the existing Credential Provider's current LogonUI user
-enumeration: SID, PrimarySid, Windows-supplied QualifiedUserName and ProviderID.
-The service accepts a five-minute, non-secret snapshot only from the locked
-console's LogonUI process. After native PIN/password unlock, the separate
-administrator manager displays the snapshot for confirmation. The target is
-the **console user**, not the elevated manager's token user; this matters for
-over-the-shoulder UAC. The encrypted record binds the SID, exact qualified
-name, and ProviderID. LogonUI receives the fresh snapshot nonce and returns it
-with the manual claim. A changed online identity requires re-enrollment even
-if its local SID remains the same.
+有效 assertion 必须同时满足登记公钥、登记 SID、保存凭据身份、active console session 和当前 challenge。成功后服务创建 120 秒 grant。`claimCredential` 在返回密码前先清除 grant，因此后续 Windows 密码校验失败也不会让同一批准再次使用。
 
-The Credential Provider first requests the identity nonce during user
-enumeration so the manager can see the snapshot after a native unlock. Every
-manual saved-credential submission captures again immediately before claiming
-the password, including when the earlier capture succeeded. The
-`savedIdentityCapture` report field records only the enumeration-time result;
-the submission retry remains subject to the service's locked-session and
-identity checks. A retry failure does not consume or release the credential.
-The pipe client handles immediately completed and pending overlapped I/O
-separately. If the five-minute snapshot expires while a 120-second test grant
-is still valid, a matching locked-console capture keeps that grant's nonce;
-an identity or session change still revokes the grant.
+## Manager GUI
 
-The first VM run also showed intermittent manager Refresh transport failures.
-The service previously disconnected its only pipe instance immediately after
-writing a reply, which could discard unread reply bytes. It now waits at most
-two seconds for an acknowledgment sent only after the client has read the full
-reply, then disconnects. A missing acknowledgment is diagnostic, not a reason
-to replay an operation or restore a consumed test grant. The manager displays
-the failing IPC stage and Win32 code on Refresh; `reply-read` points at reply
-delivery, whereas `wait-for-pipe` or `open-pipe` points at connection pressure.
-The client also retries a `CreateFileW`/`ERROR_PIPE_BUSY` race within its
-existing timeout. The updated binaries were deployed in the VM and repeated
-manager Refresh was stable. A later controlled sequence established behavioral
-one-shot rejection: a successful saved-credential unlock was followed by a
-refused attempt without new authorization, then another successful unlock
-after new authorization. Earlier claim-refused and active-console messages
-alone did not establish that result.
+`unlock_saved_credential_manager.exe` 是正式设置界面完成前必须保留的临时管理工具。它只在提升权限、已解锁的物理控制台使用，并保留四个功能：
 
-The `UnlockWindowsSavedCredentialService` runs as LocalSystem. Its vault is
-`%ProgramData%\UnlockWindowsSavedCredential\saved-credential.dat`; both the
-directory and file have a protected SYSTEM-only DACL. It uses LocalSystem
-**user-scope** DPAPI with `CRYPTPROTECT_UI_FORBIDDEN`, without
-`CRYPTPROTECT_LOCAL_MACHINE`. The DACL is access control, not a defense
-against an administrator who has obtained SYSTEM. The manager's password
-prompt asks Windows not to persist a second credential copy. Passwords are
-not put in the identity report. The disk record keeps only a format header
-and a DPAPI ciphertext; the SID, QualifiedUserName, ProviderID, and password
-are all inside the protected payload.
+- **Refresh**：读取最新 LogonUI 身份快照和保存状态；
+- **Set credential**：首次保存当前身份的实际 Microsoft Account 密码；
+- **Update stored**：替换已有保存密码；
+- **Clear stored**：删除保存记录。
 
-The service's dedicated local-only pipe uses a restricted DACL, rejects remote
-connections, and authorizes each operation. For a claim it pins the client
-process handle, compares the process and actual pipe-client tokens, verifies
-the SYSTEM LogonUI image/session, and checks the currently locked physical
-console and the exact stored identity. The 120-second test authorization lives
-only in service memory and is consumed **before** DPAPI decryption. Failure
-to pack, authenticate, or keep the tile alive does not restore it. Credential
-packing remains in the Credential Provider's LogonUI session; the service
-never creates a Negotiate buffer. This boundary does not defend against an
-attacker who already controls SYSTEM.
+Manager 不再创建解锁授权。唯一授权来源是通过 iPhone 验证的 assertion。
 
-## VM procedure (after separate build and install authorization)
+典型设置顺序：先锁定并用原生 PIN/密码解锁一次，让服务获得当前 LogonUI 身份快照；然后运行 Manager，Refresh 后设置或更新密码。正式设置 UI 完成前不要删除该 GUI。
 
-1. Build on the development machine. Copy the prebuilt
-   `unlock_windows_components_wizard.exe`, `unlock_credential_provider.dll`,
-   `unlock_saved_credential_service.exe`, and
-   `unlock_saved_credential_manager.exe` from the **same build** into one VM
-   folder. The VM does not need a compiler. The wizard installs the service and
-   Credential Provider; the manager stays in the VM folder. Do not install
-   alongside an old custom LSA package or overwrite a loaded Credential
-   Provider DLL.
-2. Run the wizard elevated, restart as requested, and sign in with native
-   PIN/password. Lock the **existing** session, wait for the MSA tile to
-   enumerate, then unlock with the native PIN/password. Launch the manager
-   elevated on this physical console and select **Refresh**. Confirm the SID,
-   Windows QualifiedUserName and ProviderID are the intended identity.
-3. Select **Set credential** (or **Update stored**). Enter the actual MSA
-   password. This sets a *local copy*; it does not change the online MSA
-   password and does not yet prove that the copy can unlock Windows.
-4. Select **Authorize one test**, lock within 120 seconds, choose the MSA
-   tile's **Use authorized saved credential** checkbox, and click **Test
-   unlock**. Do not type a password in the tile for this test. Confirm the
-   existing SID and console session are restored. A failed claim requires a
-   new explicit authorization. Try an incorrect stored password at most once
-   in a controlled VM snapshot to avoid Windows retry delays.
-5. Verify separately: identity changes reject release; service restart keeps
-   the encrypted record but loses the test authorization; a second claim or
-   wrong session/caller is rejected; and the native PIN/password tiles remain
-   usable. The current VM has confirmed the service-restart behavior, a used
-   authorization's rejection, fresh reauthorization, and native PIN/password
-   recovery after refusal. Identity changes and wrong session/caller still need
-   direct evidence. The separate desktop/linked-token baseline remains another
-   task. A full Windows reboot reaches first logon rather than the supported
-   existing-session unlock scenario, so its refused claim is not a substitute
-   for these tests.
-6. Normal wizard removal first asks the service to confirm credential deletion,
-   seals further credential operations in that service process, then removes
-   registrations and, after restart, component files. If deletion
-   cannot be confirmed it stops instead of claiming complete removal. The
-   explicit `unlock_windows_components_wizard.exe --emergency-remove` path is
-   for a damaged disposable VM: it warns, removes known components, and
-   preserves an `RemovedUnconfirmed` diagnostic state when the secret could
-   not be confirmed absent. File deletion does not erase VM snapshots,
-   backups, or physical SSD history.
+## 删除语义
 
-## VM acceptance record (1 Oct 2026)
-
-- Passed (operator-reported): saved-credential unlock with unchanged console
-  SID/session; after a successful claim, another attempt without authorization
-  was refused, while a new authorization worked. Authorization issued before
-  `Restart-Service UnlockWindowsSavedCredentialService` was refused after the
-  restart; reauthorization then worked with the stored credential. This is
-  behavioral evidence that the secret survives service restart and the old
-  grant cannot unlock after restart. The generic refusal message alone does
-  not identify which service check rejected the request.
-- Passed (operator-reported): native PIN/password recovered the session after
-  refusal. Normal wizard uninstall reported confirmed credential deletion;
-  querying the former vault path afterward returned not found. Before removal,
-  an administrator's `Get-Item`/`icacls` access to the vault file was denied,
-  while `icacls` on its directory showed `NT AUTHORITY\SYSTEM:(F)` only.
-- Not directly verified: the vault file's ciphertext from a SYSTEM context;
-  the administrator access denial is expected from the ACL, not proof of the
-  DPAPI bytes on disk. The implementation uses LocalSystem user-scope DPAPI.
-  Also unverified: changed QualifiedUserName/ProviderID under the same SID,
-  wrong session/non-LogonUI caller rejection, emergency removal, and behavior
-  under an unavailable service. Do not change the only VM's account linkage
-  merely to force an identity mismatch.
-
-## References
-
-- [CryptProtectData](https://learn.microsoft.com/en-us/windows/win32/api/dpapi/nf-dpapi-cryptprotectdata)
-- [ICredentialProviderSetUserArray::SetUserArray](https://learn.microsoft.com/en-us/windows/win32/api/credentialprovider/nf-credentialprovider-icredentialprovidersetuserarray-setuserarray)
-- [ICredentialProviderUser::GetProviderID](https://learn.microsoft.com/en-us/windows/win32/api/credentialprovider/nf-credentialprovider-icredentialprovideruser-getproviderid)
-- [WTSQuerySessionInformationW](https://learn.microsoft.com/en-us/windows/win32/api/wtsapi32/nf-wtsapi32-wtsquerysessioninformationw)
-- [WTSINFOEX_LEVEL1_W lock state](https://learn.microsoft.com/en-us/windows/win32/api/wtsapi32/ns-wtsapi32-wtsinfoex_level1_w)
-- [Named pipe security](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights)
-- [DisconnectNamedPipe unread-data behavior](https://learn.microsoft.com/en-us/windows/win32/api/namedpipeapi/nf-namedpipeapi-disconnectnamedpipe)
-- [PeekNamedPipe](https://learn.microsoft.com/en-us/windows/win32/api/namedpipeapi/nf-namedpipeapi-peeknamedpipe)
-- [Named pipe client connection handling](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-client)
-- [ImpersonateNamedPipeClient](https://learn.microsoft.com/en-us/windows/win32/api/namedpipeapi/nf-namedpipeapi-impersonatenamedpipeclient)
+Components Wizard 卸载前调用 `clearForRemoval`。只有服务确认 vault、grant、snapshot 和 challenge 已清除后，Wizard 才继续注销服务与 Credential Provider。没有忽略此失败的 emergency removal。

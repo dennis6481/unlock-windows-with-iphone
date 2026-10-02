@@ -1,6 +1,6 @@
 // Created by Rui MA on 26 Sep 2026
 
-#include "UnlockServiceCore.h"
+#include "PhoneApprovalCore.h"
 
 #define WIN32_NO_STATUS
 #include <Windows.h>
@@ -19,8 +19,8 @@
 
 namespace {
 
-using unlock_windows::service::AssertionCode;
-using unlock_windows::service::UnlockServiceCore;
+using unlock_windows::phone_approval::AssertionCode;
+using unlock_windows::phone_approval::PhoneApprovalCore;
 
 void require(const bool condition, const char* message) {
     if (!condition) {
@@ -261,8 +261,8 @@ SignedAssertion sign(
 }
 
 std::string makeAssertion(
-    const UnlockServiceCore& service,
-    const unlock_windows::service::IssuedChallenge& issued,
+    const PhoneApprovalCore& service,
+    const unlock_windows::phone_approval::IssuedChallenge& issued,
     const SignedAssertion& signedAssertion
 ) {
     return "{\"keyID\":\"" + signedAssertion.keyId +
@@ -273,7 +273,7 @@ std::string makeAssertion(
 }
 
 void run() {
-    UnlockServiceCore service;
+    PhoneApprovalCore service;
     const auto issued = service.issueChallenge(1'000);
     require(issued.json.find("windows-unlock") != std::string::npos, "challenge audience missing");
     require(issued.json.find(service.requestIdString(issued.challenge)) != std::string::npos, "challenge request ID missing");
@@ -320,14 +320,9 @@ void run() {
     const auto approval = service.consumeUnlockApproval(2'003);
     require(approval.has_value(), "approved assertion did not create a pending approval");
     require(
-        approval->challenge.requestId == validIssued.challenge.requestId &&
-            approval->accountSid == "S-1-5-21-111111111-222222222-333333333-1001" &&
-            std::memcmp(
-                approval->signature.data(),
-                signedAssertion.signature.data(),
-                approval->signature.size()
-            ) == 0,
-        "pending approval did not preserve the verified assertion"
+        approval->issuedAtMilliseconds == validIssued.challenge.issuedAtMilliseconds &&
+            approval->accountSid == "S-1-5-21-111111111-222222222-333333333-1001",
+        "pending approval did not preserve the verified identity"
     );
     require(
         !service.consumeUnlockApproval(2'004).has_value(),
@@ -376,7 +371,7 @@ void run() {
         "expired pending approval was returned"
     );
 
-    std::cout << "UnlockServiceCore tests passed\n";
+    std::cout << "PhoneApprovalCore tests passed\n";
 }
 
 } // namespace
@@ -388,11 +383,11 @@ int main() {
         winrt::uninit_apartment();
         return 0;
     } catch (const winrt::hresult_error& error) {
-        std::cerr << "UnlockServiceCore test failed: "
+        std::cerr << "PhoneApprovalCore test failed: "
                   << winrt::to_string(error.message()) << "\n";
         return 1;
     } catch (const std::exception& error) {
-        std::cerr << "UnlockServiceCore test failed: " << error.what() << "\n";
+        std::cerr << "PhoneApprovalCore test failed: " << error.what() << "\n";
         return 1;
     }
 }

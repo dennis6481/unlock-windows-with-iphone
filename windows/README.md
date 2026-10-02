@@ -1,88 +1,52 @@
-# Windows implementation
+<!-- Created by Rui MA on 26 Sep 2026 -->
 
-The Windows component test target is Windows 10 or later. The native
-Components Wizard is the only normal installation and uninstall entry point.
-PowerShell does not copy DLLs, edit component registry values, maintain JSON
-backups, or implement a second transaction flow.
+# Windows
 
-## Components Wizard
+Windows 主线只有一条：iPhone 签名经前台 GATT host 转交 LocalSystem 服务验证，服务创建 120 秒单次授权，Credential Provider 领取本机加密保存的密码并提交给原生 Negotiate。
 
-The wizard is a native Windows EXE with an explicit Common Controls v6 and
-requireAdministrator manifest. It uses a classic Wizard97 Property Sheet with
-a generated left-side watermark and:
+## 目录
 
-- a status page showing the current state and one safe primary action;
-- a confirmation page before installation, removal, or recovery;
-- a progress page for the transaction;
-- a completion or recovery page with an explicit restart action.
+- `Protocol`：固定签名载荷和 CNG P-256 验签。
+- `PhoneApproval`：`PhoneApprovalCore` 与 `EnrollmentStore`，由保存凭据服务直接使用。
+- `SavedCredential`：LocalSystem 服务、两条受限 named pipe、DPAPI vault 和临时密码管理 GUI。
+- `GattHost`：当前前台 BLE transport，只接受认证请求 `0x01`。
+- `CredentialProvider`：LogonUI 磁贴，只领取有效手机授权对应的保存凭据。
+- `PairingTool`：管理员确认并登记 iPhone 公钥。
+- `ComponentsWizard`：唯一安装、卸载和事务恢复入口。
+- `Diagnostics`：只读状态检查。
 
-The implementation is split into:
+仓库不再包含自定义 LSA 包、LSA 探针、独立 phone-approval host、PowerShell 安装包装器或旧序列化格式。
 
-- ComponentState: pure state snapshot and recovery-plan decisions;
-- WindowsAdapter: registry, System32, PE architecture, Task Scheduler and UAC
-  operations, including saved-credential service control;
-- ComponentTransaction: installation, registration removal, post-restart
-  cleanup, rollback and stale-state recovery;
-- main.cpp: Property Sheet page lifecycle only.
+## 构建
 
-The state record is stored at
-HKLM\SOFTWARE\UnlockWindowsWithIPhone\ComponentsWizard. It contains the
-schema version, current phase, transaction ID, credential-cleanup status,
-wizard path, timestamp and last error. Unknown files or registrations without
-a valid transaction record are never deleted automatically.
+最低支持 Windows 10。使用目标机器原生架构的 Visual Studio C++ 工具链：
 
-Installation writes an Installing record before changing the machine and
-changes it to Installed only after verification. If rollback cannot finish,
-RecoveryRequired is preserved. The current VM wizard installs the Credential
-Provider and a LocalSystem saved-credential service; it does not register or
-load a custom LSA package. Normal uninstall first confirms deletion of the
-saved credential, then removes both registrations, registers an interactive
-high-privilege logon task, and deletes the remaining binaries after restart.
-The task invokes the internal
-resume-uninstall entry point. A failed cleanup keeps state for retry. The
-explicit `--emergency-remove` option can remove known components when the
-credential cannot be confirmed cleared; it retains `RemovedUnconfirmed` state
-and must not be interpreted as secret erasure.
+```powershell
+cd windows
+make build
+make test
+make build-release
+```
 
-The installer creates System32 binaries directly with normal file attributes and
-copies bytes without inheriting source attributes. Windows 10 and later
-native x64 or ARM64 builds are accepted; the wizard, source binaries and Windows
-architecture must match.
+`make test` 会触发编译。没有当前任务的明确授权时不要运行构建或测试。
 
-The saved-credential path has been built and installed in a VM. After a fresh
-one-test authorization, the Credential Provider used the saved credential
-without manual password entry and unlocked the existing SID and console
-session. Repeated manager Refresh was stable after the pipe completion,
-grant-nonce, and bounded full-reply acknowledgment changes. Refresh reports
-the failing IPC stage and Win32 code if a transport failure recurs. Replay
-rejection, service-restart persistence, identity-change rejection, and failure
-recovery still need separate VM evidence.
-See [the manual saved-credential VM procedure](SavedCredential/README.md).
+## 安装与卸载
 
-## Build and tests
+将 Release 产物放在 Components Wizard 同一目录，提升权限运行 `unlock_windows_components_wizard.exe`。Wizard 安装以下两个系统组件：
 
-From this directory:
+- `%SystemRoot%\System32\unlock_saved_credential_service.exe`
+- `%SystemRoot%\System32\unlock_credential_provider.dll`
 
-    cd windows
-    make build-release
-    ctest --test-dir build -C Release --output-on-failure
+卸载先要求服务确认删除保存凭据，再注销组件并安排重启后删除剩余文件。失败状态由同一份 HKLM 事务记录恢复；没有忽略凭据清理失败的强制删除入口。
 
-The pure Components Wizard state tests are in
-ComponentsWizardTests/main.cpp and cover empty state, complete installation,
-partial installation, pending reboot cleanup, stale Installed state,
-recovery-required state and unknown residue blocking. Real System32, LSA and
-Task Scheduler behavior remains a disposable-VM test.
+`Diagnostics/Get-ComponentsStatus.ps1` 只读取文件、服务、注册表和清理任务状态，不修改系统。
 
-## Diagnostics and recovery
+## 当前使用顺序
 
-Diagnostics/Get-ComponentsStatus.ps1 is read-only. It reports architecture,
-SHA-256 hashes, registrations, the HKLM transaction record and Task Scheduler
-status.
+1. Components Wizard 安装服务和 Credential Provider。
+2. `unlock_saved_credential_manager` 在已解锁控制台设置或更新密码。
+3. `unlock_pairing_tool` 确认并登记 iPhone 公钥。
+4. 启动 `unlock_gatt_host`，锁定 Windows，在 iPhone 发起认证。
+5. 收到 `unlock_approved` 后，120 秒内点击 Credential Provider 的 **Unlock**。
 
-Recovery/Invoke-ComponentsRecovery.ps1 only invokes the native
-resume-uninstall entry point with elevation. The old component-specific
-Install-Test and Uninstall-Test script paths are compatibility wrappers; they
-no longer perform direct installation or rollback.
-
-Windows-Unlock-Components-Wizard.ps1 remains a launcher for the native EXE.
-LookupAuthenticationPackage.exe remains a read-only LSA lookup tool.
+Manager GUI 在正式设置 UI 出现前必须保留；它的 Refresh、Set、Update 和 Clear 是当前唯一凭据维护入口。

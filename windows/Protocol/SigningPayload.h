@@ -7,6 +7,9 @@
 
 namespace unlock_windows::protocol {
 
+inline constexpr char kUnlockAudience[] = "windows-unlock";
+inline constexpr std::int64_t kChallengeLifetimeMilliseconds = 120'000;
+
 struct FixedChallenge {
     std::uint32_t version = 0;
     std::array<std::uint8_t, 16> requestId{}; // RFC 4122 byte order

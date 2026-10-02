@@ -8,14 +8,11 @@
 #include "SavedCredentialIpc.h"
 
 #include <Windows.h>
-#include <lmcons.h>
-#include <ntsecapi.h>
 #include <security.h>
 #include <shellapi.h>
 #include <taskschd.h>
 #include <wrl/client.h>
 
-#include <algorithm>
 #include <array>
 #include <cstring>
 #include <cwchar>
@@ -25,7 +22,6 @@
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "oleaut32.lib")
-#pragma comment(lib, "secur32.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "taskschd.lib")
 
@@ -36,16 +32,12 @@ using Microsoft::WRL::ComPtr;
 
 constexpr wchar_t kCredentialProviderDllName[] = L"unlock_credential_provider.dll";
 constexpr wchar_t kSavedCredentialServiceExeName[] = L"unlock_saved_credential_service.exe";
-constexpr wchar_t kLsaDllName[] = L"unlock_lsa_authentication_package.dll";
-constexpr wchar_t kLsaModuleName[] = L"unlock_lsa_authentication_package";
 constexpr wchar_t kCredentialProviderName[] = L"Unlock Windows with iPhone";
 constexpr wchar_t kCredentialProviderRegistryPath[] =
     L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Authentication\\Credential Providers\\"
     L"{2F7A2DF4-75B4-4D8E-8A3B-0DA46C6E9112}";
 constexpr wchar_t kCredentialProviderClsidRegistryPath[] =
     L"SOFTWARE\\Classes\\CLSID\\{2F7A2DF4-75B4-4D8E-8A3B-0DA46C6E9112}";
-constexpr wchar_t kLsaRegistryPath[] = L"SYSTEM\\CurrentControlSet\\Control\\Lsa";
-constexpr wchar_t kLsaRegistryValueName[] = L"Authentication Packages";
 constexpr wchar_t kWizardStateRegistryPath[] = L"SOFTWARE\\UnlockWindowsWithIPhone\\ComponentsWizard";
 constexpr wchar_t kFinalizeTaskName[] = L"UnlockWindowsWithIPhone-FinalizeUninstall";
 constexpr wchar_t kSchemaVersionValueName[] = L"SchemaVersion";
@@ -55,7 +47,6 @@ constexpr wchar_t kStateWizardPathValueName[] = L"WizardPath";
 constexpr wchar_t kStateCreatedAtValueName[] = L"CreatedAtUtc";
 constexpr wchar_t kStateLastErrorValueName[] = L"LastError";
 constexpr wchar_t kCredentialCleanupValueName[] = L"CredentialCleanupConfirmed";
-constexpr wchar_t kEmergencyRemovalValueName[] = L"EmergencyRemoval";
 
 [[noreturn]] void fail(const std::wstring& message) {
     throw ComponentError(message);
@@ -327,63 +318,8 @@ bool registryKeyExists(const wchar_t* subkey) {
     return true;
 }
 
-std::size_t boundedStringLength(const wchar_t* value, const std::size_t maximum) {
-    std::size_t length = 0;
-    while (length < maximum && value[length] != L'\0') {
-        ++length;
-    }
-    return length;
-}
-
-std::vector<std::wstring> parseMultiString(const std::vector<std::byte>& bytes) {
-    if (bytes.size() % sizeof(wchar_t) != 0 || bytes.size() < 2 * sizeof(wchar_t)) {
-        fail(L"The Authentication Packages registry value is malformed.");
-    }
-    const auto* values = reinterpret_cast<const wchar_t*>(bytes.data());
-    const auto valueCount = bytes.size() / sizeof(wchar_t);
-    std::vector<std::wstring> result;
-    std::size_t offset = 0;
-    while (offset < valueCount) {
-        const auto* start = values + offset;
-        const auto remaining = valueCount - offset;
-        const auto length = boundedStringLength(start, remaining);
-        if (length == remaining) {
-            fail(L"The Authentication Packages registry value is not null terminated.");
-        }
-        if (length == 0) {
-            return result;
-        }
-        result.emplace_back(start, length);
-        offset += length + 1;
-    }
-    fail(L"The Authentication Packages registry value is not double-null terminated.");
-}
-
-std::vector<std::byte> serializeMultiString(const std::vector<std::wstring>& values) {
-    std::size_t characterCount = 1;
-    for (const auto& value : values) {
-        characterCount += value.size() + 1;
-    }
-    std::vector<wchar_t> serialized(characterCount, L'\0');
-    std::size_t offset = 0;
-    for (const auto& value : values) {
-        std::memcpy(serialized.data() + offset, value.c_str(), value.size() * sizeof(wchar_t));
-        offset += value.size() + 1;
-    }
-    std::vector<std::byte> bytes(serialized.size() * sizeof(wchar_t));
-    std::memcpy(bytes.data(), serialized.data(), bytes.size());
-    return bytes;
-}
-
-bool containsMultiString(const std::vector<std::byte>& value, const std::wstring& expected) {
-    const auto values = parseMultiString(value);
-    return std::any_of(values.begin(), values.end(), [&](const std::wstring& candidate) {
-        return _wcsicmp(candidate.c_str(), expected.c_str()) == 0;
-    });
-}
-
 bool isKnownPhase(const DWORD phase) {
-    return phase <= static_cast<DWORD>(WizardPhase::removedUnconfirmed);
+    return phase <= static_cast<DWORD>(WizardPhase::recoveryRequired);
 }
 
 std::filesystem::path system32Directory() {
@@ -616,10 +552,6 @@ std::filesystem::path WindowsAdapter::savedCredentialServiceSource() const {
     return wizardPath_.parent_path() / kSavedCredentialServiceExeName;
 }
 
-std::filesystem::path WindowsAdapter::lsaSource() const {
-    return wizardPath_.parent_path() / kLsaDllName;
-}
-
 std::filesystem::path WindowsAdapter::credentialProviderTarget() const {
     return system32Directory() / kCredentialProviderDllName;
 }
@@ -628,33 +560,11 @@ std::filesystem::path WindowsAdapter::savedCredentialServiceTarget() const {
     return system32Directory() / kSavedCredentialServiceExeName;
 }
 
-std::filesystem::path WindowsAdapter::lsaTarget() const {
-    return system32Directory() / kLsaDllName;
-}
-
 EnvironmentStatus WindowsAdapter::environment() const {
     EnvironmentStatus result;
     result.elevated = isElevated();
     result.nativeArchitecture = nativeArchitecture();
     result.wizardArchitecture = executableArchitecture(wizardPath_);
-    if (fileExists(credentialProviderSource())) {
-        result.credentialProviderSourceArchitecture = executableArchitecture(credentialProviderSource());
-    }
-    if (fileExists(savedCredentialServiceSource())) {
-        result.savedCredentialServiceSourceArchitecture = executableArchitecture(savedCredentialServiceSource());
-    }
-    if (fileExists(lsaSource())) {
-        result.lsaSourceArchitecture = executableArchitecture(lsaSource());
-    }
-    if (fileExists(credentialProviderTarget())) {
-        result.credentialProviderTargetArchitecture = executableArchitecture(credentialProviderTarget());
-    }
-    if (fileExists(savedCredentialServiceTarget())) {
-        result.savedCredentialServiceTargetArchitecture = executableArchitecture(savedCredentialServiceTarget());
-    }
-    if (fileExists(lsaTarget())) {
-        result.lsaTargetArchitecture = executableArchitecture(lsaTarget());
-    }
     return result;
 }
 
@@ -691,8 +601,6 @@ std::optional<WizardState> WindowsAdapter::readState() const {
     state.lastError = readRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStateLastErrorValueName).value_or(L"");
     state.credentialCleanupConfirmed = readRegistryDword(
         HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kCredentialCleanupValueName).value_or(0) == 1;
-    state.emergencyRemoval = readRegistryDword(
-        HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kEmergencyRemovalValueName).value_or(0) == 1;
     return state;
 }
 
@@ -705,34 +613,10 @@ void WindowsAdapter::writeState(const WizardState& state) const {
     writeRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStateLastErrorValueName, state.lastError);
     writeRegistryDword(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath,
         kCredentialCleanupValueName, state.credentialCleanupConfirmed ? 1 : 0);
-    writeRegistryDword(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath,
-        kEmergencyRemovalValueName, state.emergencyRemoval ? 1 : 0);
 }
 
 void WindowsAdapter::clearState() const {
     deleteRegistryTree(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath);
-}
-
-std::vector<std::byte> WindowsAdapter::readAuthenticationPackages() const {
-    const auto value = readRegistryValue(HKEY_LOCAL_MACHINE, kLsaRegistryPath, kLsaRegistryValueName);
-    if (!value || value->type != REG_MULTI_SZ) {
-        fail(L"The LSA Authentication Packages value is missing or has an unexpected type.");
-    }
-    (void)parseMultiString(value->bytes);
-    return value->bytes;
-}
-
-void WindowsAdapter::writeAuthenticationPackages(const std::vector<std::byte>& value) const {
-    (void)parseMultiString(value);
-    writeRegistryValue(HKEY_LOCAL_MACHINE, kLsaRegistryPath, kLsaRegistryValueName, REG_MULTI_SZ, value);
-}
-
-std::vector<std::byte> WindowsAdapter::addLsaModule(const std::vector<std::byte>& value) const {
-    auto values = parseMultiString(value);
-    if (!containsMultiString(value, kLsaModuleName)) {
-        values.emplace_back(kLsaModuleName);
-    }
-    return serializeMultiString(values);
 }
 
 void WindowsAdapter::copyNativeBinary(const std::filesystem::path& source, const std::filesystem::path& target) const {
@@ -836,7 +720,7 @@ void WindowsAdapter::createSavedCredentialService() const {
     const auto command = L"\"" + target.wstring() + L"\"";
     ScopedServiceHandle service(CreateServiceW(manager.get(),
         unlock_windows::saved_credential::kServiceName,
-        L"Unlock Windows saved credential (VM test)",
+        L"Unlock Windows saved credential",
         SERVICE_START | SERVICE_QUERY_STATUS | DELETE,
         SERVICE_WIN32_OWN_PROCESS, SERVICE_AUTO_START, SERVICE_ERROR_NORMAL,
         command.c_str(), nullptr, nullptr, nullptr, L"LocalSystem", nullptr));
@@ -907,9 +791,9 @@ void WindowsAdapter::removeSavedCredentialService() const {
     checkWin32(DeleteService(service.get()), L"Could not remove the saved credential service registration");
     service.close();
     for (int attempt = 0; attempt < 100; ++attempt) {
-        ScopedServiceHandle probe(OpenServiceW(manager.get(),
+        ScopedServiceHandle remainingService(OpenServiceW(manager.get(),
             unlock_windows::saved_credential::kServiceName, SERVICE_QUERY_STATUS));
-        if (probe.get() == nullptr && GetLastError() == ERROR_SERVICE_DOES_NOT_EXIST) return;
+        if (remainingService.get() == nullptr && GetLastError() == ERROR_SERVICE_DOES_NOT_EXIST) return;
         Sleep(100);
     }
     fail(L"The saved credential service registration was not removed within 10 seconds.");
@@ -1051,7 +935,6 @@ ComponentSnapshot WindowsAdapter::inspect() const {
     try {
         snapshot.credentialProviderDllPresent = fileExists(credentialProviderTarget());
         snapshot.savedCredentialServiceExePresent = fileExists(savedCredentialServiceTarget());
-        snapshot.lsaDllPresent = fileExists(lsaTarget());
         snapshot.credentialProviderRegistered = registryKeyExists(kCredentialProviderRegistryPath);
         snapshot.credentialProviderClsidRegistered = registryKeyExists(kCredentialProviderClsidRegistryPath);
         ScopedServiceHandle manager(OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT));
@@ -1089,37 +972,12 @@ ComponentSnapshot WindowsAdapter::inspect() const {
         } else if (GetLastError() != ERROR_SERVICE_DOES_NOT_EXIST) {
             fail(L"Could not inspect the saved credential service registration.");
         }
-        snapshot.lsaPackageRegistered = containsMultiString(readAuthenticationPackages(), kLsaModuleName);
         snapshot.continuationTaskPresent = continuationTaskExists();
     } catch (const ComponentError& error) {
         snapshot.observationValid = false;
         snapshot.observationError = error.wideWhat();
     }
     return snapshot;
-}
-
-std::wstring WindowsAdapter::queryLsaPackage() const {
-    LSA_HANDLE lsa = nullptr;
-    const auto connectStatus = LsaConnectUntrusted(&lsa);
-    if (connectStatus < 0) {
-        std::wstringstream message;
-        message << L"Could not connect to LSA (NTSTATUS 0x" << std::hex << static_cast<std::uint32_t>(connectStatus) << L").";
-        fail(message.str());
-    }
-
-    LSA_STRING packageName{};
-    packageName.Buffer = const_cast<PCHAR>("UnlockWindowsWithIPhone");
-    packageName.Length = static_cast<USHORT>(std::strlen(packageName.Buffer));
-    packageName.MaximumLength = packageName.Length;
-    ULONG packageId = 0;
-    const auto lookupStatus = LsaLookupAuthenticationPackage(lsa, &packageName, &packageId);
-    LsaDeregisterLogonProcess(lsa);
-    if (lookupStatus < 0) {
-        std::wstringstream message;
-        message << L"LSA did not load UnlockWindowsWithIPhone (NTSTATUS 0x" << std::hex << static_cast<std::uint32_t>(lookupStatus) << L").";
-        fail(message.str());
-    }
-    return L"UnlockWindowsWithIPhone is loaded by LSA; package id=" + std::to_wstring(packageId);
 }
 
 void WindowsAdapter::restartWindows() const {

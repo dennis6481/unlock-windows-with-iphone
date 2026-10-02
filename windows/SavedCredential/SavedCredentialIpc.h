@@ -25,7 +25,6 @@ enum class Operation : std::uint16_t {
     setCredential = 3,
     updateCredential = 4,
     clearCredential = 5,
-    armTest = 6,
     claimCredential = 7,
     clearForRemoval = 8,
     issuePhoneChallenge = 9,

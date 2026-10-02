@@ -19,7 +19,6 @@ help:
 	@echo "make release         alias for make build-release"
 	@echo "make test            build and run all CTest tests"
 	@echo "make clean           remove CMake build outputs"
-	@echo "make run-service     start the foreground UnlockService host"
 	@echo "make run-gatt        start the foreground GATT host"
 	@echo "make CONFIG=Release  use a different CMake configuration"
 	@echo "make TARGET_ARCH=x64  override automatic native architecture detection"
@@ -45,9 +44,6 @@ test: build
 
 clean:
 	set "TEMP=$(TMP_DIR)" && set "TMP=$(TMP_DIR)" && set "UNLOCK_VS_DEV_CMD=$(VS_DEV_CMD)" && set "UNLOCK_CMAKE_COMMAND=$(CMAKE)" && set "UNLOCK_TARGET_ARCH=$(TARGET_ARCH)" && call "$(NATIVE_VSDEV_CMD)" --build "$(BUILD_DIR)" --target clean --config $(CONFIG)
-
-run-service: build
-	"$(BUILD_DIR)\unlock_service_host.exe"
 
 run-gatt: build
 	"$(BUILD_DIR)\unlock_gatt_host.exe"

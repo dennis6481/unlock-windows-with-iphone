@@ -281,7 +281,7 @@ void Vault::save(const Identity& identity, const std::uint8_t* password,
     append(plain, password, passwordBytes);
     DATA_BLOB input{static_cast<DWORD>(plain.value.size()), plain.value.data()};
     DATA_BLOB protectedBlob{};
-    if (!CryptProtectData(&input, L"Unlock Windows saved credential VM credential", nullptr, nullptr,
+    if (!CryptProtectData(&input, L"Unlock Windows saved credential", nullptr, nullptr,
             nullptr, CRYPTPROTECT_UI_FORBIDDEN, &protectedBlob)) {
         fail("saved credential LocalSystem DPAPI protect failed");
     }

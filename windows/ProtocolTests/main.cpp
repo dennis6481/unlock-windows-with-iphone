@@ -2,7 +2,6 @@
 
 #include "SigningPayload.h"
 #include "UnlockCrypto.h"
-#include "UnlockLogonBufferCodec.h"
 
 #include <array>
 #include <cstring>
@@ -361,87 +360,12 @@ void testCngVerifier() {
     );
 }
 
-void testUnlockLogonBuffer() {
-    const auto challenge = makeFixture();
-
-    std::array<std::uint8_t, unlock_windows::protocol::kKeyIdSize> keyId{};
-    std::array<std::uint8_t, 12> sid{
-        1, 1, 0, 0, 0, 0, 0, 5, 18, 0, 0, 0
-    };
-    std::array<std::uint8_t, unlock_windows::protocol::kRawSignatureSize> signature{};
-    for (std::size_t index = 0; index < keyId.size(); ++index) {
-        keyId[index] = static_cast<std::uint8_t>(0xa0 + index);
-    }
-    for (std::size_t index = 0; index < signature.size(); ++index) {
-        signature[index] = static_cast<std::uint8_t>(0x40 + index);
-    }
-
-    unlock_windows::protocol::UnlockLogonBuffer buffer{};
-    const auto built = unlock_windows::protocol::buildUnlockLogonBuffer(
-        challenge,
-        keyId,
-        sid,
-        signature,
-        buffer
-    );
-    require(built.succeeded(), "valid logon buffer was rejected while building");
-
-    const auto bytes = std::span<const std::uint8_t>(
-        reinterpret_cast<const std::uint8_t*>(&buffer),
-        sizeof(buffer)
-    );
-    require(
-        unlock_windows::protocol::validateUnlockLogonBuffer(bytes).succeeded(),
-        "valid logon buffer was rejected while validating"
-    );
-
-    auto invalidMagic = buffer;
-    invalidMagic.magic = 0;
-    require(
-        unlock_windows::protocol::validateUnlockLogonBuffer(std::span<const std::uint8_t>(
-            reinterpret_cast<const std::uint8_t*>(&invalidMagic),
-            sizeof(invalidMagic)
-        )).code == unlock_windows::protocol::UnlockLogonBufferCode::invalid_magic,
-        "invalid logon buffer magic was accepted"
-    );
-
-    auto invalidSid = buffer;
-    invalidSid.sidLength--;
-    require(
-        unlock_windows::protocol::validateUnlockLogonBuffer(std::span<const std::uint8_t>(
-            reinterpret_cast<const std::uint8_t*>(&invalidSid),
-            sizeof(invalidSid)
-        )).code == unlock_windows::protocol::UnlockLogonBufferCode::invalid_sid,
-        "invalid logon buffer SID was accepted"
-    );
-
-    require(
-        unlock_windows::protocol::validateUnlockLogonBuffer(bytes.first(bytes.size() - 1)).code ==
-            unlock_windows::protocol::UnlockLogonBufferCode::invalid_size,
-        "truncated logon buffer was accepted"
-    );
-
-    auto unsupportedChallenge = challenge;
-    unsupportedChallenge.version = 2;
-    require(
-        unlock_windows::protocol::buildUnlockLogonBuffer(
-            unsupportedChallenge,
-            keyId,
-            sid,
-            signature,
-            buffer
-        ).code == unlock_windows::protocol::UnlockLogonBufferCode::unsupported_version,
-        "unsupported logon buffer challenge version was accepted"
-    );
-}
-
 } // namespace
 
 int main() {
     try {
         testSigningPayload();
         testCngVerifier();
-        testUnlockLogonBuffer();
         std::cout << "unlock_protocol_tests: passed\n";
         return 0;
     } catch (const std::exception& error) {

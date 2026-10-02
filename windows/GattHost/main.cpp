@@ -1,5 +1,4 @@
 // Created by Rui MA on 26 Sep 2026
-// Modified by Rui MA on 26 Sep 2026
 
 #include "SavedCredentialIpc.h"
 
@@ -12,11 +11,9 @@
 #include <winrt/base.h>
 
 #include <cstdint>
+#include <exception>
 #include <functional>
-#include <iomanip>
 #include <iostream>
-#include <sstream>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -36,8 +33,6 @@ constexpr std::wstring_view kResultCharacteristicUuid = L"F1E2D3C4-B5A6-4789-801
 
 constexpr std::size_t kMaxTransportFrameSize = 4096;
 constexpr std::uint8_t kAuthenticateRequest = 0x01;
-constexpr std::uint8_t kEnrollmentRequest = 0x02;
-constexpr std::size_t kRawPublicKeySize = 65;
 
 std::string narrow(const hstring& value) {
     return to_string(value);
@@ -70,102 +65,6 @@ std::string bytesAsText(const std::vector<std::uint8_t>& bytes) {
         reinterpret_cast<const char*>(bytes.data()),
         bytes.size()
     );
-}
-
-std::wstring modulePath() {
-    std::wstring path(32'768, L'\0');
-    const DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
-    if (length == 0 || length >= path.size()) {
-        throw std::runtime_error("GetModuleFileNameW failed");
-    }
-    path.resize(length);
-    return path;
-}
-
-std::wstring pairingToolPath() {
-    const auto path = modulePath();
-    const auto separator = path.find_last_of(L'\\');
-    if (separator == std::wstring::npos) {
-        throw std::runtime_error("GattHost executable path has no directory");
-    }
-    return path.substr(0, separator + 1) + L"unlock_pairing_tool.exe";
-}
-
-std::wstring publicKeyHex(const std::vector<std::uint8_t>& publicKey) {
-    std::wostringstream output;
-    output << std::hex << std::setfill(L'0');
-    for (const auto value : publicKey) {
-        output << std::setw(2) << static_cast<unsigned int>(value);
-    }
-    return output.str();
-}
-
-DWORD runPairingTool(const std::vector<std::uint8_t>& publicKey) {
-    const auto toolPath = pairingToolPath();
-    const auto executableDirectory = toolPath.substr(0, toolPath.find_last_of(L'\\'));
-    std::wstring commandLine = L"\"" + toolPath + L"\" --key-hex " + publicKeyHex(publicKey);
-    std::vector<wchar_t> commandBuffer(commandLine.begin(), commandLine.end());
-    commandBuffer.push_back(L'\0');
-
-    SECURITY_ATTRIBUTES pipeAttributes{};
-    pipeAttributes.nLength = sizeof(pipeAttributes);
-    pipeAttributes.bInheritHandle = TRUE;
-    HANDLE outputRead = nullptr;
-    HANDLE outputWrite = nullptr;
-    if (CreatePipe(&outputRead, &outputWrite, &pipeAttributes, 0) == FALSE) {
-        throw std::runtime_error("could not create PairingTool output pipe");
-    }
-    if (SetHandleInformation(outputRead, HANDLE_FLAG_INHERIT, 0) == FALSE) {
-        CloseHandle(outputRead);
-        CloseHandle(outputWrite);
-        throw std::runtime_error("could not configure PairingTool output pipe");
-    }
-
-    STARTUPINFOW startup{};
-    startup.cb = sizeof(startup);
-    startup.dwFlags = STARTF_USESTDHANDLES;
-    startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-    startup.hStdOutput = outputWrite;
-    startup.hStdError = outputWrite;
-    PROCESS_INFORMATION process{};
-    if (CreateProcessW(
-        nullptr,
-        commandBuffer.data(),
-        nullptr,
-        nullptr,
-        TRUE,
-        CREATE_NO_WINDOW,
-        nullptr,
-        executableDirectory.c_str(),
-        &startup,
-        &process
-    ) == FALSE) {
-        CloseHandle(outputRead);
-        CloseHandle(outputWrite);
-        throw std::runtime_error("could not start unlock_pairing_tool.exe");
-    }
-
-    CloseHandle(outputWrite);
-    CloseHandle(process.hThread);
-    WaitForSingleObject(process.hProcess, INFINITE);
-    DWORD exitCode = 1;
-    GetExitCodeProcess(process.hProcess, &exitCode);
-    CloseHandle(process.hProcess);
-
-    std::string output;
-    char buffer[4096];
-    DWORD bytesRead = 0;
-    while (ReadFile(outputRead, buffer, sizeof(buffer), &bytesRead, nullptr) != FALSE && bytesRead != 0) {
-        output.append(buffer, bytesRead);
-    }
-    CloseHandle(outputRead);
-    if (!output.empty()) {
-        std::cout << "[GattHost] pairing tool output:\n" << output;
-        if (output.back() != '\n') {
-            std::cout << "\n";
-        }
-    }
-    return exitCode;
 }
 
 class GattHost final {
@@ -240,25 +139,19 @@ public:
                   << "[GattHost] transport-only foreground host; saved-credential service verifies signatures\n";
     }
 
-    void stop() noexcept {
-        try {
-            if (serviceProvider_) {
-                serviceProvider_.AdvertisementStatusChanged(advertisementStatusToken_);
-            }
-            if (serviceProvider_) {
-                serviceProvider_.StopAdvertising();
-            }
-            if (requestCharacteristic_) {
-                requestCharacteristic_.WriteRequested(requestWriteToken_);
-            }
-            if (assertionCharacteristic_) {
-                assertionCharacteristic_.WriteRequested(assertionWriteToken_);
-            }
-            if (challengeCharacteristic_) {
-                challengeCharacteristic_.SubscribedClientsChanged(challengeSubscriptionToken_);
-            }
-        } catch (...) {
-            // Shutdown is best effort; the process is already leaving the apartment.
+    void stop() {
+        if (serviceProvider_) {
+            serviceProvider_.AdvertisementStatusChanged(advertisementStatusToken_);
+            serviceProvider_.StopAdvertising();
+        }
+        if (requestCharacteristic_) {
+            requestCharacteristic_.WriteRequested(requestWriteToken_);
+        }
+        if (assertionCharacteristic_) {
+            assertionCharacteristic_.WriteRequested(assertionWriteToken_);
+        }
+        if (challengeCharacteristic_) {
+            challengeCharacteristic_.SubscribedClientsChanged(challengeSubscriptionToken_);
         }
     }
 
@@ -313,12 +206,7 @@ private:
                 return;
             }
 
-            if (bytes.size() == 1 + kRawPublicKeySize && bytes.front() == kEnrollmentRequest) {
-                handleEnrollmentRequest(std::vector<std::uint8_t>(bytes.begin() + 1, bytes.end()));
-                return;
-            }
-
-            std::cerr << "[GattHost] rejected request frame: expected 0x01 or 0x02 plus a 65-byte public key, got "
+            std::cerr << "[GattHost] rejected request frame: expected a one-byte 0x01 request, got "
                       << bytes.size() << " byte(s)\n";
         });
     }
@@ -351,33 +239,6 @@ private:
         logNotificationResults(
             challengeCharacteristic_.NotifyValueAsync(makeBuffer(bytesAsText(response.payload.value))).get(),
             "challenge"
-        );
-    }
-
-    void handleEnrollmentRequest(const std::vector<std::uint8_t>& publicKey) {
-        if (publicKey.front() != 0x04) {
-            std::cerr << "[GattHost] rejected enrollment request: public key is not an uncompressed P-256 key\n";
-            return;
-        }
-
-        std::cout << "[GattHost] enrollment request received; waiting for Windows confirmation\n";
-        DWORD exitCode = 1;
-        try {
-            exitCode = runPairingTool(publicKey);
-        } catch (const std::exception& error) {
-            std::cerr << "[GattHost] enrollment tool failed: " << error.what() << "\n";
-        }
-
-        const std::string result = exitCode == 0
-            ? "{\"authenticated\":false,\"status\":\"enrollment_accepted\"}"
-            : exitCode == 3
-                ? "{\"authenticated\":false,\"status\":\"enrollment_cancelled\"}"
-                : "{\"authenticated\":false,\"status\":\"enrollment_failed\"}";
-        std::cout << "[GattHost] enrollment result="
-                  << (exitCode == 0 ? "accepted" : exitCode == 3 ? "cancelled" : "failed") << "\n";
-        logNotificationResults(
-            resultCharacteristic_.NotifyValueAsync(makeBuffer(result)).get(),
-            "enrollment result"
         );
     }
 

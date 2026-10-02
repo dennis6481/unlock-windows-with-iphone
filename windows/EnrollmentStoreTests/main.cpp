@@ -39,10 +39,10 @@ int main() {
             expected[index] = static_cast<std::uint8_t>(index);
         }
 
-        unlock_windows::service::EnrollmentStore store(testPath());
-        const unlock_windows::service::EnrollmentRecord expectedRecord{
+        unlock_windows::phone_approval::EnrollmentStore store(testPath());
+        const unlock_windows::phone_approval::EnrollmentRecord expectedRecord{
             expected,
-            unlock_windows::service::EnrollmentStore::currentUserSid()
+            unlock_windows::phone_approval::EnrollmentStore::currentUserSid()
         };
         store.remove();
         store.save(expectedRecord);

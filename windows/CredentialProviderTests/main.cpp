@@ -1,7 +1,6 @@
 // Created by Rui MA on 27 Sep 2026
 
 #include "UnlockCredentialProvider.h"
-#include "UnlockCredentialSerialization.h"
 
 #include <Windows.h>
 #include <initguid.h>
@@ -13,17 +12,12 @@
 #include <cstring>
 #include <cstdint>
 #include <cwchar>
-#include <span>
 #include <stdexcept>
 #include <string>
 
 namespace {
 
 using unlock_windows::credential_provider::kUnlockCredentialProviderClsid;
-using unlock_windows::credential_provider::ApprovedUnlock;
-using unlock_windows::credential_provider::buildCredentialSerialization;
-using unlock_windows::protocol::UnlockLogonBuffer;
-using unlock_windows::protocol::validateUnlockLogonBuffer;
 
 using GetClassObject = HRESULT(STDAPICALLTYPE*)(REFCLSID, REFIID, LPVOID*);
 using CanUnloadNow = HRESULT(STDAPICALLTYPE*)();
@@ -277,7 +271,7 @@ void run() {
     setUserArray->Release();
 
     DWORD fieldCount = 0;
-    require(provider->GetFieldDescriptorCount(&fieldCount) == S_OK && fieldCount == 4,
+    require(provider->GetFieldDescriptorCount(&fieldCount) == S_OK && fieldCount == 3,
         "unexpected Credential Provider field count");
 
     DWORD credentialCount = 0;
@@ -330,7 +324,7 @@ void run() {
 
     LPWSTR title = nullptr;
     require(credential->GetStringValue(1, &title) == S_OK, "credential title missing");
-    require(std::wstring(title) == L"MSA password probe", "credential title mismatch");
+    require(std::wstring(title) == L"Unlock with iPhone", "credential title mismatch");
     CoTaskMemFree(title);
 
     CREDENTIAL_PROVIDER_GET_SERIALIZATION_RESPONSE response{};
@@ -346,7 +340,7 @@ void run() {
             serialization.cbSerialization == 0 &&
             statusIcon == CPSI_WARNING &&
             status != nullptr,
-        "prototype unexpectedly returned a credential"
+        "provider unexpectedly returned a credential without an approved grant"
     );
     CoTaskMemFree(status);
     credential->Release();
@@ -356,73 +350,11 @@ void run() {
     CoUninitialize();
 }
 
-void testSerializationAdapter() {
-    ApprovedUnlock approval;
-    approval.challenge.version = 1;
-    approval.challenge.issuedAtMilliseconds = 123456789;
-    approval.challenge.audience = "windows-unlock";
-    for (std::size_t index = 0; index < approval.challenge.requestId.size(); ++index) {
-        approval.challenge.requestId[index] = static_cast<std::uint8_t>(0x10 + index);
-    }
-    for (std::size_t index = 0; index < approval.challenge.nonce.size(); ++index) {
-        approval.challenge.nonce[index] = static_cast<std::uint8_t>(0x20 + index);
-    }
-
-    for (std::size_t index = 0; index < approval.keyId.size(); ++index) {
-        approval.keyId[index] = static_cast<std::uint8_t>(0xa0 + index);
-    }
-    approval.sid = {
-        1, 1, 0, 0, 0, 0, 0, 5, 18, 0, 0, 0
-    };
-    for (std::size_t index = 0; index < approval.signature.size(); ++index) {
-        approval.signature[index] = static_cast<std::uint8_t>(0x40 + index);
-    }
-
-    CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION serialization{};
-    const auto result = buildCredentialSerialization(approval, 0x1234, serialization);
-    require(result.succeeded(), "valid approval was not serialized");
-    require(
-        serialization.ulAuthenticationPackage == 0x1234 &&
-            IsEqualGUID(serialization.clsidCredentialProvider, kUnlockCredentialProviderClsid) &&
-            serialization.cbSerialization == sizeof(UnlockLogonBuffer) &&
-            serialization.rgbSerialization != nullptr,
-        "serialization metadata is incorrect"
-    );
-
-    const auto bytes = std::span<const std::uint8_t>(
-        serialization.rgbSerialization,
-        serialization.cbSerialization
-    );
-    require(validateUnlockLogonBuffer(bytes).succeeded(), "serialized buffer failed codec validation");
-
-    const auto* buffer = reinterpret_cast<const UnlockLogonBuffer*>(
-        serialization.rgbSerialization
-    );
-    require(
-        std::memcmp(buffer->keyId, approval.keyId.data(), approval.keyId.size()) == 0 &&
-            std::memcmp(buffer->sid, approval.sid.data(), approval.sid.size()) == 0 &&
-            std::memcmp(buffer->signatureRaw, approval.signature.data(), approval.signature.size()) == 0,
-        "serialized buffer does not preserve approval fields"
-    );
-    CoTaskMemFree(serialization.rgbSerialization);
-
-    approval.sid.clear();
-    serialization = {};
-    const auto invalid = buildCredentialSerialization(approval, 0x1234, serialization);
-    require(
-        invalid.code == unlock_windows::credential_provider::SerializationCode::invalid_logon_buffer &&
-            invalid.bufferCode == unlock_windows::protocol::UnlockLogonBufferCode::invalid_sid &&
-            serialization.rgbSerialization == nullptr,
-        "invalid approval unexpectedly produced a serialization"
-    );
-}
-
 } // namespace
 
 int main() {
     try {
         run();
-        testSerializationAdapter();
         return 0;
     } catch (const std::exception& error) {
         return std::fprintf(stderr, "Credential Provider test failed: %s\n", error.what()), 1;

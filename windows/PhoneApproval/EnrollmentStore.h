@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace unlock_windows::service {
+namespace unlock_windows::phone_approval {
 
 struct EnrollmentRecord final {
     std::vector<std::uint8_t> publicKey;
@@ -40,4 +40,4 @@ private:
     std::wstring path_;
 };
 
-} // namespace unlock_windows::service
+} // namespace unlock_windows::phone_approval

@@ -6,12 +6,10 @@ namespace unlock::components {
 
 bool ComponentSnapshot::hasKnownArtifacts() const noexcept {
     return credentialProviderDllPresent ||
-        lsaDllPresent ||
         credentialProviderRegistered ||
         credentialProviderClsidRegistered ||
         savedCredentialServiceExePresent ||
         savedCredentialServiceRegistered ||
-        lsaPackageRegistered ||
         continuationTaskPresent;
 }
 
@@ -26,9 +24,7 @@ bool ComponentSnapshot::isCompleteInstallation() const noexcept {
         savedCredentialServiceExePresent &&
         savedCredentialServiceRegistered &&
         savedCredentialServiceMatchesInstallation &&
-        savedCredentialServiceRunning &&
-        !lsaDllPresent &&
-        !lsaPackageRegistered;
+        savedCredentialServiceRunning;
 }
 
 const wchar_t* wizardPhaseName(const WizardPhase phase) noexcept {
@@ -45,8 +41,6 @@ const wchar_t* wizardPhaseName(const WizardPhase phase) noexcept {
             return L"CleaningUp";
         case WizardPhase::recoveryRequired:
             return L"RecoveryRequired";
-        case WizardPhase::removedUnconfirmed:
-            return L"RemovedUnconfirmed";
         default:
             return L"Unknown";
     }
@@ -79,15 +73,6 @@ RecoveryPlan determineRecoveryPlan(const ComponentSnapshot& snapshot) {
             snapshot.observationError.empty()
                 ? L"Windows did not return a complete component status. No changes will be made."
                 : snapshot.observationError,
-            false,
-        };
-    }
-
-    if (snapshot.lsaDllPresent || snapshot.lsaPackageRegistered) {
-        return {
-            WizardAction::blocked,
-            L"A diagnostic LSA package is installed",
-            L"This Credential Provider-only wizard cannot change an existing LSA installation. Restore the disposable VM snapshot before this probe.",
             false,
         };
     }
@@ -176,14 +161,6 @@ RecoveryPlan determineRecoveryPlan(const ComponentSnapshot& snapshot) {
                 L"Repair previous operation",
                 L"The previous operation did not finish. The wizard will keep the recovery information and try to restore Windows safely.",
                 true,
-            };
-
-        case WizardPhase::removedUnconfirmed:
-            return {
-                WizardAction::blocked,
-                L"Components removed; credential cleanup unconfirmed",
-                L"Emergency removal removed the components, but deletion of the saved credential was not confirmed. The recovery record remains for diagnosis. Restore the VM snapshot before reinstalling.",
-                false,
             };
 
         case WizardPhase::none:

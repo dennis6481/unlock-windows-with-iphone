@@ -111,18 +111,6 @@ void testServiceMismatchRequestsRecovery() {
         "wrong saved credential service configuration must not look installed");
 }
 
-void testPreviousLsaInstallationIsNotMistakenForProbe() {
-    auto snapshot = baseState(WizardPhase::installed);
-    snapshot.credentialProviderDllPresent = true;
-    snapshot.credentialProviderRegistered = true;
-    snapshot.credentialProviderClsidRegistered = true;
-    snapshot.lsaDllPresent = true;
-    snapshot.lsaPackageRegistered = true;
-    const auto plan = determineRecoveryPlan(snapshot);
-    expect(plan.action == WizardAction::blocked,
-        "an old LSA installation must not be treated as the CP-only probe");
-}
-
 void testInvalidStateIsBlocked() {
     ComponentSnapshot snapshot;
     snapshot.statePresent = true;
@@ -140,12 +128,6 @@ void testOrphanedSavedCredentialServiceIsBlocked() {
         "unowned saved credential service must not be removed automatically");
 }
 
-void testUnconfirmedEmergencyRemovalRemainsVisible() {
-    const auto plan = determineRecoveryPlan(baseState(WizardPhase::removedUnconfirmed));
-    expect(plan.action == WizardAction::blocked,
-        "unconfirmed credential deletion must leave a diagnostic state");
-}
-
 } // namespace
 
 int main() {
@@ -159,10 +141,8 @@ int main() {
     testCleaningStateRequestsCleanup();
     testRecoveryRequiredRequestsRecovery();
     testUnknownArtifactsAreBlocked();
-    testPreviousLsaInstallationIsNotMistakenForProbe();
     testInvalidStateIsBlocked();
     testOrphanedSavedCredentialServiceIsBlocked();
-    testUnconfirmedEmergencyRemovalRemainsVisible();
     std::cout << "ComponentsWizard state tests passed.\n";
     return EXIT_SUCCESS;
 }

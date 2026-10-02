@@ -226,56 +226,6 @@ OperationResult ComponentTransaction::beginUninstall(const ProgressCallback& pro
     }
 }
 
-OperationResult ComponentTransaction::emergencyRemove(const ProgressCallback& progress) {
-    WizardState state;
-    bool stateWritten = false;
-    try {
-        adapter_.assertSupportedAdministratorEnvironment();
-        const auto currentState = adapter_.readState();
-        if (!currentState ||
-            (currentState->phase != WizardPhase::installed &&
-             currentState->phase != WizardPhase::recoveryRequired &&
-             currentState->phase != WizardPhase::installing)) {
-            return failure(L"Emergency removal requires a known installed or recoverable transaction.",
-                currentState.has_value());
-        }
-        state = *currentState;
-        state.phase = WizardPhase::uninstallPendingReboot;
-        state.emergencyRemoval = true;
-        state.credentialCleanupConfirmed = false;
-        stateWritten = true;
-        adapter_.writeState(state);
-        report(progress, 10, L"Attempting saved credential deletion...");
-        try {
-            adapter_.clearSavedCredential();
-            state.credentialCleanupConfirmed = true;
-        } catch (const std::exception& error) {
-            state.lastError = L"Saved credential deletion not confirmed: " + errorText(error);
-        }
-        adapter_.writeState(state);
-        report(progress, 40, L"Disabling known components...");
-        adapter_.removeCredentialProviderRegistration();
-        adapter_.removeSavedCredentialService();
-        adapter_.registerContinuationTask(state);
-        report(progress, 100, L"Emergency removal ready for restart.");
-        return OperationResult{true, true, true,
-            state.credentialCleanupConfirmed
-                ? L"Components disabled; saved credential deletion confirmed. Restart to remove remaining files."
-                : L"Components disabled; saved credential deletion NOT confirmed. Restart to remove remaining files; the warning will be retained."};
-    } catch (const std::exception& error) {
-        const auto message = errorText(error);
-        if (stateWritten) {
-            state.phase = WizardPhase::recoveryRequired;
-            state.lastError += L"\r\nEmergency removal failed: " + message;
-            try { adapter_.writeState(state); }
-            catch (const std::exception& stateError) {
-                return failure(message + L"; could not preserve state: " + errorText(stateError), true);
-            }
-        }
-        return failure(message, stateWritten);
-    }
-}
-
 OperationResult ComponentTransaction::completeUninstall(const ProgressCallback& progress) {
     WizardState state;
     bool stateWritten = false;
@@ -288,7 +238,7 @@ OperationResult ComponentTransaction::completeUninstall(const ProgressCallback& 
         }
         state = *currentState;
         state.phase = WizardPhase::cleaningUp;
-        if (!state.credentialCleanupConfirmed && !state.emergencyRemoval) {
+        if (!state.credentialCleanupConfirmed) {
             return failure(L"Saved credential deletion was not confirmed; normal uninstall cannot report complete.", true);
         }
         state.lastError.clear();
@@ -314,14 +264,6 @@ OperationResult ComponentTransaction::completeUninstall(const ProgressCallback& 
         const auto afterTask = adapter_.inspect();
         if (!afterTask.observationValid || afterTask.continuationTaskPresent) {
             throw ComponentError(L"The cleanup task could not be removed.");
-        }
-        if (!state.credentialCleanupConfirmed) {
-            state.phase = WizardPhase::removedUnconfirmed;
-            state.lastError = L"Components removed; saved credential deletion was not confirmed.";
-            adapter_.writeState(state);
-            report(progress, 100, L"Components removed; credential cleanup unconfirmed.");
-            return OperationResult{true, false, true,
-                L"Components removed. Saved credential deletion was NOT confirmed; recovery state remains."};
         }
         adapter_.clearState();
         report(progress, 100, L"Removal complete.");

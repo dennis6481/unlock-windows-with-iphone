@@ -3,6 +3,7 @@
 #include "EnrollmentStore.h"
 #include "EnrollmentSession.h"
 #include "EnrollmentChannel.h"
+#include "../Resources/resource.h"
 #include "SavedCredentialIpc.h"
 
 #include <Windows.h>
@@ -148,6 +149,8 @@ public:
         if (const auto code = check(); code != ExitCode::saved) return code;
         WNDCLASSW windowClass{};
         windowClass.hInstance = GetModuleHandleW(nullptr);
+        windowClass.hIcon = LoadIconW(windowClass.hInstance, MAKEINTRESOURCEW(IDI_UNLOCK_APP));
+        require(windowClass.hIcon != nullptr, "LoadIconW(enrollment window)");
         windowClass.lpszClassName = L"UnlockWindowsEnrollmentConfirmation";
         windowClass.lpfnWndProc = procedure;
         windowClass.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);

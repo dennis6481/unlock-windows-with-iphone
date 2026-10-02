@@ -4,14 +4,12 @@
 #include "EnrollmentStore.h"
 #include "../PairingTool/EnrollmentSession.h"
 #include "../PairingTool/EnrollmentChannel.h"
+#include "../Resources/resource.h"
 
 #include <Windows.h>
 #include <WtsApi32.h>
 #include <shellapi.h>
 #include <bcrypt.h>
-#include <objidl.h>
-#include <gdiplus.h>
-#include <shlwapi.h>
 
 #include <winrt/Windows.Devices.Bluetooth.GenericAttributeProfile.h>
 #include <winrt/Windows.Devices.Bluetooth.h>
@@ -472,6 +470,7 @@ public:
 
         WNDCLASSW windowClass{};
         windowClass.hInstance = instance;
+        windowClass.hIcon = trayIcon_;
         windowClass.lpszClassName = L"UnlockWindowsWithIPhoneGattHost";
         windowClass.lpfnWndProc = windowProcedure;
         requireWin32(RegisterClassW(&windowClass), L"RegisterClassW");
@@ -502,34 +501,9 @@ public:
 
 private:
     void loadTrayIcon(HINSTANCE instance) {
-        const auto resource = FindResourceW(instance, MAKEINTRESOURCEW(101), MAKEINTRESOURCEW(10));
-        requireWin32(resource != nullptr, L"FindResourceW(tray PNG)");
-        const auto loaded = LoadResource(instance, resource);
-        requireWin32(loaded != nullptr, L"LoadResource(tray PNG)");
-        const auto bytes = static_cast<const BYTE*>(LockResource(loaded));
-        if (!bytes) throw std::runtime_error("LockResource(tray PNG) failed");
-        winrt::com_ptr<IStream> stream;
-        stream.attach(SHCreateMemStream(bytes, SizeofResource(instance, resource)));
-        if (!stream) throw std::runtime_error("SHCreateMemStream(tray PNG) failed");
-        Gdiplus::GdiplusStartupInput input;
-        ULONG_PTR token = 0;
-        if (Gdiplus::GdiplusStartup(&token, &input, nullptr) != Gdiplus::Ok)
-            throw std::runtime_error("GdiplusStartup(tray PNG) failed");
-        struct Shutdown final { ULONG_PTR token; ~Shutdown() { Gdiplus::GdiplusShutdown(token); } } shutdown{token};
-        Gdiplus::Bitmap source(stream.get());
-        const int width = GetSystemMetrics(SM_CXSMICON);
-        const int height = GetSystemMetrics(SM_CYSMICON);
-        Gdiplus::Bitmap scaled(width, height, PixelFormat32bppARGB);
-        if (source.GetLastStatus() != Gdiplus::Ok || scaled.GetLastStatus() != Gdiplus::Ok)
-            throw std::runtime_error("Could not decode root icon.png as a tray icon");
-        {
-            Gdiplus::Graphics graphics(&scaled);
-            if (graphics.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic) != Gdiplus::Ok ||
-                graphics.DrawImage(&source, 0, 0, width, height) != Gdiplus::Ok)
-                throw std::runtime_error("Could not resize tray PNG");
-        }
-        if (scaled.GetHICON(&trayIcon_) != Gdiplus::Ok)
-            throw std::runtime_error("Could not create tray icon from PNG");
+        trayIcon_ = static_cast<HICON>(LoadImageW(instance, MAKEINTRESOURCEW(IDI_UNLOCK_APP), IMAGE_ICON,
+            GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR));
+        requireWin32(trayIcon_ != nullptr, L"LoadImageW(tray icon)");
     }
 
     struct Pairing final {
@@ -865,13 +839,25 @@ private:
 
     void addTray() {
         auto data = trayData();
-        if (!Shell_NotifyIconW(NIM_ADD, &data)) throw hresult_error(E_FAIL, L"Shell_NotifyIconW(NIM_ADD) failed");
+        if (!Shell_NotifyIconW(NIM_ADD, &data)) {
+            trayAdded_ = false;
+            if (!trayUnavailable_) state_->record(L"Shell_NotifyIconW(NIM_ADD) failed; waiting for the taskbar and retrying.", true);
+            trayUnavailable_ = true;
+            return;
+        }
         trayAdded_ = true;
+        if (trayUnavailable_) state_->record(L"Taskbar is ready; tray icon registered.", false);
+        trayUnavailable_ = false;
     }
 
     void updateTray() {
+        if (!trayAdded_) return;
         auto data = trayData();
-        if (!Shell_NotifyIconW(NIM_MODIFY, &data)) throw hresult_error(E_FAIL, L"Shell_NotifyIconW(NIM_MODIFY) failed");
+        if (!Shell_NotifyIconW(NIM_MODIFY, &data)) {
+            trayAdded_ = false;
+            trayUnavailable_ = true;
+            state_->record(L"Shell_NotifyIconW(NIM_MODIFY) failed; tray registration will be retried.", true);
+        }
     }
 
     void showDetails() {
@@ -914,6 +900,7 @@ private:
     }
 
     void dispatch() {
+        if (!closing_ && !trayAdded_) addTray();
         std::deque<std::function<void()>> pending;
         { std::lock_guard lock(state_->mutex); pending.swap(state_->pending); }
         for (auto& action : pending) {
@@ -952,7 +939,9 @@ private:
         }
         if (!self) return DefWindowProcW(window, message, wparam, lparam);
         try {
-            if (message == self->taskbarCreated_ && self->taskbarCreated_) { self->addTray(); return 0; }
+            if (message == self->taskbarCreated_ && self->taskbarCreated_) {
+                self->trayAdded_ = false; self->addTray(); return 0;
+            }
             switch (message) {
             case kDispatch: self->dispatch(); return 0;
             case WM_TIMER: self->dispatch(); return 0;
@@ -1002,6 +991,7 @@ private:
     UINT taskbarCreated_ = 0;
     bool sessionRegistered_ = false;
     bool trayAdded_ = false;
+    bool trayUnavailable_ = false;
     bool closing_ = false;
     bool suspended_ = false;
     bool endingSession_ = false;

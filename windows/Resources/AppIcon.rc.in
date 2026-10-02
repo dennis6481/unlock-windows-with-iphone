@@ -1,0 +1,5 @@
+// Created by Rui MA on 02 Oct 2026
+
+#include "@CMAKE_CURRENT_SOURCE_DIR@/Resources/resource.h"
+
+IDI_UNLOCK_APP ICON "@CMAKE_CURRENT_SOURCE_DIR@/Resources/AppIcon.ico"

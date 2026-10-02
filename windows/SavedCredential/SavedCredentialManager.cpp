@@ -1,6 +1,7 @@
 // Created by Rui MA on 30 Sep 2026
 
 #include "SavedCredentialIpc.h"
+#include "../Resources/resource.h"
 
 #include <objbase.h>
 #include <wincred.h>
@@ -221,6 +222,11 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, LPWSTR, int show) {
     WNDCLASSW kind{};
     kind.lpfnWndProc = windowProcedure;
     kind.hInstance = instance;
+    kind.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(IDI_UNLOCK_APP));
+    if (!kind.hIcon) {
+        MessageBoxW(nullptr, L"Could not load the application icon.", L"Saved Windows credential", MB_OK | MB_ICONERROR);
+        return 1;
+    }
     kind.lpszClassName = L"UnlockWindowsSavedCredentialManager";
     kind.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
     kind.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);

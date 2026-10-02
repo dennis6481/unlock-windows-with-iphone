@@ -34,8 +34,6 @@
 - MUST NOT modify unrelated components.
 - Keep each task focused on one explicit objective and make the smallest change
   that satisfies it.
-- Validate the highest-risk assumption with the smallest isolated experiment
-  before building product infrastructure around it.
 - Diagnostic and probe code MUST remain separate from product code unless its
   use in the product has been explicitly approved and supported by evidence.
 - MUST NOT add abstractions, defensive logic, recovery mechanisms, or backward

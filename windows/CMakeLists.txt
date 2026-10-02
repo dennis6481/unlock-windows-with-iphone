@@ -147,15 +147,13 @@ if(BUILD_TESTING)
     add_test(NAME unlock_enrollment_store_tests COMMAND unlock_enrollment_store_tests)
 endif()
 
-configure_file(GattHost/GattHost.rc.in GattHost.rc @ONLY)
 add_executable(unlock_gatt_host WIN32
     GattHost/main.cpp
-    ${CMAKE_CURRENT_BINARY_DIR}/GattHost.rc
 )
 
 target_compile_features(unlock_gatt_host PRIVATE cxx_std_20)
 target_compile_definitions(unlock_gatt_host PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_libraries(unlock_gatt_host PRIVATE unlock_saved_credential_ipc unlock_enrollment_store windowsapp user32 shell32 wtsapi32 gdiplus shlwapi)
+target_link_libraries(unlock_gatt_host PRIVATE unlock_saved_credential_ipc unlock_enrollment_store windowsapp user32 shell32 wtsapi32)
 
 if(MSVC)
     target_compile_options(unlock_gatt_host PRIVATE /utf-8)
@@ -166,6 +164,7 @@ add_executable(unlock_windows_components_wizard WIN32
     ComponentsWizard/ComponentState.cpp
     ComponentsWizard/ComponentTransaction.cpp
     ComponentsWizard/WindowsAdapter.cpp
+    ComponentsWizard/DesktopDeployment.cpp
     ComponentsWizard/ComponentsWizard.rc
 )
 
@@ -188,6 +187,8 @@ target_link_libraries(
         secur32
         shell32
         taskschd
+        uuid
+        wtsapi32
         user32
         unlock_saved_credential_ipc
 )
@@ -256,3 +257,12 @@ if(BUILD_TESTING)
 
     add_test(NAME unlock_credential_provider_tests COMMAND unlock_credential_provider_tests)
 endif()
+
+configure_file(Resources/AppIcon.rc.in AppIcon.rc @ONLY)
+get_property(unlock_windows_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+foreach(unlock_windows_target IN LISTS unlock_windows_targets)
+    get_target_property(unlock_windows_target_type ${unlock_windows_target} TYPE)
+    if(unlock_windows_target_type STREQUAL "EXECUTABLE")
+        target_sources(${unlock_windows_target} PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/AppIcon.rc)
+    endif()
+endforeach()

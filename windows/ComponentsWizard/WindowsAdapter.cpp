@@ -10,29 +10,20 @@
 #include <Windows.h>
 #include <security.h>
 #include <shellapi.h>
-#include <taskschd.h>
-#include <wrl/client.h>
+#include <sddl.h>
 
 #include <array>
 #include <cstring>
 #include <cwchar>
 #include <fstream>
-#include <sstream>
 #include <utility>
 
 #pragma comment(lib, "advapi32.lib")
-#pragma comment(lib, "ole32.lib")
-#pragma comment(lib, "oleaut32.lib")
 #pragma comment(lib, "shell32.lib")
-#pragma comment(lib, "taskschd.lib")
 
 namespace unlock::components {
 namespace {
 
-using Microsoft::WRL::ComPtr;
-
-constexpr wchar_t kCredentialProviderDllName[] = L"unlock_credential_provider.dll";
-constexpr wchar_t kSavedCredentialServiceExeName[] = L"unlock_saved_credential_service.exe";
 constexpr wchar_t kCredentialProviderName[] = L"Unlock Windows with iPhone";
 constexpr wchar_t kCredentialProviderRegistryPath[] =
     L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Authentication\\Credential Providers\\"
@@ -40,7 +31,6 @@ constexpr wchar_t kCredentialProviderRegistryPath[] =
 constexpr wchar_t kCredentialProviderClsidRegistryPath[] =
     L"SOFTWARE\\Classes\\CLSID\\{2F7A2DF4-75B4-4D8E-8A3B-0DA46C6E9112}";
 constexpr wchar_t kWizardStateRegistryPath[] = L"SOFTWARE\\UnlockWindowsWithIPhone\\ComponentsWizard";
-constexpr wchar_t kFinalizeTaskName[] = L"UnlockWindowsWithIPhone-FinalizeUninstall";
 constexpr wchar_t kSchemaVersionValueName[] = L"SchemaVersion";
 constexpr wchar_t kStatePhaseValueName[] = L"Phase";
 constexpr wchar_t kStateTransactionIdValueName[] = L"TransactionId";
@@ -76,14 +66,6 @@ std::wstring win32ErrorMessage(const DWORD error) {
 void checkWin32(const BOOL result, const std::wstring& action) {
     if (!result) {
         fail(action + L": " + win32ErrorMessage(GetLastError()));
-    }
-}
-
-void checkHresult(const HRESULT result, const std::wstring& action) {
-    if (FAILED(result)) {
-        std::wstringstream message;
-        message << action << L" failed (HRESULT 0x" << std::hex << static_cast<std::uint32_t>(result) << L").";
-        fail(message.str());
     }
 }
 
@@ -134,38 +116,6 @@ public:
 
 private:
     HKEY key_ = nullptr;
-};
-
-class ScopedBstr final {
-public:
-    explicit ScopedBstr(const std::wstring& value)
-        : value_(SysAllocStringLen(value.data(), static_cast<UINT>(value.size()))) {
-        if (value_ == nullptr && !value.empty()) {
-            fail(L"Could not allocate a COM string.");
-        }
-    }
-    ~ScopedBstr() { SysFreeString(value_); }
-    [[nodiscard]] BSTR get() const noexcept { return value_; }
-
-private:
-    BSTR value_ = nullptr;
-};
-
-class ScopedVariant final {
-public:
-    ScopedVariant() { VariantInit(&value_); }
-    explicit ScopedVariant(const std::wstring& text) : ScopedVariant() {
-        value_.vt = VT_BSTR;
-        value_.bstrVal = SysAllocStringLen(text.data(), static_cast<UINT>(text.size()));
-        if (value_.bstrVal == nullptr && !text.empty()) {
-            fail(L"Could not allocate a COM variant string.");
-        }
-    }
-    ~ScopedVariant() { VariantClear(&value_); }
-    [[nodiscard]] VARIANT& get() noexcept { return value_; }
-
-private:
-    VARIANT value_{};
 };
 
 struct RegistryValue final {
@@ -321,7 +271,7 @@ bool registryKeyExists(const wchar_t* subkey) {
 }
 
 bool isKnownPhase(const DWORD phase) {
-    return phase <= static_cast<DWORD>(WizardPhase::updating);
+    return phase <= static_cast<DWORD>(WizardPhase::installPendingReboot);
 }
 
 std::filesystem::path system32Directory() {
@@ -436,62 +386,6 @@ bool isElevated() {
     return elevation.TokenIsElevated != 0;
 }
 
-std::wstring currentUserName() {
-    ULONG length = 0;
-    GetUserNameExW(NameSamCompatible, nullptr, &length);
-    const auto initialError = GetLastError();
-    if ((initialError != ERROR_INSUFFICIENT_BUFFER && initialError != ERROR_MORE_DATA) || length == 0) {
-        fail(L"Could not determine the current user name: " + win32ErrorMessage(initialError));
-    }
-    std::vector<wchar_t> user(length);
-    checkWin32(GetUserNameExW(NameSamCompatible, user.data(), &length), L"Could not determine the current user name");
-    return std::wstring(user.data());
-}
-
-std::wstring transactionId() {
-    return std::to_wstring(GetTickCount64()) + L"-" + std::to_wstring(GetCurrentProcessId());
-}
-
-std::wstring utcTimestamp() {
-    FILETIME fileTime{};
-    GetSystemTimeAsFileTime(&fileTime);
-    ULARGE_INTEGER value{};
-    value.LowPart = fileTime.dwLowDateTime;
-    value.HighPart = fileTime.dwHighDateTime;
-    return std::to_wstring(value.QuadPart);
-}
-
-class ScopedCom final {
-public:
-    ScopedCom() : result_(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED)) {}
-    ~ScopedCom() {
-        if (SUCCEEDED(result_)) {
-            CoUninitialize();
-        }
-    }
-    [[nodiscard]] HRESULT result() const noexcept { return result_; }
-
-private:
-    HRESULT result_;
-};
-
-ComPtr<ITaskService> taskSchedulerService() {
-    ComPtr<ITaskService> service;
-    checkHresult(
-        CoCreateInstance(CLSID_TaskScheduler, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&service)),
-        L"Could not create the Task Scheduler service"
-    );
-    ScopedVariant empty;
-    checkHresult(service->Connect(empty.get(), empty.get(), empty.get(), empty.get()), L"Could not connect to Task Scheduler");
-    return service;
-}
-
-ComPtr<ITaskFolder> taskRootFolder(ITaskService* service) {
-    ScopedBstr rootPath(L"\\");
-    ComPtr<ITaskFolder> root;
-    checkHresult(service->GetFolder(rootPath.get(), &root), L"Could not open the Task Scheduler root folder");
-    return root;
-}
 
 } // namespace
 
@@ -542,24 +436,23 @@ const wchar_t* architectureName(const Architecture architecture) noexcept {
 
 WindowsAdapter::WindowsAdapter(std::filesystem::path wizardPath) : wizardPath_(std::move(wizardPath)) {}
 
+void WindowsAdapter::setOperationLog(std::function<void(const std::wstring&)> listener) {
+    operationLog_ = std::move(listener);
+}
+void WindowsAdapter::logOperation(const std::wstring& message) const {
+    if (operationLog_) operationLog_(message);
+}
+
 const std::filesystem::path& WindowsAdapter::wizardPath() const noexcept {
     return wizardPath_;
 }
 
-std::filesystem::path WindowsAdapter::credentialProviderSource() const {
-    return wizardPath_.parent_path() / kCredentialProviderDllName;
-}
-
-std::filesystem::path WindowsAdapter::savedCredentialServiceSource() const {
-    return wizardPath_.parent_path() / kSavedCredentialServiceExeName;
-}
-
 std::filesystem::path WindowsAdapter::credentialProviderTarget() const {
-    return system32Directory() / kCredentialProviderDllName;
+    return system32Directory() / kCredentialProviderFile;
 }
 
 std::filesystem::path WindowsAdapter::savedCredentialServiceTarget() const {
-    return system32Directory() / kSavedCredentialServiceExeName;
+    return system32Directory() / kSavedCredentialServiceFile;
 }
 
 EnvironmentStatus WindowsAdapter::environment() const {
@@ -601,12 +494,14 @@ std::optional<WizardState> WindowsAdapter::readState() const {
     state.wizardPath = readRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStateWizardPathValueName).value_or(L"");
     state.createdAtUtc = readRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStateCreatedAtValueName).value_or(L"");
     state.lastError = readRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStateLastErrorValueName).value_or(L"");
+    state.targetSid = readRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, L"TargetSid").value_or(L"");
     state.credentialCleanupConfirmed = readRegistryDword(
         HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kCredentialCleanupValueName).value_or(0) == 1;
     return state;
 }
 
 void WindowsAdapter::writeState(const WizardState& state) const {
+    writeRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, L"TargetSid", state.targetSid);
     writeRegistryDword(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kSchemaVersionValueName, state.schemaVersion);
     writeRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStateTransactionIdValueName, state.transactionId);
     writeRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStateWizardPathValueName, state.wizardPath);
@@ -623,6 +518,7 @@ void WindowsAdapter::clearState() const {
 
 void WindowsAdapter::copyNativeBinary(const std::filesystem::path& source, const std::filesystem::path& target,
     const bool replace) const {
+    logOperation(L"Copy: " + source.wstring() + L" -> " + target.wstring());
     if (!fileExists(source)) {
         fail(L"Required build output is missing: " + source.wstring());
     }
@@ -716,11 +612,41 @@ void WindowsAdapter::markUpdateRequiresReboot() const {
 }
 
 void WindowsAdapter::stageUpdate(WizardState& state) const {
+    const auto native = environment().nativeArchitecture;
+    for (const auto& component : kComponentFiles) {
+        const auto source = wcscmp(component.name, kInstallerFile) == 0 ? wizardPath_ : wizardPath_.parent_path() / component.name;
+        if (!fileExists(source) || executableArchitecture(source) != native)
+            fail(L"Missing or wrong-architecture precompiled component: " + source.wstring());
+    }
     const auto directory = updateDirectory(state);
-    checkWin32(CreateDirectoryW(directory.c_str(), nullptr), L"Could not create protected update staging directory");
-    copyNativeBinary(credentialProviderSource(), directory / kCredentialProviderDllName);
-    copyNativeBinary(savedCredentialServiceSource(), directory / kSavedCredentialServiceExeName);
-    const auto wizard = directory / L"unlock_windows_components_wizard.exe";
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    checkWin32(ConvertStringSecurityDescriptorToSecurityDescriptorW(
+        L"D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FRFX;;;BU)", SDDL_REVISION_1,
+        &descriptor, nullptr), L"Could not configure protected staging ACL");
+    SECURITY_ATTRIBUTES security{sizeof(security), descriptor, FALSE};
+    const BOOL created = CreateDirectoryW(directory.c_str(), &security);
+    const DWORD error = GetLastError(); LocalFree(descriptor); SetLastError(error);
+    checkWin32(created, L"Could not create protected update staging directory");
+    logOperation(L"Create protected staging directory: " + directory.wstring());
+    for (const auto& component : kComponentFiles) {
+        const auto source = wcscmp(component.name, kInstallerFile) == 0 ? wizardPath_ : wizardPath_.parent_path() / component.name;
+        copyNativeBinary(source, directory / component.name);
+    }
+    state.wizardPath = (directory / kInstallerFile).wstring();
+}
+
+void WindowsAdapter::stageContinuation(WizardState& state) const {
+    const auto directory = updateDirectory(state);
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    checkWin32(ConvertStringSecurityDescriptorToSecurityDescriptorW(
+        L"D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FRFX;;;BU)", SDDL_REVISION_1,
+        &descriptor, nullptr), L"Could not configure continuation ACL");
+    SECURITY_ATTRIBUTES security{sizeof(security), descriptor, FALSE};
+    const BOOL created = CreateDirectoryW(directory.c_str(), &security);
+    const DWORD error = GetLastError(); LocalFree(descriptor); SetLastError(error);
+    checkWin32(created, L"Could not create protected continuation directory");
+    logOperation(L"Create protected continuation directory: " + directory.wstring());
+    const auto wizard = directory / kInstallerFile;
     copyNativeBinary(wizardPath_, wizard);
     state.wizardPath = wizard.wstring();
 }
@@ -730,17 +656,18 @@ void WindowsAdapter::applyStagedUpdate(const WizardState& state) const {
     const auto attributes = GetFileAttributesW(directory.c_str());
     if (attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_DIRECTORY) ||
         (attributes & FILE_ATTRIBUTE_REPARSE_POINT) ||
-        std::filesystem::path(state.wizardPath) != directory / L"unlock_windows_components_wizard.exe") {
+        std::filesystem::path(state.wizardPath) != directory / kInstallerFile) {
         fail(L"The protected update staging location is invalid.");
     }
-    for (const auto* name : {kCredentialProviderDllName, kSavedCredentialServiceExeName}) {
-        const auto source = directory / name;
-        const auto target = system32Directory() / name;
+    for (const auto& component : kComponentFiles) {
+        const auto source = directory / component.name;
+        const auto target = system32Directory() / component.name;
         auto temporary = target;
         temporary += L".update";
         copyNativeBinary(source, temporary, true);
         checkWin32(MoveFileExW(temporary.c_str(), target.c_str(),
             MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH), L"Could not replace " + target.wstring());
+        logOperation(L"Replace and verify: " + target.wstring());
         std::ifstream expected(source, std::ios::binary), actual(target, std::ios::binary);
         if (!expected || !actual) fail(L"Could not verify updated binary " + target.wstring());
         std::array<char, 65536> left{}, right{};
@@ -801,6 +728,7 @@ void WindowsAdapter::configureSavedCredentialServiceForUpdate(const bool suspend
 }
 
 void WindowsAdapter::deleteBinaryIfPresent(const std::filesystem::path& target) const {
+    logOperation(L"Delete: " + target.wstring());
     if (!fileExists(target)) {
         return;
     }
@@ -916,116 +844,13 @@ void WindowsAdapter::clearSavedCredential() const {
     }
 }
 
-bool WindowsAdapter::continuationTaskExists() const {
-    ScopedCom com;
-    if (FAILED(com.result()) && com.result() != RPC_E_CHANGED_MODE) {
-        fail(L"Could not initialize COM for Task Scheduler.");
-    }
-    auto service = taskSchedulerService();
-    auto root = taskRootFolder(service.Get());
-    ScopedBstr taskName(kFinalizeTaskName);
-    ComPtr<IRegisteredTask> task;
-    const auto result = root->GetTask(taskName.get(), &task);
-    if (result == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)) {
-        return false;
-    }
-    checkHresult(result, L"Could not inspect the component continuation task");
-    return true;
-}
-
-void WindowsAdapter::registerContinuationTask(const WizardState& state) const {
-    ScopedCom com;
-    if (FAILED(com.result()) && com.result() != RPC_E_CHANGED_MODE) {
-        fail(L"Could not initialize COM for Task Scheduler.");
-    }
-    auto service = taskSchedulerService();
-    auto root = taskRootFolder(service.Get());
-    ComPtr<ITaskDefinition> definition;
-    checkHresult(service->NewTask(0, &definition), L"Could not create the component continuation task");
-
-    ComPtr<IRegistrationInfo> registration;
-    checkHresult(definition->get_RegistrationInfo(&registration), L"Could not configure the continuation task");
-    ScopedBstr description(L"Completes a pending Unlock Windows with iPhone component operation after restart.");
-    checkHresult(registration->put_Description(description.get()), L"Could not set the continuation task description");
-
-    const auto userName = currentUserName();
-    ComPtr<IPrincipal> principal;
-    checkHresult(definition->get_Principal(&principal), L"Could not configure the continuation task principal");
-    ScopedBstr userId(userName);
-    checkHresult(principal->put_UserId(userId.get()), L"Could not set the continuation task user");
-    checkHresult(principal->put_LogonType(TASK_LOGON_INTERACTIVE_TOKEN), L"Could not set the continuation task logon type");
-    checkHresult(principal->put_RunLevel(TASK_RUNLEVEL_HIGHEST), L"Could not set the continuation task privilege level");
-
-    ComPtr<ITriggerCollection> triggers;
-    checkHresult(definition->get_Triggers(&triggers), L"Could not configure the continuation task trigger");
-    ComPtr<ITrigger> trigger;
-    checkHresult(triggers->Create(TASK_TRIGGER_LOGON, &trigger), L"Could not create the continuation logon trigger");
-    checkHresult(trigger->put_Enabled(VARIANT_TRUE), L"Could not enable the continuation logon trigger");
-
-    ComPtr<IActionCollection> actions;
-    checkHresult(definition->get_Actions(&actions), L"Could not configure the continuation task action");
-    ComPtr<IAction> action;
-    checkHresult(actions->Create(TASK_ACTION_EXEC, &action), L"Could not create the continuation task action");
-    ComPtr<IExecAction> execution;
-    checkHresult(action.As(&execution), L"Could not configure the continuation executable action");
-    const auto executablePath = state.wizardPath.empty() ? wizardPath_ : std::filesystem::path(state.wizardPath);
-    ScopedBstr path(executablePath.wstring());
-    const bool updating = state.phase == WizardPhase::updatePendingReboot || state.phase == WizardPhase::updating;
-    ScopedBstr arguments(updating ? L"--resume-update" : L"--resume-uninstall");
-    checkHresult(execution->put_Path(path.get()), L"Could not set the continuation executable path");
-    checkHresult(execution->put_Arguments(arguments.get()), L"Could not set the continuation executable arguments");
-
-    ComPtr<ITaskSettings> settings;
-    checkHresult(definition->get_Settings(&settings), L"Could not configure the continuation task settings");
-    checkHresult(settings->put_StartWhenAvailable(VARIANT_TRUE), L"Could not set continuation task availability");
-    checkHresult(
-        settings->put_DisallowStartIfOnBatteries(VARIANT_FALSE),
-        L"Could not allow the continuation task to start on battery power"
-    );
-    checkHresult(
-        settings->put_StopIfGoingOnBatteries(VARIANT_FALSE),
-        L"Could not keep the continuation task running on battery power"
-    );
-
-    ScopedBstr taskName(kFinalizeTaskName);
-    ScopedVariant user(userName);
-    ScopedVariant empty;
-    ComPtr<IRegisteredTask> registeredTask;
-    checkHresult(
-        root->RegisterTaskDefinition(
-            taskName.get(),
-            definition.Get(),
-            TASK_CREATE_OR_UPDATE,
-            user.get(),
-            empty.get(),
-            TASK_LOGON_INTERACTIVE_TOKEN,
-            empty.get(),
-            &registeredTask
-        ),
-        L"Could not register the component continuation task"
-    );
-}
-
-void WindowsAdapter::removeContinuationTask() const {
-    ScopedCom com;
-    if (FAILED(com.result()) && com.result() != RPC_E_CHANGED_MODE) {
-        fail(L"Could not initialize COM for Task Scheduler.");
-    }
-    auto service = taskSchedulerService();
-    auto root = taskRootFolder(service.Get());
-    ScopedBstr taskName(kFinalizeTaskName);
-    const auto result = root->DeleteTask(taskName.get(), 0);
-    if (FAILED(result) && result != HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)) {
-        checkHresult(result, L"Could not remove the component continuation task");
-    }
-}
-
 ComponentSnapshot WindowsAdapter::inspect() const {
     ComponentSnapshot snapshot;
     try {
         const auto state = readState();
         snapshot.statePresent = state.has_value();
         if (state) {
+            snapshot.targetSid = state->targetSid;
             snapshot.statePhase = state->phase;
             snapshot.stateLastError = state->lastError;
             snapshot.stateValid = isKnownPhase(static_cast<DWORD>(state->phase)) &&
@@ -1081,6 +906,11 @@ ComponentSnapshot WindowsAdapter::inspect() const {
             fail(L"Could not inspect the saved credential service registration.");
         }
         snapshot.continuationTaskPresent = continuationTaskExists();
+        snapshot.userStartupPresent = userStartupPresent();
+        snapshot.toolsPresent = toolsPresent();
+        snapshot.desktopArtifactsPresent = desktopArtifactsPresent();
+        snapshot.shortcutsPresent = shortcutsPresent();
+        snapshot.trayRunning = trayRunning();
         if (snapshot.statePhase == WizardPhase::updatePendingReboot || snapshot.statePhase == WizardPhase::updating) {
             snapshot.updateRebootRequired = updateRebootRequired();
         }

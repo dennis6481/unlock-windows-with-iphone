@@ -2,713 +2,385 @@
 
 #define UNICODE
 #define _UNICODE
-
-#include "ComponentState.h"
 #include "ComponentTransaction.h"
-#include "WindowsAdapter.h"
 #include "resource.h"
-
+#include "../Resources/resource.h"
 #include <Windows.h>
 #include <commctrl.h>
-#include <objbase.h>
-#include <prsht.h>
-
-#include <cstdint>
-#include <exception>
-#include <filesystem>
+#include <shellapi.h>
+#include <sddl.h>
 #include <memory>
-#include <mutex>
-#include <optional>
-#include <string>
 #include <thread>
-#include <utility>
 #include <vector>
 
-#pragma comment(lib, "comctl32.lib")
-#pragma comment(lib, "ole32.lib")
-#pragma comment(lib, "shell32.lib")
-#pragma comment(lib, "user32.lib")
-
 namespace {
-
 using namespace unlock::components;
-
-constexpr wchar_t kWindowTitle[] = L"Unlock Windows with iPhone Components";
-constexpr UINT kProgressMessage = WM_APP + 1;
-constexpr UINT kOperationCompleteMessage = WM_APP + 2;
-constexpr UINT kFocusWizardButtonMessage = WM_APP + 3;
-constexpr int kWizardNextControlId = 0x3024;
-constexpr int kWizardFinishControlId = 0x3025;
-
-enum class PageKind {
-    status,
-    confirmation,
-    progress,
-    result,
-};
-
-struct ProgressUpdate final {
-    int percent = 0;
-    std::wstring message;
-};
-
-std::filesystem::path currentModulePath() {
-    std::vector<wchar_t> buffer(MAX_PATH);
-    for (;;) {
-        const auto length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
-        if (length == 0) {
-            throw ComponentError(L"Could not determine the Components Wizard executable path.");
+constexpr UINT progressMessage = WM_APP + 1;
+constexpr UINT completeMessage = WM_APP + 2;
+enum class Page { home, update, uninstall, progress, restart, result, failure };
+struct Progress { int percent; std::wstring message; };
+std::wstring errorText(const std::exception& error) {
+    if (auto component = dynamic_cast<const ComponentError*>(&error)) return component->wideWhat();
+    std::string text(error.what()); return {text.begin(), text.end()};
+}
+std::filesystem::path modulePath() {
+    std::vector<wchar_t> text(32768);
+    DWORD n = GetModuleFileNameW(nullptr, text.data(), static_cast<DWORD>(text.size()));
+    if (!n || n >= text.size()) throw ComponentError(L"Cannot determine installer path.");
+    return std::wstring(text.data(), n);
+}
+struct OperationLock {
+    HANDLE value = nullptr;
+    OperationLock() {
+        PSECURITY_DESCRIPTOR descriptor = nullptr;
+        if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            L"D:P(A;;GA;;;SY)(A;;GA;;;BA)", SDDL_REVISION_1, &descriptor, nullptr))
+            throw ComponentError(L"Cannot create operation lock security.");
+        SECURITY_ATTRIBUTES attributes{sizeof(attributes), descriptor, FALSE};
+        value = CreateMutexW(&attributes, FALSE, L"Global\\UnlockWindowsWithIPhone-ComponentOperation");
+        DWORD error = GetLastError(); LocalFree(descriptor);
+        if (!value) throw ComponentError(L"Cannot open operation lock (Win32=" + std::to_wstring(error) + L").");
+        const DWORD wait = WaitForSingleObject(value, 0);
+        if (wait != WAIT_OBJECT_0 && wait != WAIT_ABANDONED) {
+            CloseHandle(value); value = nullptr;
+            throw ComponentError(L"Another component operation is in progress. Close this window and wait for it to finish.");
         }
-        if (length < buffer.size() - 1) {
-            return std::filesystem::path(std::wstring(buffer.data(), length));
-        }
-        buffer.resize(buffer.size() * 2);
+    }
+    ~OperationLock() { if (value) { ReleaseMutex(value); CloseHandle(value); } }
+};
+OperationResult continueOperation(WindowsAdapter& adapter, const ProgressCallback& progress) {
+    const auto state = adapter.readState();
+    if (!state) return {false, false, false, L"No registered transaction is pending."};
+    ComponentTransaction transaction(adapter);
+    switch (state->phase) {
+        case WizardPhase::installed:
+            if (adapter.inspect().isFullInstallation())
+                return {true, false, true, L"Completed installation verified after interrupted result handoff."};
+            return {false, false, true, L"Installed component verification failed."};
+        case WizardPhase::installPendingReboot: return transaction.completeInstall(progress);
+        case WizardPhase::updatePendingReboot:
+        case WizardPhase::updating: return transaction.completeUpdate(progress);
+        case WizardPhase::uninstallPendingReboot:
+        case WizardPhase::cleaningUp: return transaction.completeUninstall(progress);
+        default: return {false, false, true, L"This transaction is not eligible for reboot continuation."};
     }
 }
-
-std::wstring exceptionText(const std::exception& error) {
-    if (const auto* componentError = dynamic_cast<const ComponentError*>(&error)) {
-        return componentError->wideWhat();
-    }
-    const auto* text = error.what();
-    std::wstring result;
-    while (*text != '\0') {
-        result.push_back(static_cast<unsigned char>(*text));
-        ++text;
-    }
-    return result.empty() ? L"Unexpected component wizard error." : result;
-}
-
-class ScopedBitmap final {
-public:
-    explicit ScopedBitmap(const HBITMAP bitmap) : bitmap_(bitmap) {}
-    ScopedBitmap(const ScopedBitmap&) = delete;
-    ScopedBitmap& operator=(const ScopedBitmap&) = delete;
-    ~ScopedBitmap() {
-        if (bitmap_ != nullptr) {
-            DeleteObject(bitmap_);
-        }
-    }
-
-    [[nodiscard]] HBITMAP get() const noexcept {
-        return bitmap_;
-    }
-
-private:
-    HBITMAP bitmap_ = nullptr;
-};
-
-HBITMAP createWatermarkBitmap() {
-    constexpr int width = 164;
-    constexpr int height = 314;
-
-    BITMAPINFO bitmapInfo{};
-    bitmapInfo.bmiHeader.biSize = sizeof(bitmapInfo.bmiHeader);
-    bitmapInfo.bmiHeader.biWidth = width;
-    bitmapInfo.bmiHeader.biHeight = -height;
-    bitmapInfo.bmiHeader.biPlanes = 1;
-    bitmapInfo.bmiHeader.biBitCount = 32;
-    bitmapInfo.bmiHeader.biCompression = BI_RGB;
-
-    void* pixels = nullptr;
-    const auto bitmap = CreateDIBSection(
-        nullptr,
-        &bitmapInfo,
-        DIB_RGB_COLORS,
-        &pixels,
-        nullptr,
-        0
-    );
-    if (bitmap == nullptr || pixels == nullptr) {
-        if (bitmap != nullptr) {
-            DeleteObject(bitmap);
-        }
-        throw ComponentError(L"Could not create the wizard sidebar bitmap.");
-    }
-
-    auto* colors = static_cast<std::uint32_t*>(pixels);
-    for (int y = 0; y < height; ++y) {
-        const auto blue = static_cast<std::uint8_t>(112 - (y * 32 / height));
-        const auto green = static_cast<std::uint8_t>(48 - (y * 18 / height));
-        const auto red = static_cast<std::uint8_t>(18 - (y * 8 / height));
-        for (int x = 0; x < width; ++x) {
-            auto color = RGB(red, green, blue);
-            if (((x + y) / 16) % 2 == 0) {
-                color = RGB(red + 5, green + 5, blue + 5);
-            }
-            if ((x - width / 2) * (x - width / 2) + (y - 78) * (y - 78) < 34 * 34 &&
-                (x - width / 2) * (x - width / 2) + (y - 78) * (y - 78) > 27 * 27) {
-                color = RGB(228, 240, 248);
-            }
-            colors[y * width + x] = color;
-        }
-    }
-
-    return bitmap;
-}
-
-class WizardSession final {
-public:
-    WizardSession(const HINSTANCE instance, const bool resumeUninstall, const bool resumeUpdate)
-        : instance_(instance),
-          resumeUninstall_(resumeUninstall),
-          resumeUpdate_(resumeUpdate),
-          adapter_(currentModulePath()),
-          transaction_(adapter_) {
-        initialize();
-    }
-
-    ~WizardSession() {
-        if (worker_.joinable()) {
-            worker_.join();
-        }
-    }
-
-    int show() {
-        createPages();
-        if (pages_.empty()) {
-            throw ComponentError(L"Could not create any Components Wizard page.");
-        }
-
-        const ScopedBitmap watermark(createWatermarkBitmap());
-        PROPSHEETHEADERW header{};
-        header.dwSize = sizeof(header);
-        header.dwFlags = PSH_WIZARD97 |
-            PSH_WIZARDHASFINISH |
-            PSH_WATERMARK |
-            PSH_USEHBMWATERMARK |
-            PSH_PROPSHEETPAGE;
-        header.hwndParent = nullptr;
-        header.hInstance = instance_;
-        header.pszCaption = kWindowTitle;
-        header.nPages = static_cast<UINT>(pages_.size());
-        header.ppsp = pages_.data();
-        header.hbmWatermark = watermark.get();
-
-        const auto result = PropertySheetW(&header);
-        if (result == -1) {
-            throw ComponentError(L"Could not create the Components Wizard property sheet.");
-        }
-        return 0;
-    }
-
-private:
-    struct PageSpec final {
-        PageKind kind = PageKind::status;
-        std::wstring title;
-    };
-
-    void initialize() {
-        try {
-            refreshPlan();
-            if (plan_.action == WizardAction::resetStaleState) {
-                const auto reset = transaction_.resetStaleState();
-                if (!reset.success) {
-                    plan_ = {
-                        WizardAction::blocked,
-                        L"Stale transaction state could not be removed",
-                        reset.message,
-                        false,
-                    };
-                } else {
-                    refreshPlan();
-                }
-            }
-
-            if (resumeUninstall_ && plan_.action != WizardAction::cleanup) {
-                plan_ = {
-                    WizardAction::blocked,
-                    L"Nothing is waiting for uninstall cleanup",
-                    L"The --resume-uninstall entry point was called, but the saved transaction is not waiting for post-restart cleanup.",
-                    false,
-                };
-            }
-            if (resumeUpdate_ && plan_.action != WizardAction::completeUpdate) {
-                plan_ = {WizardAction::blocked, L"No update is waiting",
-                    L"The --resume-update entry point requires a pending update transaction.", false};
-            }
-        } catch (const std::exception& error) {
-            plan_ = {
-                WizardAction::blocked,
-                L"Component status could not be initialized",
-                exceptionText(error),
-                false,
-            };
-        }
-    }
-
-    void refreshPlan() {
-        snapshot_ = adapter_.inspect();
-        plan_ = determineRecoveryPlan(snapshot_);
-    }
-
-    void createPages() {
-        pageSpecs_.clear();
-        if (!resumeUninstall_ && !resumeUpdate_) {
-            pageSpecs_.push_back({PageKind::status, L"Component status"});
-        }
-
-        if (plan_.action == WizardAction::cleanup || plan_.action == WizardAction::completeUpdate) {
-            pageSpecs_.push_back({PageKind::progress, L"Completing component operation"});
-        } else if (plan_.action != WizardAction::blocked) {
-            pageSpecs_.push_back({PageKind::confirmation, L"Confirm operation"});
-            pageSpecs_.push_back({PageKind::progress, L"Applying changes"});
-        }
-
-        pageSpecs_.push_back({PageKind::result, L"Operation result"});
-
-        pages_.clear();
-        pages_.reserve(pageSpecs_.size());
-        for (const auto& spec : pageSpecs_) {
-            PROPSHEETPAGEW page{};
-            page.dwSize = sizeof(page);
-            page.dwFlags = PSP_DEFAULT | PSP_HIDEHEADER;
-            page.hInstance = instance_;
-            page.pszTemplate = MAKEINTRESOURCEW(IDD_WIZARD_PAGE);
-            page.pfnDlgProc = pageProcedure;
-            page.lParam = reinterpret_cast<LPARAM>(this);
-            pages_.push_back(page);
-        }
-    }
-
-    static INT_PTR CALLBACK pageProcedure(
-        const HWND page,
-        const UINT message,
-        const WPARAM wordParam,
-        const LPARAM longParam
-    ) {
-        auto* session = reinterpret_cast<WizardSession*>(GetWindowLongPtrW(page, DWLP_USER));
-        if (message == WM_INITDIALOG) {
-            const auto* propertyPage = reinterpret_cast<const PROPSHEETPAGEW*>(longParam);
-            session = reinterpret_cast<WizardSession*>(propertyPage->lParam);
-            SetWindowLongPtrW(page, DWLP_USER, reinterpret_cast<LONG_PTR>(session));
-            if (session != nullptr) {
-                const auto focusWasSet = session->initializePage(page, session->pageIndex(page));
-                return focusWasSet ? FALSE : TRUE;
-            }
-            return TRUE;
-        }
-        if (session == nullptr) {
-            return FALSE;
-        }
-        return session->handlePageMessage(page, message, wordParam, longParam);
-    }
-
-    std::size_t pageIndex(const HWND page) const {
-        for (std::size_t index = 0; index < pageWindows_.size(); ++index) {
-            if (pageWindows_[index] == page) {
-                return index;
-            }
-        }
-        return pageWindows_.size();
-    }
-
-    bool initializePage(const HWND page, const std::size_t index) {
-        if (index == pageWindows_.size()) {
-            pageWindows_.push_back(page);
-        } else {
-            pageWindows_[index] = page;
-        }
-        updatePage(page, pageSpecs_[index].kind);
-        return focusDefaultWizardButton(page);
-    }
-
-    INT_PTR handlePageMessage(
-        const HWND page,
-        const UINT message,
-        const WPARAM wordParam,
-        const LPARAM longParam
-    ) {
-        if (message == kFocusWizardButtonMessage) {
-            focusDefaultWizardButton(page);
-            return TRUE;
-        }
-        if (message == kProgressMessage) {
-            auto* update = reinterpret_cast<ProgressUpdate*>(longParam);
-            if (update != nullptr) {
-                SetDlgItemTextW(page, IDC_MAIN_INSTRUCTION, update->message.c_str());
-                SendDlgItemMessageW(page, IDC_PROGRESS, PBM_SETPOS, update->percent, 0);
-                delete update;
-            }
-            return TRUE;
-        }
-        if (message == kOperationCompleteMessage) {
-            finishOperation(page);
-            return TRUE;
-        }
-        if (message == WM_COMMAND && LOWORD(wordParam) == IDC_REMOVE_INSTEAD && HIWORD(wordParam) == BN_CLICKED) {
-            plan_.action = IsDlgButtonChecked(page, IDC_REMOVE_INSTEAD) == BST_CHECKED
-                ? WizardAction::uninstall : WizardAction::update;
-            showConfirmationPage(page);
-            return TRUE;
-        }
-
-        if (message != WM_NOTIFY) {
-            return FALSE;
-        }
-
-        const auto* header = reinterpret_cast<const NMHDR*>(longParam);
-        if (header == nullptr) {
-            return FALSE;
-        }
-        switch (header->code) {
-            case PSN_SETACTIVE:
-                updatePage(page, pageSpecs_[pageIndex(page)].kind);
-                focusDefaultWizardButton(page);
-                return TRUE;
-
-            case PSN_WIZNEXT:
-                if (pageSpecs_[pageIndex(page)].kind == PageKind::result && restartAvailable_) {
-                    return handleRestart(page);
-                }
-                SetWindowLongPtrW(page, DWLP_MSGRESULT, 0);
-                return TRUE;
-
-            case PSN_QUERYCANCEL:
-                SetWindowLongPtrW(page, DWLP_MSGRESULT, operationRunning_ ? 1 : 0);
-                return TRUE;
-
-            case PSN_WIZFINISH:
-                return handleFinish(page);
-
-            default:
-                return FALSE;
-        }
-    }
-
-    void updatePage(const HWND page, const PageKind kind) {
-        ShowWindow(GetDlgItem(page, IDC_REMOVE_INSTEAD), SW_HIDE);
-        switch (kind) {
-            case PageKind::status:
-                showStatusPage(page);
-                break;
-            case PageKind::confirmation:
-                showConfirmationPage(page);
-                break;
-            case PageKind::progress:
-                showProgressPage(page);
-                break;
-            case PageKind::result:
-                showResultPage(page);
-                break;
-        }
-    }
-
-    bool focusDefaultWizardButton(const HWND page) const {
-        const auto propertySheet = GetParent(page);
-        HWND button = GetDlgItem(propertySheet, kWizardFinishControlId);
-        if (button == nullptr || !IsWindowVisible(button) || !IsWindowEnabled(button)) {
-            button = GetDlgItem(propertySheet, kWizardNextControlId);
-        }
-        if (button == nullptr || !IsWindowVisible(button) || !IsWindowEnabled(button)) {
-            return false;
-        }
-        SetFocus(button);
-        return GetFocus() == button;
-    }
-
-    void setDetails(const HWND page, const std::wstring& instruction, const std::wstring& details) {
-        SetDlgItemTextW(page, IDC_MAIN_INSTRUCTION, instruction.c_str());
-        SetDlgItemTextW(page, IDC_DETAILS, details.c_str());
-        ShowWindow(GetDlgItem(page, IDC_PROGRESS), SW_HIDE);
-    }
-
-    void setWizardButtons(
-        const HWND page,
-        const DWORD enabledButtons,
-        const DWORD visibleButtons
-    ) {
-        const auto propertySheet = GetParent(page);
-        SendMessageW(
-            propertySheet,
-            PSM_SHOWWIZBUTTONS,
-            visibleButtons,
-            PSWIZB_BACK | PSWIZB_NEXT | PSWIZB_FINISH | PSWIZB_CANCEL
-        );
-        PropSheet_SetWizButtons(propertySheet, enabledButtons);
-        PostMessageW(page, kFocusWizardButtonMessage, 0, 0);
-    }
-
-    void setButtonText(const HWND page, const int button, const wchar_t* text) {
-        SendMessageW(GetParent(page), PSM_SETBUTTONTEXT, button, reinterpret_cast<LPARAM>(text));
-    }
-
-    void showStatusPage(const HWND page) {
-        setDetails(page, plan_.title, plan_.explanation);
-        if (plan_.action == WizardAction::blocked) {
-            setWizardButtons(page, PSWIZB_FINISH, PSWIZB_FINISH);
-            setButtonText(page, PSBTN_FINISH, L"Finish");
-        } else {
-            setWizardButtons(page, PSWIZB_NEXT, PSWIZB_NEXT | PSWIZB_CANCEL);
-            setButtonText(page, PSBTN_NEXT, nextButtonText());
-            setButtonText(page, PSBTN_CANCEL, L"Cancel");
-        }
-    }
-
-    void showConfirmationPage(const HWND page) {
-        std::wstring instruction;
-        std::wstring details = plan_.explanation + L"\r\n\r\n";
-        switch (plan_.action) {
-            case WizardAction::update:
-                instruction = L"Confirm component update";
-                details += L"New binaries will be staged locally. The components will be paused until restart and continuation. Sign in with native PIN/password after restart; this wizard resumes for the administrator who started it. Saved passwords and phone enrollment are not cleared.";
-                break;
-            case WizardAction::install:
-                instruction = L"Confirm installation";
-                details += L"The components will be installed now. Windows needs to restart before they can be used.";
-                break;
-            case WizardAction::uninstall:
-                instruction = L"Confirm removal";
-                details += L"The components will be disabled now. Windows needs to restart to complete removal. The remaining component files will be removed after you sign in.";
-                break;
-            case WizardAction::recover:
-                instruction = L"Confirm repair";
-                details += L"The wizard will restore Windows to the state saved before the interrupted operation. Unknown files and settings will not be removed.";
-                break;
-            default:
-                instruction = L"Confirm operation";
-                break;
-        }
-        setDetails(page, instruction, details);
-        if (plan_.action == WizardAction::update || plan_.action == WizardAction::uninstall) {
-            CheckDlgButton(page, IDC_REMOVE_INSTEAD, plan_.action == WizardAction::uninstall ? BST_CHECKED : BST_UNCHECKED);
-            ShowWindow(GetDlgItem(page, IDC_REMOVE_INSTEAD), SW_SHOW);
-        }
-        setWizardButtons(page, PSWIZB_BACK | PSWIZB_NEXT, PSWIZB_BACK | PSWIZB_NEXT | PSWIZB_CANCEL);
-        setButtonText(page, PSBTN_NEXT, nextButtonText());
-        setButtonText(page, PSBTN_CANCEL, L"Cancel");
-    }
-
-    void showProgressPage(const HWND page) {
-        SetDlgItemTextW(page, IDC_MAIN_INSTRUCTION, L"Working...");
-        SetDlgItemTextW(page, IDC_DETAILS, L"Please wait while the wizard applies the selected changes.");
-        ShowWindow(GetDlgItem(page, IDC_PROGRESS), SW_SHOW);
-        SendDlgItemMessageW(page, IDC_PROGRESS, PBM_SETRANGE, 0, MAKELPARAM(0, 100));
-        SendDlgItemMessageW(page, IDC_PROGRESS, PBM_SETPOS, 0, 0);
-        setWizardButtons(page, 0, 0);
-        if (!operationStarted_) {
-            startOperation(page);
-        }
-    }
-
-    void showResultPage(const HWND page) {
-        OperationResult result;
-        {
-            std::lock_guard lock(resultMutex_);
-            if (operationResult_) {
-                result = *operationResult_;
-            } else {
-                result = {false, false, false, L"The operation did not produce a result."};
-            }
-        }
-
-        const wchar_t* instruction = result.success ? L"Operation complete" : L"Operation could not be completed";
-        std::wstring details;
-        if (result.success) {
-            switch (plan_.action) {
-                case WizardAction::update:
-                case WizardAction::completeUpdate:
-                    instruction = result.rebootRequired ? L"Update ready for restart" : L"Update complete";
-                    details = result.message;
-                    if (result.rebootRequired) details += L" Select Restart, then sign in with native PIN/password.";
-                    break;
-                case WizardAction::install:
-                    instruction = L"Installation complete";
-                    details = L"The components were installed successfully. Windows needs to restart to apply the changes. Select Restart to restart now, or Finish to close the wizard.";
-                    break;
-                case WizardAction::uninstall:
-                    instruction = L"Removal ready for restart";
-                    details = L"The components have been disabled. Windows needs to restart to complete removal. The remaining component files will be removed after you sign in. Select Restart to restart now, or Finish to close the wizard.";
-                    break;
-                case WizardAction::cleanup:
-                    instruction = result.statePreserved
-                        ? L"Components removed; credential cleanup unconfirmed"
-                        : L"Removal complete";
-                    details = result.message;
-                    break;
-                case WizardAction::recover:
-                case WizardAction::resetStaleState:
-                    instruction = L"Repair complete";
-                    details = L"The previous operation was repaired successfully.";
-                    break;
-                default:
-                    details = L"The selected operation completed successfully.";
-                    break;
-            }
-        } else {
-            details = L"The wizard could not complete this operation.";
-            if (!result.message.empty()) {
-                details += L" Details: " + result.message;
-            }
-        }
-        if (!result.success && result.statePreserved) {
-            details += L" Your recovery information was preserved. Reopen the wizard to retry safely.";
-        }
-        setDetails(page, instruction, details);
-        restartAvailable_ = result.success && result.rebootRequired;
-        const auto resultButtons = restartAvailable_ ? PSWIZB_NEXT | PSWIZB_FINISH : PSWIZB_FINISH;
-        setWizardButtons(page, resultButtons, resultButtons);
-        setButtonText(page, PSBTN_NEXT, L"Restart");
-        setButtonText(page, PSBTN_FINISH, L"Finish");
-    }
-
-    const wchar_t* nextButtonText() const noexcept {
-        switch (plan_.action) {
-            case WizardAction::install:
-                return L"Install";
-            case WizardAction::update:
-                return L"Update";
-            case WizardAction::completeUpdate:
-                return L"Complete update";
-            case WizardAction::uninstall:
-                return L"Uninstall";
-            case WizardAction::recover:
-                return L"Repair";
-            case WizardAction::cleanup:
-                return L"Complete removal";
-            default:
-                return L"Next";
-        }
-    }
-
-    void startOperation(const HWND progressPage) {
-        operationStarted_ = true;
-        operationRunning_ = true;
-        progressPage_ = progressPage;
-        try {
-            worker_ = std::thread([this] {
-                OperationResult result;
-                const auto callback = [this](const int percent, const std::wstring& message) {
-                    auto* update = new ProgressUpdate{percent, message};
-                    if (!PostMessageW(progressPage_, kProgressMessage, 0, reinterpret_cast<LPARAM>(update))) {
-                        delete update;
-                    }
-                };
-                try {
-                    switch (plan_.action) {
-                        case WizardAction::update:
-                            result = transaction_.beginUpdate(callback);
-                            break;
-                        case WizardAction::completeUpdate:
-                            result = transaction_.completeUpdate(callback);
-                            break;
-                        case WizardAction::install:
-                            result = transaction_.install(callback);
-                            break;
-                        case WizardAction::uninstall:
-                            result = transaction_.beginUninstall(callback);
-                            break;
-                        case WizardAction::cleanup:
-                            result = transaction_.completeUninstall(callback);
-                            break;
-                        case WizardAction::recover:
-                            result = transaction_.recover(callback);
-                            break;
-                        default:
-                            result = {false, false, false, L"This action cannot be started from the current wizard state."};
-                            break;
-                    }
-                } catch (const std::exception& error) {
-                    result = {false, false, true, exceptionText(error)};
-                } catch (...) {
-                    result = {false, false, true, L"An unexpected error interrupted the component operation."};
-                }
-                {
-                    std::lock_guard lock(resultMutex_);
-                    operationResult_ = std::move(result);
-                }
-                PostMessageW(progressPage_, kOperationCompleteMessage, 0, 0);
-            });
-        } catch (const std::exception& error) {
-            operationRunning_ = false;
-            std::lock_guard lock(resultMutex_);
-            operationResult_ = {false, false, true, exceptionText(error)};
-            PostMessageW(progressPage_, kOperationCompleteMessage, 0, 0);
-        }
-    }
-
-    void finishOperation(const HWND page) {
-        if (worker_.joinable()) {
-            worker_.join();
-        }
-        operationRunning_ = false;
-        SetDlgItemTextW(page, IDC_MAIN_INSTRUCTION, L"Operation finished.");
-        SendDlgItemMessageW(page, IDC_PROGRESS, PBM_SETPOS, 100, 0);
-        PropSheet_SetWizButtons(GetParent(page), PSWIZB_NEXT);
-        PropSheet_PressButton(GetParent(page), PSBTN_NEXT);
-    }
-
-    INT_PTR handleRestart(const HWND page) {
-        try {
-            adapter_.restartWindows();
-        } catch (const std::exception& error) {
-            MessageBoxW(page, exceptionText(error).c_str(), kWindowTitle, MB_OK | MB_ICONERROR);
-        }
-        SetWindowLongPtrW(page, DWLP_MSGRESULT, 1);
-        return TRUE;
-    }
-
-    INT_PTR handleFinish(const HWND page) {
-        SetWindowLongPtrW(page, DWLP_MSGRESULT, 0);
-        return TRUE;
-    }
-
-    HINSTANCE instance_ = nullptr;
-    bool resumeUninstall_ = false;
-    bool resumeUpdate_ = false;
-    WindowsAdapter adapter_;
-    ComponentTransaction transaction_;
-    ComponentSnapshot snapshot_;
-    RecoveryPlan plan_;
-    std::vector<PageSpec> pageSpecs_;
-    std::vector<PROPSHEETPAGEW> pages_;
-    std::vector<HWND> pageWindows_;
-
-    std::thread worker_;
-    std::mutex resultMutex_;
-    std::optional<OperationResult> operationResult_;
-    HWND progressPage_ = nullptr;
-    bool operationStarted_ = false;
-    bool operationRunning_ = false;
-    bool restartAvailable_ = false;
-};
-
-} // namespace
-
-int APIENTRY wWinMain(
-    const HINSTANCE instance,
-    const HINSTANCE,
-    const PWSTR commandLine,
-    const int
-) {
-    INITCOMMONCONTROLSEX controls{};
-    controls.dwSize = sizeof(controls);
-    controls.dwICC = ICC_STANDARD_CLASSES | ICC_PROGRESS_CLASS;
-    if (!InitCommonControlsEx(&controls)) {
-        MessageBoxW(nullptr, L"Could not initialize Windows common controls.", kWindowTitle, MB_OK | MB_ICONERROR);
-        return 1;
-    }
-
-    const auto comResult = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    if (FAILED(comResult) && comResult != RPC_E_CHANGED_MODE) {
-        MessageBoxW(nullptr, L"Could not initialize COM for the Components Wizard.", kWindowTitle, MB_OK | MB_ICONERROR);
-        return 1;
-    }
-
-    int result = 1;
+int resume(WindowsAdapter& adapter, const std::wstring& id) {
+    if (!adapter.isSystem()) return ERROR_ACCESS_DENIED;
+    OperationLock operationLock;
+    auto state = adapter.readState();
+    if (!state || state->transactionId != id ||
+        std::filesystem::path(state->wizardPath) != adapter.wizardPath() ||
+        adapter.wizardPath() != adapter.updateDirectory(*state) / kInstallerFile)
+        return ERROR_INVALID_STATE;
+    CompletionRecord record{id, state->targetSid, L"Completing operation after restart...", L"", false, false};
+    const auto previous = adapter.readCompletion();
+    if (previous && previous->transactionId == id) record.log = previous->log;
+    adapter.writeCompletion(record);
     try {
-        const std::wstring arguments = commandLine == nullptr ? L"" : commandLine;
-        WizardSession session(instance, arguments.find(L"--resume-uninstall") != std::wstring::npos,
-            arguments.find(L"--resume-update") != std::wstring::npos);
-        result = session.show();
+        const auto result = continueOperation(adapter, [&](int, const std::wstring& message) {
+            record.log += message + L"\r\n"; adapter.writeCompletion(record);
+        });
+        adapter.setOperationLog({});
+        record.message = result.message;
+        record.success = result.success && !result.rebootRequired;
+        if (record.success) {
+            adapter.removeContinuationTask();
+        }
+        record.finished = true;
+        adapter.writeCompletion(record);
+        if (record.success && (state->phase == WizardPhase::uninstallPendingReboot || state->phase == WizardPhase::cleaningUp))
+            adapter.clearState();
+        return record.success ? 0 : ERROR_INSTALL_FAILURE;
     } catch (const std::exception& error) {
-        MessageBoxW(nullptr, exceptionText(error).c_str(), kWindowTitle, MB_OK | MB_ICONERROR);
-    } catch (...) {
-        MessageBoxW(nullptr, L"The Components Wizard encountered an unexpected error.", kWindowTitle, MB_OK | MB_ICONERROR);
+        adapter.setOperationLog({});
+        record.message = errorText(error); record.finished = true; record.success = false;
+        adapter.writeCompletion(record); return ERROR_INSTALL_FAILURE;
     }
-
-    if (SUCCEEDED(comResult)) {
-        CoUninitialize();
+}
+struct Window {
+    WindowsAdapter adapter;
+    HWND hwnd = nullptr;
+    Page page = Page::home;
+    std::thread worker;
+    std::wstring log, resultId;
+    bool resultMode = false, busy = false, installed = false, pending = false;
+    explicit Window(std::filesystem::path path) : adapter(std::move(path)) {}
+    ~Window() { if (worker.joinable()) worker.join(); }
+    void text(int id, const std::wstring& value) { SetDlgItemTextW(hwnd, id, value.c_str()); }
+    void button(int id, const wchar_t* label, bool enabled = true, bool primary = false) {
+        ShowWindow(GetDlgItem(hwnd, id), label ? SW_SHOW : SW_HIDE);
+        if (!label) return;
+        text(id, label); EnableWindow(GetDlgItem(hwnd, id), enabled);
+        SendDlgItemMessageW(hwnd, id, BM_SETSTYLE, primary ? BS_DEFPUSHBUTTON : BS_PUSHBUTTON, TRUE);
+        if (primary) SendMessageW(hwnd, DM_SETDEFID, id, 0);
     }
-    return result;
+    void buttons(const wchar_t* left, const wchar_t* action, const wchar_t* cancel) {
+        button(IDC_BACK, left);
+        button(IDC_ACTION, action, true, cancel == nullptr);
+        button(IDC_CANCEL_ACTION, cancel, true, cancel != nullptr);
+        if (cancel) SetFocus(GetDlgItem(hwnd, IDC_CANCEL_ACTION));
+        else if (action) SetFocus(GetDlgItem(hwnd, IDC_ACTION));
+    }
+    void setPage(Page next, const std::wstring& title, const std::wstring& details) {
+        page = next; text(IDC_MAIN_INSTRUCTION, title); text(IDC_DETAILS, details);
+        ShowWindow(GetDlgItem(hwnd, IDC_PROGRESS), next == Page::progress ? SW_SHOW : SW_HIDE);
+    }
+    void home() {
+        const auto status = adapter.inspect();
+        const auto state = adapter.readState();
+        if (!status.observationValid || (status.statePresent && !status.stateValid))
+            throw ComponentError(status.observationValid ? status.stateError : status.observationError);
+        installed = state && state->phase == WizardPhase::installed;
+        const auto completion = adapter.readCompletion();
+        const bool unfinishedHandoff = state && completion && completion->transactionId == state->transactionId && !completion->finished;
+        pending = state && (unfinishedHandoff || state->phase == WizardPhase::installPendingReboot ||
+            state->phase == WizardPhase::updatePendingReboot || state->phase == WizardPhase::updating ||
+            state->phase == WizardPhase::uninstallPendingReboot || state->phase == WizardPhase::cleaningUp);
+        if (pending) {
+            if (!state->lastError.empty()) {
+                setPage(Page::failure, L"Operation needs attention", state->lastError + L"\r\n\r\nThe transaction is preserved. No other operation may start.");
+                buttons(nullptr, adapter.updateRebootRequired() ? L"Restart now" : L"Continue", L"Close");
+            } else if (unfinishedHandoff && !adapter.updateRebootRequired() && state->phase == WizardPhase::installed) {
+                setPage(Page::failure, L"Completion handoff interrupted", L"Continue verification of the existing transaction. No new operation may start.");
+                buttons(nullptr, L"Continue", L"Close");
+            } else {
+                setPage(Page::restart, L"Restart required",
+                    L"A component operation is pending. Restart Windows to complete it. No other operation can start.");
+                buttons(nullptr, L"Restart now", L"Later");
+            }
+            return;
+        }
+        if (state && !installed) throw ComponentError(L"An interrupted transaction is preserved for diagnosis. No automatic removal or rollback will be performed.\r\n" + state->lastError);
+        if (installed) {
+            if (!status.isCompleteInstallation()) throw ComponentError(L"Core installation verification failed. No destructive recovery will run automatically.");
+            setPage(Page::home, L"Installed", L"Unlock Windows with iPhone is installed.\r\n\r\nStartup account SID: " +
+                (state->targetSid.empty() ? L"Will be captured from the physical console during update" : state->targetSid) +
+                L"\r\nBluetooth tray: " + (status.trayRunning ? L"running" : L"not running") +
+                L"\r\n\r\nUpdate keeps your saved credential and phone registration. Uninstall removes the saved credential.");
+            buttons(L"Uninstall", L"Update", L"Cancel");
+        } else {
+            if (status.hasAnyArtifacts()) throw ComponentError(L"Unregistered component artifacts exist. Installation has not started.");
+            setPage(Page::home, L"Install Unlock Windows with iPhone",
+                L"Install phone connectivity, lock-screen unlock and saved Windows credential management.\r\n\r\n"
+                L"Phone connectivity will start automatically, without elevation, when the target console user signs in. "
+                L"Use your normal PIN or password for the first sign-in. A restart is required.");
+            buttons(nullptr, L"Install", L"Cancel");
+        }
+    }
+    void append(const Progress& progress) {
+        log += progress.message + L"\r\n";
+        text(IDC_DETAILS, log);
+        SendDlgItemMessageW(hwnd, IDC_DETAILS, EM_SETSEL, static_cast<WPARAM>(-1), static_cast<LPARAM>(-1));
+        SendDlgItemMessageW(hwnd, IDC_DETAILS, EM_SCROLLCARET, 0, 0);
+        if (progress.percent >= 0) SendDlgItemMessageW(hwnd, IDC_PROGRESS, PBM_SETPOS, progress.percent, 0);
+    }
+    void start(WizardAction action, bool continuation = false) {
+        busy = true; log.clear();
+        setPage(Page::progress, L"Working — please wait", L"");
+        button(IDC_BACK, nullptr); button(IDC_ACTION, nullptr); button(IDC_CANCEL_ACTION, L"Cancel", false);
+        EnableMenuItem(GetSystemMenu(hwnd, FALSE), SC_CLOSE, MF_BYCOMMAND | MF_GRAYED);
+        if (worker.joinable()) worker.join();
+        worker = std::thread([this, action, continuation] {
+            OperationResult result;
+            std::wstring operationLog;
+            try {
+                ComponentTransaction transaction(adapter);
+                auto progress = [this, &operationLog](int percent, const std::wstring& message) {
+                    operationLog += message + L"\r\n";
+                    auto update = std::make_unique<Progress>(Progress{percent, message});
+                    if (!PostMessageW(hwnd, progressMessage, 0, reinterpret_cast<LPARAM>(update.get())))
+                        throw ComponentError(L"Could not deliver installation progress to the window.");
+                    update.release();
+                };
+                if (continuation) result = continueOperation(adapter, progress);
+                else if (action == WizardAction::install) result = transaction.install(progress);
+                else if (action == WizardAction::update) result = transaction.beginUpdate(progress);
+                else result = transaction.beginUninstall(progress);
+                if (continuation && result.success && !result.rebootRequired) {
+                    auto state = adapter.readState();
+                    if (!state) throw ComponentError(L"Completion transaction disappeared.");
+                    adapter.removeContinuationTask();
+                    adapter.writeCompletion({state->transactionId, state->targetSid, result.message, operationLog, true, true});
+                    if (state->phase == WizardPhase::cleaningUp) adapter.clearState();
+                } else {
+                    auto state = adapter.readState();
+                    if (state && state->phase != WizardPhase::installed)
+                        adapter.writeCompletion({state->transactionId, state->targetSid, result.message, operationLog,
+                            !result.success, false});
+                }
+            } catch (const std::exception& error) { result = {false, false, true, errorText(error)}; }
+            adapter.setOperationLog({});
+            auto value = std::make_unique<OperationResult>(std::move(result));
+            if (PostMessageW(hwnd, completeMessage, 0, reinterpret_cast<LPARAM>(value.get()))) value.release();
+            else OutputDebugStringW(L"Installer failed to deliver its final window message. Check the persisted operation result.\n");
+        });
+    }
+    void complete(const OperationResult& result) {
+        busy = false;
+        EnableMenuItem(GetSystemMenu(hwnd, FALSE), SC_CLOSE, MF_BYCOMMAND | MF_ENABLED);
+        if (!result.success) {
+            setPage(Page::failure, L"Operation failed", result.message + L"\r\n\r\n" + log);
+            buttons(nullptr, nullptr, L"Close");
+        } else if (result.rebootRequired) {
+            setPage(Page::restart, L"Restart required", result.message + L"\r\n\r\n" + log);
+            buttons(nullptr, L"Restart now", L"Later");
+        } else {
+            setPage(Page::result, L"Operation verified", result.message + L"\r\n\r\n" + log);
+            buttons(nullptr, L"Finish", nullptr);
+        }
+    }
+    void pollResult() {
+        const auto record = adapter.readCompletion();
+        if (!record || record->transactionId != resultId) {
+            setPage(Page::progress, L"Waiting for verified operation result", L"No successful completion result has been recorded.");
+            buttons(nullptr, nullptr, nullptr); return;
+        }
+        if (!record->finished) {
+            setPage(Page::progress, L"Completing operation after restart", record->message + L"\r\n" + record->log);
+            buttons(nullptr, nullptr, nullptr); return;
+        }
+        KillTimer(hwnd, 1);
+        if (record->success) adapter.startTrayForCompletedOperation(resultId);
+        setPage(record->success ? Page::result : Page::failure,
+            record->success ? L"Operation completed and verified" : L"Operation failed",
+            record->message + L"\r\n\r\n" + record->log);
+        buttons(nullptr, L"Finish", nullptr);
+    }
+    void command(int id) {
+        if (busy) return;
+        if (id == IDC_CANCEL_ACTION) { DestroyWindow(hwnd); return; }
+        if (id == IDCANCEL) {
+            if (resultMode && (page == Page::result || page == Page::failure)) adapter.acknowledgeCompletion(resultId);
+            DestroyWindow(hwnd); return;
+        }
+        if (id == IDC_BACK) {
+            if (page == Page::home && installed) {
+                setPage(Page::uninstall, L"Uninstall Unlock Windows with iPhone",
+                    L"Remove phone connectivity, login startup, lock-screen unlock, credential manager and maintenance shortcuts.\r\n\r\n"
+                    L"The saved Windows password copy will be cleared before removal. Phone public-key registration will be retained. A restart is required.");
+                buttons(L"Back", L"Uninstall", L"Cancel");
+            } else home();
+            return;
+        }
+        if (id != IDC_ACTION) return;
+        if (resultMode) { adapter.acknowledgeCompletion(resultId); DestroyWindow(hwnd); return; }
+        if (page == Page::home) {
+            if (!installed) start(WizardAction::install);
+            else {
+                setPage(Page::update, L"Update Unlock Windows with iPhone",
+                    L"Replace installed program files with the precompiled files supplied beside this installer. "
+                    L"Your saved password, phone registration and startup target account will be preserved.\r\n\r\nA restart is required.");
+                buttons(L"Back", L"Update", L"Cancel");
+            }
+        } else if (page == Page::update) start(WizardAction::update);
+        else if (page == Page::uninstall) start(WizardAction::uninstall);
+        else if (page == Page::restart || (page == Page::failure && pending && adapter.updateRebootRequired())) {
+            if (MessageBoxW(hwnd, L"Restart Windows now? Save your work first. Applications will not be forcibly closed.",
+                L"Restart Windows", MB_OKCANCEL | MB_ICONQUESTION) == IDOK) { adapter.restartWindows(); DestroyWindow(hwnd); }
+        } else if (page == Page::failure && pending) start(WizardAction::blocked, true);
+        else DestroyWindow(hwnd);
+    }
+};
+INT_PTR CALLBACK procedure(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    auto* window = reinterpret_cast<Window*>(GetWindowLongPtrW(hwnd, DWLP_USER));
+    if (message == WM_INITDIALOG) {
+        window = reinterpret_cast<Window*>(lParam); window->hwnd = hwnd;
+        SetWindowLongPtrW(hwnd, DWLP_USER, reinterpret_cast<LONG_PTR>(window));
+        SendDlgItemMessageW(hwnd, IDC_DETAILS, EM_SETLIMITTEXT, 1024 * 1024, 0);
+    }
+    if (!window) return FALSE;
+    try {
+        switch (message) {
+            case WM_INITDIALOG:
+                {
+                    const auto instance = reinterpret_cast<HINSTANCE>(GetWindowLongPtrW(hwnd, GWLP_HINSTANCE));
+                    const auto largeIcon = LoadIconW(instance, MAKEINTRESOURCEW(IDI_UNLOCK_APP));
+                    const auto smallIcon = static_cast<HICON>(LoadImageW(instance, MAKEINTRESOURCEW(IDI_UNLOCK_APP),
+                        IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_SHARED));
+                    if (!largeIcon || !smallIcon) throw ComponentError(L"Cannot load the application icon.");
+                    SendMessageW(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(largeIcon));
+                    SendMessageW(hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(smallIcon));
+                }
+                if (window->resultMode) { SetTimer(hwnd, 1, 500, nullptr); window->pollResult(); }
+                else window->home();
+                return FALSE;
+            case WM_CTLCOLORSTATIC:
+                if (reinterpret_cast<HWND>(lParam) == GetDlgItem(hwnd, IDC_DETAILS)) {
+                    HDC dc = reinterpret_cast<HDC>(wParam);
+                    SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT));
+                    SetBkColor(dc, GetSysColor(COLOR_WINDOW));
+                    return reinterpret_cast<INT_PTR>(GetSysColorBrush(COLOR_WINDOW));
+                }
+                return FALSE;
+            case WM_COMMAND: window->command(LOWORD(wParam)); return TRUE;
+            case WM_TIMER: window->pollResult(); return TRUE;
+            case progressMessage: {
+                std::unique_ptr<Progress> value(reinterpret_cast<Progress*>(lParam));
+                window->append(*value); return TRUE;
+            }
+            case completeMessage: {
+                std::unique_ptr<OperationResult> value(reinterpret_cast<OperationResult*>(lParam));
+                window->complete(*value); return TRUE;
+            }
+            case WM_CLOSE:
+                if (!window->busy) {
+                    if (window->resultMode && (window->page == Page::result || window->page == Page::failure))
+                        window->adapter.acknowledgeCompletion(window->resultId);
+                    DestroyWindow(hwnd);
+                }
+                return TRUE;
+            case WM_DPICHANGED: return FALSE;
+            case WM_DESTROY: PostQuitMessage(0); return TRUE;
+        }
+    } catch (const std::exception& error) {
+        window->busy = false;
+        window->setPage(Page::failure, L"Unable to continue", errorText(error));
+        window->buttons(nullptr, nullptr, L"Close");
+    }
+    return FALSE;
+}
+}
+int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
+    DWORD processSession = 0;
+    const bool sessionZero = !ProcessIdToSessionId(GetCurrentProcessId(), &processSession) || processSession == 0;
+    bool headless = sessionZero;
+    try {
+        int count = 0; LPWSTR* args = CommandLineToArgvW(GetCommandLineW(), &count);
+        if (!args) throw ComponentError(L"Cannot read command line.");
+        std::wstring mode = count > 1 ? args[1] : L"";
+        std::wstring transaction = count > 2 ? args[2] : L"";
+        LocalFree(args);
+        headless = sessionZero || mode == L"--resume-operation";
+        Window window(modulePath());
+        if (mode == L"--resume-operation") return transaction.empty() ? ERROR_INVALID_PARAMETER : resume(window.adapter, transaction);
+        if (sessionZero) return ERROR_INVALID_PARAMETER;
+        window.resultMode = mode == L"--show-result"; window.resultId = transaction;
+        if ((!mode.empty() && !window.resultMode) || (window.resultMode && transaction.empty()))
+            throw ComponentError(L"Unsupported installer command line.");
+        if (!window.resultMode && !window.adapter.environment().elevated) {
+            SHELLEXECUTEINFOW request{sizeof(request)};
+            request.lpVerb = L"runas"; request.lpFile = window.adapter.wizardPath().c_str(); request.nShow = SW_SHOWNORMAL;
+            if (!ShellExecuteExW(&request)) {
+                DWORD error = GetLastError();
+                if (error == ERROR_CANCELLED) return 0;
+                throw ComponentError(L"Elevation failed (Win32=" + std::to_wstring(error) + L").");
+            }
+            return 0;
+        }
+        std::unique_ptr<OperationLock> lock;
+        if (!window.resultMode) lock = std::make_unique<OperationLock>();
+        INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_PROGRESS_CLASS}; InitCommonControlsEx(&controls);
+        HWND hwnd = CreateDialogParamW(instance, MAKEINTRESOURCEW(IDD_WIZARD_PAGE), nullptr,
+            procedure, reinterpret_cast<LPARAM>(&window));
+        if (!hwnd) throw ComponentError(L"Could not create installer window (Win32=" + std::to_wstring(GetLastError()) + L").");
+        ShowWindow(hwnd, show); MSG message{};
+        while (GetMessageW(&message, nullptr, 0, 0) > 0)
+            if (!IsDialogMessageW(hwnd, &message)) { TranslateMessage(&message); DispatchMessageW(&message); }
+        return 0;
+    } catch (const std::exception& error) {
+        if (!headless) MessageBoxW(nullptr, errorText(error).c_str(), L"Unlock Windows with iPhone", MB_OK | MB_ICONERROR);
+        else OutputDebugStringW(errorText(error).c_str());
+        return ERROR_INSTALL_FAILURE;
+    }
 }

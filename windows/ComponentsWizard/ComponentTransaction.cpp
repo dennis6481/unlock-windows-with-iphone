@@ -2,455 +2,195 @@
 
 #define UNICODE
 #define _UNICODE
-
 #include "ComponentTransaction.h"
-
 #include <Windows.h>
 
-#include <sstream>
-#include <utility>
-
 namespace unlock::components {
-namespace {
-
-std::wstring timestamp() {
-    FILETIME fileTime{};
-    GetSystemTimeAsFileTime(&fileTime);
-    ULARGE_INTEGER value{};
-    value.LowPart = fileTime.dwLowDateTime;
-    value.HighPart = fileTime.dwHighDateTime;
-    return std::to_wstring(value.QuadPart);
-}
-
-std::wstring processTransactionId() {
-    return std::to_wstring(GetTickCount64()) + L"-" + std::to_wstring(GetCurrentProcessId());
-}
-
-std::wstring combineFailure(const std::wstring& primary, const std::vector<std::wstring>& cleanupErrors) {
-    if (cleanupErrors.empty()) {
-        return primary;
-    }
-    std::wstring result = primary + L"\r\n\r\nRollback also reported:";
-    for (const auto& error : cleanupErrors) {
-        result += L"\r\n- " + error;
-    }
-    return result;
-}
-
-} // namespace
-
 ComponentTransaction::ComponentTransaction(WindowsAdapter& adapter) : adapter_(adapter) {}
-
-WizardState ComponentTransaction::newState(const WizardPhase phase) const {
+WizardState ComponentTransaction::newState(WizardPhase phase) const {
     WizardState state;
-    state.schemaVersion = 3;
     state.phase = phase;
-    state.transactionId = processTransactionId();
+    state.transactionId = std::to_wstring(GetTickCount64()) + L"-" + std::to_wstring(GetCurrentProcessId());
     state.wizardPath = adapter_.wizardPath().wstring();
-    state.createdAtUtc = timestamp();
+    FILETIME time{}; GetSystemTimeAsFileTime(&time);
+    ULARGE_INTEGER value{}; value.LowPart = time.dwLowDateTime; value.HighPart = time.dwHighDateTime;
+    state.createdAtUtc = std::to_wstring(value.QuadPart);
+    state.targetSid = adapter_.consoleUserSid();
     return state;
 }
-
-OperationResult ComponentTransaction::failure(const std::wstring& message, const bool statePreserved) const {
-    return OperationResult{false, false, statePreserved, message};
+OperationResult ComponentTransaction::failure(const std::wstring& message, bool preserved) const {
+    return {false, false, preserved, message};
 }
-
-void ComponentTransaction::report(
-    const ProgressCallback& progress,
-    const int percent,
-    const std::wstring& message
-) const {
-    if (progress) {
-        progress(percent, message);
-    }
+void ComponentTransaction::report(const ProgressCallback& progress, int percent, const std::wstring& message) const {
+    if (progress) progress(percent, message);
 }
-
 std::wstring ComponentTransaction::errorText(const std::exception& error) const {
-    if (const auto* componentError = dynamic_cast<const ComponentError*>(&error)) {
-        return componentError->wideWhat();
-    }
-    const auto* text = error.what();
-    std::wstring result;
-    while (*text != '\0') {
-        result.push_back(static_cast<unsigned char>(*text));
-        ++text;
-    }
-    return result.empty() ? L"Unknown component operation error." : result;
+    if (auto* component = dynamic_cast<const ComponentError*>(&error)) return component->wideWhat();
+    std::string narrow(error.what()); return std::wstring(narrow.begin(), narrow.end());
 }
-
 OperationResult ComponentTransaction::install(const ProgressCallback& progress) {
-    WizardState state;
-    bool stateWritten = false;
-    bool serviceStarted = false;
+    adapter_.setOperationLog([progress](const std::wstring& text) { if (progress) progress(-1, text); });
+    WizardState state; bool written = false;
     try {
         adapter_.assertSupportedAdministratorEnvironment();
         const auto before = adapter_.inspect();
-        if (before.statePresent || before.hasAnyArtifacts()) {
-            return failure(
-                L"Installation cannot start because the machine already has component state or known artifacts. "
-                L"Use the recovery or uninstall action shown by the wizard first.",
-                before.statePresent
-            );
-        }
+        if (!before.observationValid || before.statePresent || before.hasAnyArtifacts())
+            return failure(L"Installation requires empty, readable component state.", before.statePresent);
         state = newState(WizardPhase::installing);
-        stateWritten = true;
-        adapter_.writeState(state);
-
-        report(progress, 25, L"Installing saved credential service and Credential Provider...");
-        adapter_.copyNativeBinary(adapter_.savedCredentialServiceSource(), adapter_.savedCredentialServiceTarget());
-        adapter_.copyNativeBinary(adapter_.credentialProviderSource(), adapter_.credentialProviderTarget());
-
-        report(progress, 60, L"Starting the saved credential service...");
-        adapter_.createSavedCredentialService();
-        serviceStarted = true;
-
-        report(progress, 80, L"Finishing the installation...");
-        adapter_.createCredentialProviderRegistration(adapter_.credentialProviderTarget());
-
-        report(progress, 95, L"Checking the installation...");
-        const auto after = adapter_.inspect();
-        if (!after.observationValid || !after.isCompleteInstallation()) {
-            throw ComponentError(L"The installation verification did not find all expected components.");
-        }
-
-        state.phase = WizardPhase::installed;
-        state.lastError.clear();
-        adapter_.writeState(state);
-        report(progress, 100, L"Installation complete.");
-        return OperationResult{true, true, true, L"The components were installed successfully."};
-    } catch (const std::exception& error) {
-        const auto primaryError = errorText(error);
-        if (!stateWritten) {
-            return failure(primaryError, false);
-        }
-
-        std::vector<std::wstring> rollbackErrors;
-        if (!serviceStarted) {
-            state.credentialCleanupConfirmed = true;
-        } else {
-            try {
-                adapter_.clearSavedCredential();
-                state.credentialCleanupConfirmed = true;
-            } catch (const std::exception& rollbackError) {
-                rollbackErrors.push_back(errorText(rollbackError));
-            }
-        }
-        try {
-            adapter_.removeCredentialProviderRegistration();
-        } catch (const std::exception& rollbackError) {
-            rollbackErrors.push_back(errorText(rollbackError));
-        }
-        if (state.credentialCleanupConfirmed) {
-            try {
-                adapter_.removeSavedCredentialService();
-                adapter_.deleteBinaryIfPresent(adapter_.savedCredentialServiceTarget());
-                adapter_.deleteBinaryIfPresent(adapter_.credentialProviderTarget());
-            } catch (const std::exception& rollbackError) {
-                rollbackErrors.push_back(errorText(rollbackError));
-            }
-        }
-
-        if (rollbackErrors.empty()) {
-            try {
-                adapter_.clearState();
-                return failure(primaryError, false);
-            } catch (const std::exception& rollbackError) {
-                rollbackErrors.push_back(errorText(rollbackError));
-            }
-        }
-
-        state.phase = WizardPhase::recoveryRequired;
-        state.lastError = combineFailure(primaryError, rollbackErrors);
-        try {
-            adapter_.writeState(state);
-        } catch (const std::exception& stateError) {
-            rollbackErrors.push_back(errorText(stateError));
-        }
-        return failure(combineFailure(primaryError, rollbackErrors), true);
-    }
-}
-
-OperationResult ComponentTransaction::beginUpdate(const ProgressCallback& progress) {
-    WizardState state;
-    bool stateWritten = false;
-    try {
-        adapter_.assertSupportedAdministratorEnvironment();
-        const auto before = adapter_.inspect();
-        if (!before.observationValid || !before.stateValid || before.statePhase != WizardPhase::installed ||
-            !before.isCompleteInstallation() || before.continuationTaskPresent) {
-            return failure(L"Update requires a complete, verified installation with no pending operation.", before.statePresent);
-        }
-        state = newState(WizardPhase::updatePendingReboot);
-        report(progress, 15, L"Staging new binaries; preserving saved credentials and phone enrollment...");
+        report(progress, 10, L"Stage complete installation in a protected System32 directory.");
         adapter_.stageUpdate(state);
-        adapter_.markUpdateRequiresReboot();
-        stateWritten = true;
-        adapter_.writeState(state);
-        report(progress, 50, L"Preparing continuation after restart...");
+        adapter_.writeState(state); written = true;
+        report(progress, 35, L"Copy and byte-verify complete staged payload in System32.");
+        adapter_.applyStagedUpdate(state);
+        report(progress, 60, L"Register automatic LocalSystem service and Credential Provider.");
+        adapter_.createSavedCredentialService();
+        adapter_.createCredentialProviderRegistration(adapter_.credentialProviderTarget());
+        state.phase = WizardPhase::installPendingReboot;
+        adapter_.markUpdateRequiresReboot(); adapter_.writeState(state);
+        adapter_.writeCompletion({state.transactionId, state.targetSid, L"Waiting for restart.", L"", false, false});
+        report(progress, 80, L"Register SYSTEM boot continuation and target-user completion notification.");
         adapter_.registerContinuationTask(state);
-        adapter_.removeCredentialProviderRegistration();
-        adapter_.configureSavedCredentialServiceForUpdate(true);
-        report(progress, 100, L"Update staged. Restart Windows and sign in with native PIN or password.");
-        return {true, true, true, L"Update staged. Saved credentials and phone enrollment were not cleared."};
+        report(progress, 100, L"Installation prepared. Restart to verify and enable login startup.");
+        return {true, true, true, L"Restart to finish installation. Use native PIN or password for the first sign-in."};
     } catch (const std::exception& error) {
-        const auto message = errorText(error);
-        if (stateWritten) {
+        std::wstring message = errorText(error);
+        if (written) {
             state.lastError = message;
-            try { adapter_.writeState(state); }
-            catch (const std::exception& stateError) {
-                return failure(message + L"\r\nCould not preserve update state: " + errorText(stateError), true);
-            }
+            try { adapter_.writeState(state); } catch (const std::exception& more) { message += L"\r\nState write failed: " + errorText(more); }
         }
-        return failure(message, stateWritten);
+        return failure(message, written);
     }
 }
-
-OperationResult ComponentTransaction::completeUpdate(const ProgressCallback& progress) {
-    WizardState state;
-    bool stateLoaded = false;
+OperationResult ComponentTransaction::completeInstall(const ProgressCallback& progress) {
+    adapter_.setOperationLog([progress](const std::wstring& text) { if (progress) progress(-1, text); });
+    auto state = adapter_.readState();
+    if (!state || state->phase != WizardPhase::installPendingReboot) return failure(L"No installation is pending.", state.has_value());
     try {
         adapter_.assertSupportedAdministratorEnvironment();
-        const auto current = adapter_.readState();
-        if (!current || (current->phase != WizardPhase::updatePendingReboot && current->phase != WizardPhase::updating)) {
-            return failure(L"No component update is pending.", current.has_value());
+        if (adapter_.updateRebootRequired()) return {true, true, true, L"Restart is still required."};
+        report(progress, 60, L"Register target-user Run startup and Start menu shortcuts.");
+        adapter_.installDesktopIntegration(*state);
+        if (!adapter_.inspect().isFullInstallation()) throw ComponentError(L"Full installation verification failed.");
+        state->phase = WizardPhase::installed; state->lastError.clear();
+        adapter_.writeState(*state);
+        return {true, false, true, L"Installation verified. Phone unlock applies to an existing locked session, not first sign-in."};
+    } catch (const std::exception& error) {
+        state->lastError = errorText(error); adapter_.writeState(*state); return failure(state->lastError, true);
+    }
+}
+OperationResult ComponentTransaction::beginUpdate(const ProgressCallback& progress) {
+    adapter_.setOperationLog([progress](const std::wstring& text) { if (progress) progress(-1, text); });
+    WizardState state; bool written = false;
+    try {
+        adapter_.assertSupportedAdministratorEnvironment();
+        const auto before = adapter_.inspect(); const auto old = adapter_.readState();
+        if (!old || !before.observationValid || !before.stateValid || old->phase != WizardPhase::installed ||
+            !before.isCompleteInstallation() || before.continuationTaskPresent)
+            return failure(L"Update requires a verified installation without a pending transaction.", old.has_value());
+        state = newState(WizardPhase::updatePendingReboot);
+        if (!old->targetSid.empty()) state.targetSid = old->targetSid;
+        report(progress, 10, L"Stage all new files; saved credentials and enrollment remain untouched.");
+        adapter_.stageUpdate(state); adapter_.markUpdateRequiresReboot(); adapter_.writeState(state); written = true;
+        adapter_.writeCompletion({state.transactionId, state.targetSid, L"Waiting for restart.", L"", false, false});
+        adapter_.registerContinuationTask(state);
+        report(progress, 50, L"Remove Run startup; request verified Bluetooth tray to exit normally (30 second timeout).");
+        adapter_.stopTray(state);
+        report(progress, 75, L"Unregister Credential Provider; stop and disable credential service.");
+        adapter_.removeCredentialProviderRegistration(); adapter_.configureSavedCredentialServiceForUpdate(true);
+        report(progress, 100, L"Update prepared. Restart before replacing installed files.");
+        return {true, true, true, L"Restart to complete the update. Saved credentials, enrollment and startup account are preserved."};
+    } catch (const std::exception& error) {
+        std::wstring message = errorText(error);
+        if (written) {
+            state.lastError = message;
+            try { adapter_.writeState(state); } catch (const std::exception& more) { message += L"\r\nState write failed: " + errorText(more); }
         }
-        state = *current;
-        stateLoaded = true;
-        const auto before = adapter_.inspect();
-        if (!before.observationValid || !before.stateValid) {
-            throw ComponentError(L"Could not verify component transaction before update continuation.");
-        }
-        if (adapter_.updateRebootRequired() || before.credentialProviderRegistered || before.credentialProviderClsidRegistered) {
-            adapter_.markUpdateRequiresReboot();
-            adapter_.registerContinuationTask(state);
-            adapter_.removeCredentialProviderRegistration();
-            adapter_.configureSavedCredentialServiceForUpdate(true);
-            return {true, true, true, L"Windows has not restarted yet. Restart before replacing the installed binaries."};
-        }
-        state.phase = WizardPhase::updating;
-        state.lastError.clear();
-        adapter_.writeState(state);
-        report(progress, 25, L"Replacing components from the protected update staging directory...");
-        adapter_.removeCredentialProviderRegistration();
-        adapter_.configureSavedCredentialServiceForUpdate(true);
-        adapter_.applyStagedUpdate(state);
-        report(progress, 70, L"Starting updated components...");
+        return failure(message, written);
+    }
+}
+OperationResult ComponentTransaction::completeUpdate(const ProgressCallback& progress) {
+    adapter_.setOperationLog([progress](const std::wstring& text) { if (progress) progress(-1, text); });
+    auto state = adapter_.readState();
+    if (!state || (state->phase != WizardPhase::updatePendingReboot && state->phase != WizardPhase::updating))
+        return failure(L"No update is pending.", state.has_value());
+    try {
+        adapter_.assertSupportedAdministratorEnvironment();
+        if (adapter_.updateRebootRequired()) return {true, true, true, L"Restart is still required."};
+        state->phase = WizardPhase::updating; adapter_.writeState(*state);
+        report(progress, 15, L"Remove Run startup and wait for normal tray exit.");
+        adapter_.stopTray(*state);
+        adapter_.removeCredentialProviderRegistration(); adapter_.configureSavedCredentialServiceForUpdate(true);
+        report(progress, 40, L"Replace and byte-verify all six staged files in System32.");
+        adapter_.applyStagedUpdate(*state);
         adapter_.markUpdateRequiresReboot();
+        report(progress, 70, L"Restore automatic service, Credential Provider, Run startup and shortcuts.");
         adapter_.configureSavedCredentialServiceForUpdate(false);
         adapter_.createCredentialProviderRegistration(adapter_.credentialProviderTarget());
-        const auto after = adapter_.inspect();
-        if (!after.observationValid || !after.isCompleteInstallation()) {
-            throw ComponentError(L"Updated installation verification failed.");
-        }
-        adapter_.removeContinuationTask();
-        auto installedState = state;
-        installedState.phase = WizardPhase::installed;
-        adapter_.writeState(installedState);
-        state = std::move(installedState);
-        report(progress, 100, L"Component update complete.");
-        return {true, false, true,
-            L"Updated component files verified and service running. Saved credentials and phone enrollment were preserved. Lock Windows and verify phone unlock again."};
+        adapter_.installDesktopIntegration(*state);
+        if (!adapter_.inspect().isFullInstallation()) throw ComponentError(L"Full updated installation verification failed.");
+        state->phase = WizardPhase::installed; state->lastError.clear();
+        adapter_.writeState(*state);
+        return {true, false, true, L"Update verified. Credentials and enrollment preserved. Phone unlock still needs functional regression testing."};
     } catch (const std::exception& error) {
-        const auto message = errorText(error);
-        if (stateLoaded) {
-            state.lastError = message;
-            try { adapter_.writeState(state); }
-            catch (const std::exception& stateError) {
-                return failure(message + L"\r\nCould not preserve update state: " + errorText(stateError), true);
-            }
-        }
-        return failure(message, stateLoaded);
+        state->lastError = errorText(error); adapter_.writeState(*state); return failure(state->lastError, true);
     }
 }
-
 OperationResult ComponentTransaction::beginUninstall(const ProgressCallback& progress) {
-    WizardState state;
-    bool stateWritten = false;
+    adapter_.setOperationLog([progress](const std::wstring& text) { if (progress) progress(-1, text); });
+    WizardState state; bool written = false;
     try {
         adapter_.assertSupportedAdministratorEnvironment();
-        const auto currentState = adapter_.readState();
-        if (!currentState || currentState->phase != WizardPhase::installed) {
-            return failure(L"There is no complete installation transaction to uninstall.", currentState.has_value());
-        }
-        state = *currentState;
-        report(progress, 10, L"Confirming saved credential deletion...");
-        adapter_.clearSavedCredential();
-        state.credentialCleanupConfirmed = true;
-        state.phase = WizardPhase::uninstallPendingReboot;
-        state.lastError.clear();
-        stateWritten = true;
-        adapter_.writeState(state);
-
-        report(progress, 20, L"Disabling the components...");
-        adapter_.removeCredentialProviderRegistration();
-        adapter_.removeSavedCredentialService();
-
-        report(progress, 75, L"Checking the changes...");
-        const auto afterRegistration = adapter_.inspect();
-        if (!afterRegistration.observationValid ||
-            afterRegistration.credentialProviderRegistered ||
-            afterRegistration.credentialProviderClsidRegistered ||
-            afterRegistration.savedCredentialServiceRegistered) {
-            throw ComponentError(L"The component registrations could not be fully removed.");
-        }
-
-        report(progress, 90, L"Preparing completion after restart...");
+        const auto old = adapter_.readState();
+        if (!old || old->phase != WizardPhase::installed) return failure(L"No installed transaction is available for removal.", old.has_value());
+        state = newState(WizardPhase::uninstallPendingReboot);
+        if (!old->targetSid.empty()) state.targetSid = old->targetSid;
+        report(progress, 10, L"Stage protected maintenance installer for reboot continuation.");
+        adapter_.stageContinuation(state);
+        report(progress, 20, L"Ask running service to confirm saved credential deletion.");
+        adapter_.clearSavedCredential(); state.credentialCleanupConfirmed = true;
+        report(progress, 25, L"Service confirmed saved credential deletion; phone public-key registration is retained.");
+        adapter_.markUpdateRequiresReboot(); adapter_.writeState(state); written = true;
+        adapter_.writeCompletion({state.transactionId, state.targetSid, L"Waiting for restart.", L"", false, false});
         adapter_.registerContinuationTask(state);
-        report(progress, 100, L"Removal is ready for restart.");
-        return OperationResult{
-            true,
-            true,
-            true,
-            L"The components have been disabled. Windows needs to restart to complete removal.",
-        };
+        report(progress, 40, L"Remove Run startup; wait for tray and pairing cancellation to exit.");
+        adapter_.stopTray(state);
+        report(progress, 65, L"Remove desktop startup and shortcuts; disable unlock components.");
+        adapter_.removeDesktopIntegration(); adapter_.removeCredentialProviderRegistration(); adapter_.removeSavedCredentialService();
+        report(progress, 100, L"Removal prepared. Restart to remove remaining files.");
+        return {true, true, true, L"Saved credential deletion confirmed. Restart to finish removal. Phone enrollment is retained."};
     } catch (const std::exception& error) {
-        const auto message = errorText(error);
-        if (!stateWritten) {
-            return failure(message, false);
+        std::wstring message = errorText(error);
+        if (written) {
+            state.lastError = message;
+            try { adapter_.writeState(state); } catch (const std::exception& more) { message += L"\r\nState write failed: " + errorText(more); }
         }
-        state.phase = WizardPhase::recoveryRequired;
-        state.lastError = message;
-        try {
-            adapter_.writeState(state);
-        } catch (const std::exception& stateError) {
-            return failure(message + L"\r\nCould not preserve recovery state: " + errorText(stateError), true);
-        }
-        return failure(message, true);
+        return failure(message, written);
     }
 }
-
 OperationResult ComponentTransaction::completeUninstall(const ProgressCallback& progress) {
-    WizardState state;
-    bool stateWritten = false;
+    adapter_.setOperationLog([progress](const std::wstring& text) { if (progress) progress(-1, text); });
+    auto state = adapter_.readState();
+    if (!state || (state->phase != WizardPhase::uninstallPendingReboot && state->phase != WizardPhase::cleaningUp))
+        return failure(L"No uninstall is pending.", state.has_value());
     try {
         adapter_.assertSupportedAdministratorEnvironment();
-        const auto currentState = adapter_.readState();
-        if (!currentState ||
-            (currentState->phase != WizardPhase::uninstallPendingReboot && currentState->phase != WizardPhase::cleaningUp)) {
-            return failure(L"There is no pending uninstall cleanup to complete.", currentState.has_value());
-        }
-        state = *currentState;
-        state.phase = WizardPhase::cleaningUp;
-        if (!state.credentialCleanupConfirmed) {
-            return failure(L"Saved credential deletion was not confirmed; normal uninstall cannot report complete.", true);
-        }
-        state.lastError.clear();
-        stateWritten = true;
-        adapter_.writeState(state);
-
-        report(progress, 30, L"Removing the remaining component files...");
+        if (adapter_.updateRebootRequired()) return {true, true, true, L"Restart is still required."};
+        if (!state->credentialCleanupConfirmed) throw ComponentError(L"Saved credential cleanup is not confirmed. Removal paused.");
+        state->phase = WizardPhase::cleaningUp; adapter_.writeState(*state);
+        adapter_.stopTray(*state); adapter_.removeDesktopIntegration();
+        adapter_.removeCredentialProviderRegistration(); adapter_.removeSavedCredentialService();
+        report(progress, 50, L"Delete Bluetooth tray, pairing helper, manager and installed maintenance executable.");
+        adapter_.removeTools();
+        report(progress, 70, L"Delete: " + adapter_.credentialProviderTarget().wstring());
         adapter_.deleteBinaryIfPresent(adapter_.credentialProviderTarget());
+        report(progress, 80, L"Delete: " + adapter_.savedCredentialServiceTarget().wstring());
         adapter_.deleteBinaryIfPresent(adapter_.savedCredentialServiceTarget());
-        report(progress, 80, L"Checking the removal...");
-        const auto after = adapter_.inspect();
-        if (!after.observationValid ||
-            after.credentialProviderDllPresent ||
-            after.savedCredentialServiceExePresent ||
-            after.savedCredentialServiceRegistered ||
-            after.credentialProviderRegistered ||
-            after.credentialProviderClsidRegistered) {
-            throw ComponentError(L"Uninstall verification found remaining component files or registrations.");
-        }
-
-        report(progress, 90, L"Finishing...");
-        adapter_.removeContinuationTask();
-        const auto afterTask = adapter_.inspect();
-        if (!afterTask.observationValid || afterTask.continuationTaskPresent) {
-            throw ComponentError(L"The cleanup task could not be removed.");
-        }
-        adapter_.clearState();
-        report(progress, 100, L"Removal complete.");
-        return OperationResult{true, false, false,
-            L"Components removed; saved credential deletion confirmed."};
+        auto remaining = adapter_.inspect();
+        remaining.continuationTaskPresent = false;
+        if (!remaining.observationValid || remaining.hasAnyArtifacts()) throw ComponentError(L"Removal verification found remaining artifacts.");
+        return {true, false, false, L"Components removed and saved credential deletion confirmed. Phone enrollment retained."};
     } catch (const std::exception& error) {
-        const auto message = errorText(error);
-        if (stateWritten) {
-            state.phase = WizardPhase::cleaningUp;
-            state.lastError = message;
-            try {
-                adapter_.writeState(state);
-            } catch (const std::exception& stateError) {
-                return failure(message + L"\r\nCould not preserve cleanup state: " + errorText(stateError), true);
-            }
-        }
-        return failure(message, stateWritten);
+        state->lastError = errorText(error); adapter_.writeState(*state); return failure(state->lastError, true);
     }
 }
-
-OperationResult ComponentTransaction::recover(const ProgressCallback& progress) {
-    WizardState state;
-    bool stateWritten = false;
-    try {
-        adapter_.assertSupportedAdministratorEnvironment();
-        const auto currentState = adapter_.readState();
-        if (!currentState || currentState->phase == WizardPhase::none) {
-            return failure(L"No safe transaction record is available for recovery.", currentState.has_value());
-        }
-        if (currentState->phase == WizardPhase::uninstallPendingReboot || currentState->phase == WizardPhase::cleaningUp) {
-            return completeUninstall(progress);
-        }
-        if (currentState->phase == WizardPhase::updatePendingReboot || currentState->phase == WizardPhase::updating) {
-            return completeUpdate(progress);
-        }
-
-        state = *currentState;
-        state.phase = WizardPhase::recoveryRequired;
-        state.lastError.clear();
-        stateWritten = true;
-        adapter_.writeState(state);
-
-        report(progress, 10, L"Confirming saved credential deletion...");
-        const auto observed = adapter_.inspect();
-        if (!observed.observationValid) {
-            throw ComponentError(L"Could not inspect the saved credential service before recovery.");
-        }
-        if (observed.savedCredentialServiceRunning || !state.credentialCleanupConfirmed) {
-            adapter_.clearSavedCredential();
-        }
-        state.credentialCleanupConfirmed = true;
-        adapter_.writeState(state);
-        report(progress, 20, L"Removing the Credential Provider registration...");
-        adapter_.removeCredentialProviderRegistration();
-        adapter_.removeSavedCredentialService();
-        report(progress, 45, L"Removing incomplete components...");
-        report(progress, 70, L"Cleaning up the interrupted operation...");
-        adapter_.deleteBinaryIfPresent(adapter_.credentialProviderTarget());
-        adapter_.deleteBinaryIfPresent(adapter_.savedCredentialServiceTarget());
-        adapter_.removeContinuationTask();
-
-        const auto after = adapter_.inspect();
-        if (!after.observationValid || after.hasAnyArtifacts()) {
-            throw ComponentError(L"Recovery verification found remaining component artifacts.");
-        }
-        adapter_.clearState();
-        report(progress, 100, L"Repair complete.");
-        return OperationResult{true, false, false, L"The previous operation was repaired successfully."};
-    } catch (const std::exception& error) {
-        const auto message = errorText(error);
-        if (stateWritten) {
-            state.phase = WizardPhase::recoveryRequired;
-            state.lastError = message;
-            try {
-                adapter_.writeState(state);
-            } catch (const std::exception& stateError) {
-                return failure(message + L"\r\nCould not preserve recovery state: " + errorText(stateError), true);
-            }
-        }
-        return failure(message, stateWritten);
-    }
 }
-
-OperationResult ComponentTransaction::resetStaleState() {
-    try {
-        const auto snapshot = adapter_.inspect();
-        if (snapshot.hasAnyArtifacts()) {
-            return failure(L"The transaction state cannot be reset while known artifacts exist.", true);
-        }
-        adapter_.clearState();
-        return OperationResult{true, false, false, L"The previous operation information was removed."};
-    } catch (const std::exception& error) {
-        return failure(errorText(error), true);
-    }
-}
-
-} // namespace unlock::components

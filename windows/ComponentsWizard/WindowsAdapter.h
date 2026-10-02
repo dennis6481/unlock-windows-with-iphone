@@ -3,9 +3,11 @@
 #pragma once
 
 #include "ComponentState.h"
+#include "ComponentFiles.h"
 
 #include <exception>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 
@@ -42,13 +44,13 @@ public:
     explicit WindowsAdapter(std::filesystem::path wizardPath);
 
     [[nodiscard]] const std::filesystem::path& wizardPath() const noexcept;
-    [[nodiscard]] std::filesystem::path credentialProviderSource() const;
-    [[nodiscard]] std::filesystem::path savedCredentialServiceSource() const;
     [[nodiscard]] std::filesystem::path credentialProviderTarget() const;
     [[nodiscard]] std::filesystem::path savedCredentialServiceTarget() const;
 
     [[nodiscard]] EnvironmentStatus environment() const;
     void assertSupportedAdministratorEnvironment() const;
+    void setOperationLog(std::function<void(const std::wstring&)> listener);
+    void logOperation(const std::wstring& message) const;
 
     [[nodiscard]] ComponentSnapshot inspect() const;
     [[nodiscard]] std::optional<WizardState> readState() const;
@@ -59,6 +61,7 @@ public:
         bool replace = false) const;
     [[nodiscard]] std::filesystem::path updateDirectory(const WizardState& state) const;
     void stageUpdate(WizardState& state) const;
+    void stageContinuation(WizardState& state) const;
     void applyStagedUpdate(const WizardState& state) const;
     void configureSavedCredentialServiceForUpdate(bool suspend) const;
     [[nodiscard]] bool updateRebootRequired() const;
@@ -75,10 +78,28 @@ public:
     void registerContinuationTask(const WizardState& state) const;
     void removeContinuationTask() const;
 
+    [[nodiscard]] std::wstring consoleUserSid() const;
+    [[nodiscard]] bool isSystem() const;
+    void registerUserStartup(const WizardState& state) const;
+    void stopTray(const WizardState& state) const;
+    void removeDesktopIntegration() const;
+    void installDesktopIntegration(const WizardState& state) const;
+    void removeTools() const;
+    [[nodiscard]] bool userStartupPresent() const;
+    [[nodiscard]] bool toolsPresent() const;
+    [[nodiscard]] bool desktopArtifactsPresent() const;
+    [[nodiscard]] bool shortcutsPresent() const;
+    [[nodiscard]] bool trayRunning() const;
+    void writeCompletion(const CompletionRecord& result) const;
+    [[nodiscard]] std::optional<CompletionRecord> readCompletion() const;
+    void acknowledgeCompletion(const std::wstring& transactionId) const;
+    void startTrayForCompletedOperation(const std::wstring& transactionId) const;
+
     void restartWindows() const;
 
 private:
     std::filesystem::path wizardPath_;
+    std::function<void(const std::wstring&)> operationLog_;
 };
 
 } // namespace unlock::components

@@ -18,6 +18,7 @@ enum class WizardPhase : std::uint32_t {
     recoveryRequired = 5,
     updatePendingReboot = 6,
     updating = 7,
+    installPendingReboot = 8,
 };
 
 enum class WizardAction {
@@ -26,8 +27,6 @@ enum class WizardAction {
     completeUpdate,
     uninstall,
     cleanup,
-    recover,
-    resetStaleState,
     blocked,
 };
 
@@ -38,6 +37,7 @@ struct WizardState final {
     std::wstring wizardPath;
     std::wstring createdAtUtc;
     std::wstring lastError;
+    std::wstring targetSid;
     bool credentialCleanupConfirmed = false;
 };
 
@@ -57,6 +57,12 @@ struct ComponentSnapshot final {
     bool savedCredentialServiceRunning = false;
     bool continuationTaskPresent = false;
     bool updateRebootRequired = false;
+    bool userStartupPresent = false;
+    bool toolsPresent = false;
+    bool desktopArtifactsPresent = false;
+    bool shortcutsPresent = false;
+    bool trayRunning = false;
+    std::wstring targetSid;
 
     bool observationValid = true;
     std::wstring observationError;
@@ -64,6 +70,16 @@ struct ComponentSnapshot final {
     [[nodiscard]] bool hasKnownArtifacts() const noexcept;
     [[nodiscard]] bool hasAnyArtifacts() const noexcept;
     [[nodiscard]] bool isCompleteInstallation() const noexcept;
+    [[nodiscard]] bool isFullInstallation() const noexcept;
+};
+
+struct CompletionRecord final {
+    std::wstring transactionId;
+    std::wstring targetSid;
+    std::wstring message;
+    std::wstring log;
+    bool finished = false;
+    bool success = false;
 };
 
 struct RecoveryPlan final {

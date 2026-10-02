@@ -10,7 +10,7 @@ bool ComponentSnapshot::hasKnownArtifacts() const noexcept {
         credentialProviderClsidRegistered ||
         savedCredentialServiceExePresent ||
         savedCredentialServiceRegistered ||
-        continuationTaskPresent;
+        continuationTaskPresent || userStartupPresent || desktopArtifactsPresent;
 }
 
 bool ComponentSnapshot::hasAnyArtifacts() const noexcept {
@@ -25,6 +25,10 @@ bool ComponentSnapshot::isCompleteInstallation() const noexcept {
         savedCredentialServiceRegistered &&
         savedCredentialServiceMatchesInstallation &&
         savedCredentialServiceRunning;
+}
+
+bool ComponentSnapshot::isFullInstallation() const noexcept {
+    return observationValid && stateValid && isCompleteInstallation() && userStartupPresent && toolsPresent && shortcutsPresent && !targetSid.empty();
 }
 
 const wchar_t* wizardPhaseName(const WizardPhase phase) noexcept {
@@ -45,6 +49,8 @@ const wchar_t* wizardPhaseName(const WizardPhase phase) noexcept {
             return L"UpdatePendingReboot";
         case WizardPhase::updating:
             return L"Updating";
+        case WizardPhase::installPendingReboot:
+            return L"InstallPendingReboot";
         default:
             return L"Unknown";
     }
@@ -62,10 +68,6 @@ const wchar_t* wizardActionName(const WizardAction action) noexcept {
             return L"Uninstall";
         case WizardAction::cleanup:
             return L"Cleanup";
-        case WizardAction::recover:
-            return L"Recover";
-        case WizardAction::resetStaleState:
-            return L"ResetStaleState";
         case WizardAction::blocked:
             return L"Blocked";
         default:
@@ -74,122 +76,30 @@ const wchar_t* wizardActionName(const WizardAction action) noexcept {
 }
 
 RecoveryPlan determineRecoveryPlan(const ComponentSnapshot& snapshot) {
-    if (!snapshot.observationValid) {
-        return {
-            WizardAction::blocked,
-            L"Component status cannot be read",
-            snapshot.observationError.empty()
-                ? L"Windows did not return a complete component status. No changes will be made."
-                : snapshot.observationError,
-            false,
-        };
-    }
-
-    if (!snapshot.statePresent) {
-        if (!snapshot.hasAnyArtifacts()) {
-            return {
-                WizardAction::install,
-                L"Install components",
-                L"The components are not installed. You can install them now. Windows will need to restart before they can be used.",
-                true,
-            };
-        }
-        return {
-            WizardAction::blocked,
-            L"Unable to continue",
-            L"Windows contains files or settings from an earlier attempt. No changes were made automatically.",
-            false,
-        };
-    }
-
-    if (!snapshot.stateValid) {
-        return {
-            WizardAction::blocked,
-            L"Unable to continue",
-            snapshot.stateError.empty()
-                ? L"The saved recovery information cannot be read. No changes were made."
-                : snapshot.stateError,
-            false,
-        };
-    }
-
+    if (!snapshot.observationValid)
+        return {WizardAction::blocked, L"Cannot read component status", snapshot.observationError, false};
+    if (!snapshot.statePresent)
+        return snapshot.hasAnyArtifacts()
+            ? RecoveryPlan{WizardAction::blocked, L"Unregistered artifacts", L"No changes will be made automatically.", false}
+            : RecoveryPlan{WizardAction::install, L"Install", L"Install phone connectivity and lock-screen unlock.", true};
+    if (!snapshot.stateValid)
+        return {WizardAction::blocked, L"Invalid transaction", snapshot.stateError, false};
     switch (snapshot.statePhase) {
         case WizardPhase::installed:
-            if (snapshot.isCompleteInstallation() && !snapshot.continuationTaskPresent) {
-                return {
-                    WizardAction::update,
-                    L"Update or uninstall components",
-                    L"The components are installed. Update preserves saved credentials and phone enrollment. Uninstall clears the saved credential. Both require a Windows restart.",
-                    true,
-                };
-            }
-            if (!snapshot.hasAnyArtifacts()) {
-                return {
-                    WizardAction::resetStaleState,
-                    L"Repair previous operation",
-                    L"The previous operation left no components behind. The saved recovery information can be removed safely.",
-                    true,
-                };
-            }
-            return {
-                WizardAction::recover,
-                L"Repair installation",
-                L"The previous installation did not finish. The wizard can safely restore Windows before you try again.",
-                true,
-            };
-
-        case WizardPhase::installing:
-            if (!snapshot.hasAnyArtifacts()) {
-                return {
-                    WizardAction::resetStaleState,
-                    L"Repair previous operation",
-                    L"The previous operation left no components behind. The saved recovery information can be removed safely.",
-                    true,
-                };
-            }
-            return {
-                WizardAction::recover,
-                L"Repair installation",
-                L"The previous installation did not finish. The wizard can safely restore Windows before you try again.",
-                true,
-            };
-
+            if (snapshot.isCompleteInstallation() && !snapshot.continuationTaskPresent)
+                return {WizardAction::update, L"Installed", L"Update preserves credentials and phone registration.", true};
+            return {WizardAction::blocked, L"Installation needs attention", L"State preserved; no destructive recovery.", false};
+        case WizardPhase::installPendingReboot:
+            return {WizardAction::blocked, L"Restart required", L"Restart to verify installation.", false};
         case WizardPhase::updatePendingReboot:
         case WizardPhase::updating:
-            return {
-                WizardAction::completeUpdate,
-                L"Complete component update",
-                snapshot.updateRebootRequired
-                    ? L"Restart Windows before completing this update. Saved credentials and phone enrollment remain untouched."
-                    : L"Continue the staged update without clearing saved credentials or phone enrollment.",
-                true,
-            };
-
+            return {WizardAction::completeUpdate, L"Pending update",
+                snapshot.updateRebootRequired ? L"Restart before replacing files." : L"Continue the registered update.", true};
         case WizardPhase::uninstallPendingReboot:
         case WizardPhase::cleaningUp:
-            return {
-                WizardAction::cleanup,
-                L"Complete removal",
-                L"The components have been disabled. Continue to remove the remaining files.",
-                true,
-            };
-
-        case WizardPhase::recoveryRequired:
-            return {
-                WizardAction::recover,
-                L"Repair previous operation",
-                L"The previous operation did not finish. The wizard will keep the recovery information and try to restore Windows safely.",
-                true,
-            };
-
-        case WizardPhase::none:
+            return {WizardAction::cleanup, L"Pending removal", L"Continue only the registered removal.", true};
         default:
-            return {
-                WizardAction::blocked,
-                L"Unable to continue",
-                L"The transaction record has an unsupported phase. No changes will be made.",
-                false,
-            };
+            return {WizardAction::blocked, L"Interrupted operation", L"State preserved for diagnosis. No automatic cleanup.", false};
     }
 }
 

@@ -23,12 +23,11 @@ public:
     explicit ComponentTransaction(WindowsAdapter& adapter);
 
     [[nodiscard]] OperationResult install(const ProgressCallback& progress = {});
+    [[nodiscard]] OperationResult completeInstall(const ProgressCallback& progress = {});
     [[nodiscard]] OperationResult beginUpdate(const ProgressCallback& progress = {});
     [[nodiscard]] OperationResult completeUpdate(const ProgressCallback& progress = {});
     [[nodiscard]] OperationResult beginUninstall(const ProgressCallback& progress = {});
     [[nodiscard]] OperationResult completeUninstall(const ProgressCallback& progress = {});
-    [[nodiscard]] OperationResult recover(const ProgressCallback& progress = {});
-    [[nodiscard]] OperationResult resetStaleState();
 
 private:
     [[nodiscard]] WizardState newState(WizardPhase phase) const;

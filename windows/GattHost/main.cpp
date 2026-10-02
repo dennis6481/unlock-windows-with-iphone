@@ -239,19 +239,23 @@ public:
     GattServiceProviderAdvertisementStatus status() const { return serviceProvider_.AdvertisementStatus(); }
 
     void advertise(bool enabled) {
-        if (enabled == advertisingRequested_ && (enabled ||
-            (status() != GattServiceProviderAdvertisementStatus::Started &&
-             status() != GattServiceProviderAdvertisementStatus::StartedWithoutAllAdvertisementData))) return;
-        if (enabled) {
-            GattServiceProviderAdvertisingParameters parameters;
-            parameters.IsDiscoverable(true);
-            parameters.IsConnectable(true);
-            advertisingRequested_ = true;
-            serviceProvider_.StartAdvertising(parameters);
-        } else {
-            serviceProvider_.StopAdvertising();
+        if (!enabled) {
+            const auto current = status();
+            if (!stopRequested_ && (current == GattServiceProviderAdvertisementStatus::Started ||
+                current == GattServiceProviderAdvertisementStatus::StartedWithoutAllAdvertisementData)) {
+                serviceProvider_.StopAdvertising();
+                stopRequested_ = true;
+            }
+            advertisingRequested_ = false;
+            return;
         }
-        advertisingRequested_ = enabled;
+        if (advertisingRequested_) return;
+        GattServiceProviderAdvertisingParameters parameters;
+        parameters.IsDiscoverable(true);
+        parameters.IsConnectable(true);
+        advertisingRequested_ = true;
+        stopRequested_ = false;
+        serviceProvider_.StartAdvertising(parameters);
     }
 
     void retryAdvertising() { advertisingRequested_ = false; }
@@ -265,7 +269,7 @@ public:
             try { action(); } catch (...) { state_->record(L"Shutdown: " + exceptionText(), true); }
         };
         if (serviceProvider_) {
-            cleanup([this] { serviceProvider_.StopAdvertising(); });
+            cleanup([this] { advertise(false); });
             if (advertisementStatusToken_.value) cleanup([this] { serviceProvider_.AdvertisementStatusChanged(advertisementStatusToken_); });
         }
         if (requestCharacteristic_ && requestWriteToken_.value)
@@ -504,6 +508,7 @@ private:
     DWORD lastAuthenticationIpcError_ = NO_ERROR;
     bool initialized_ = false;
     bool advertisingRequested_ = false;
+    bool stopRequested_ = false;
     GattServiceProvider serviceProvider_{nullptr};
     GattLocalCharacteristic requestCharacteristic_{nullptr};
     GattLocalCharacteristic challengeCharacteristic_{nullptr};

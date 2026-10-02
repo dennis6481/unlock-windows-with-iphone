@@ -24,6 +24,8 @@
 
 手动点击 **Unlock** 提交箭头调用 `beginPhoneAuthentication`，返回不含凭据的等待状态，不同步等待蓝牙或领取密码。工作线程同时查询当前请求失败信息，经原有消息窗口在 COM 所在线程更新磁贴提示。请求 ID 防止旧失败说明覆盖新请求，通信失败或五秒无响应显示明确错误。有效手机批准仍触发现有一次自动提交；该分支不会再发起 challenge。仅枚举/选择磁贴不发起认证。
 
+2026-10-03 用户观察到等待提示一直停留，取消后才显示 `iPhone is not connected with both notifications subscribed.`。该说明由服务端记录，表示 GATT host 未找到唯一且同时订阅 challenge/result 通知的客户端，尚未进行手机 RSSI 判断。此前成功发起请求同时通过磁贴字段和 `GetSerialization` 的 optional status text 显示等待，但异步失败只更新磁贴字段。现成功发起时 optional status text 保持空，只用磁贴字段更新等待、失败及五秒超时，避免静态提交提示遮盖异步结果。此 UI 原因与现象吻合，修改仅静态检查，尚未实机验证；不改变有效批准后的自动提交分支。
+
 ## 自动提交（2026-10-02，实体机正常路径通过）
 
 Provider 在 `Advise` 和有效用户身份均就绪后启动工作线程，每 500 ms 通过现有受限管道申请 `takeAutoSubmitOffer`。该操作只返回批准 nonce 和有效期，不解密或领取密码，也不使用桌面 Manager 的 `status` 操作。

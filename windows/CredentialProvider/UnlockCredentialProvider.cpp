@@ -759,7 +759,7 @@ public:
                 authenticationDeadline_ = GetTickCount64() + 5000;
                 showAuthenticationStatus(L"Waiting for iPhone RSSI approval...");
                 *optionalStatusIcon = CPSI_NONE;
-                return copyString(L"Waiting for iPhone RSSI approval...", optionalStatusText);
+                return S_OK;
             } catch (const std::bad_alloc&) {
                 logAutoSubmitError(L"phone authentication allocation", E_OUTOFMEMORY);
                 return E_OUTOFMEMORY;

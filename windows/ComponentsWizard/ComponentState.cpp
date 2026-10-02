@@ -41,6 +41,10 @@ const wchar_t* wizardPhaseName(const WizardPhase phase) noexcept {
             return L"CleaningUp";
         case WizardPhase::recoveryRequired:
             return L"RecoveryRequired";
+        case WizardPhase::updatePendingReboot:
+            return L"UpdatePendingReboot";
+        case WizardPhase::updating:
+            return L"Updating";
         default:
             return L"Unknown";
     }
@@ -50,6 +54,10 @@ const wchar_t* wizardActionName(const WizardAction action) noexcept {
     switch (action) {
         case WizardAction::install:
             return L"Install";
+        case WizardAction::update:
+            return L"Update";
+        case WizardAction::completeUpdate:
+            return L"CompleteUpdate";
         case WizardAction::uninstall:
             return L"Uninstall";
         case WizardAction::cleanup:
@@ -109,9 +117,9 @@ RecoveryPlan determineRecoveryPlan(const ComponentSnapshot& snapshot) {
         case WizardPhase::installed:
             if (snapshot.isCompleteInstallation() && !snapshot.continuationTaskPresent) {
                 return {
-                    WizardAction::uninstall,
-                    L"Uninstall components",
-                    L"The components are installed. You can disable them now, then restart Windows to complete removal.",
+                    WizardAction::update,
+                    L"Update or uninstall components",
+                    L"The components are installed. Update preserves saved credentials and phone enrollment. Uninstall clears the saved credential. Both require a Windows restart.",
                     true,
                 };
             }
@@ -143,6 +151,17 @@ RecoveryPlan determineRecoveryPlan(const ComponentSnapshot& snapshot) {
                 WizardAction::recover,
                 L"Repair installation",
                 L"The previous installation did not finish. The wizard can safely restore Windows before you try again.",
+                true,
+            };
+
+        case WizardPhase::updatePendingReboot:
+        case WizardPhase::updating:
+            return {
+                WizardAction::completeUpdate,
+                L"Complete component update",
+                snapshot.updateRebootRequired
+                    ? L"Restart Windows before completing this update. Saved credentials and phone enrollment remain untouched."
+                    : L"Continue the staged update without clearing saved credentials or phone enrollment.",
                 true,
             };
 

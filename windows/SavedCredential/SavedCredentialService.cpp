@@ -256,6 +256,7 @@ struct Grant final {
     std::array<std::uint8_t, kNonceSize> nonce{};
     ULONGLONG consoleGeneration = 0;
     bool phone = false;
+    bool autoSubmitOffered = false;
 };
 
 struct PhoneChallenge final {
@@ -378,6 +379,20 @@ public:
                 reloadEnrollment();
                 grant_.reset();
                 phoneChallenge_.reset();
+            } else if (request.operation == Operation::takeAutoSubmitOffer) {
+                if (!client.logonUi || !console.locked) return response;
+                Identity identity;
+                if (!decodeIdentity(request.payload.value.data(), request.payload.value.size(), identity) ||
+                    identity.sid != console.sid) return response;
+                if (grant_ && grant_->phone && !grant_->autoSubmitOffered &&
+                    grant_->session == console.session && GetTickCount64() < grant_->expiresAt &&
+                    grant_->consoleGeneration == gConsoleGeneration.load() &&
+                    sameIdentity(identity, grant_->identity) && enrollmentMatches()) {
+                    grant_->autoSubmitOffered = true;
+                    if (!encodeAutoSubmitOffer({grant_->nonce, grant_->expiresAt}, response.payload)) {
+                        fail("automatic submission offer encoding failed");
+                    }
+                }
             } else if (request.operation == Operation::claimCredential) {
                 if (!client.logonUi || !console.locked || !grant_ ||
                     grant_->session != console.session || GetTickCount64() >= grant_->expiresAt ||
@@ -475,10 +490,7 @@ private:
             return;
         }
         std::array<std::uint8_t, kNonceSize> nonce{};
-        if (snapshot_ && snapshot_->session == console.session &&
-            sameIdentity(snapshot_->identity, *stored) && GetTickCount64() < snapshot_->expiresAt) {
-            nonce = snapshot_->nonce;
-        } else if (BCryptGenRandom(nullptr, nonce.data(), kNonceSize,
+        if (BCryptGenRandom(nullptr, nonce.data(), kNonceSize,
                 BCRYPT_USE_SYSTEM_PREFERRED_RNG) < 0) {
             fail("phone grant nonce RNG failed");
         }

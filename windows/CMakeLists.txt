@@ -224,7 +224,7 @@ target_include_directories(unlock_credential_provider
 
 target_compile_features(unlock_credential_provider PRIVATE cxx_std_20)
 target_compile_definitions(unlock_credential_provider PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_libraries(unlock_credential_provider PRIVATE unlock_saved_credential_ipc ole32 secur32 gdi32 credui wtsapi32 advapi32)
+target_link_libraries(unlock_credential_provider PRIVATE unlock_saved_credential_ipc ole32 secur32 gdi32 credui wtsapi32 advapi32 user32)
 if(MSVC)
     target_link_options(unlock_credential_provider PRIVATE
         /EXPORT:DllGetClassObject

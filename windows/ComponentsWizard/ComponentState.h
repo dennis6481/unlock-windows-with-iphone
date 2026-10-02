@@ -16,10 +16,14 @@ enum class WizardPhase : std::uint32_t {
     uninstallPendingReboot = 3,
     cleaningUp = 4,
     recoveryRequired = 5,
+    updatePendingReboot = 6,
+    updating = 7,
 };
 
 enum class WizardAction {
     install,
+    update,
+    completeUpdate,
     uninstall,
     cleanup,
     recover,
@@ -52,6 +56,7 @@ struct ComponentSnapshot final {
     bool savedCredentialServiceMatchesInstallation = false;
     bool savedCredentialServiceRunning = false;
     bool continuationTaskPresent = false;
+    bool updateRebootRequired = false;
 
     bool observationValid = true;
     std::wstring observationError;

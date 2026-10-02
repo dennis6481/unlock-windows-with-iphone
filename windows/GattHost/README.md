@@ -24,4 +24,6 @@ make run-gatt
 
 启动 host 后锁定 Windows，再从 iPhone 发起认证。出现 `unlock_approved` 后仍需在 120 秒内手动点击 Credential Provider 的 **Unlock** 按钮。
 
+2026-10-02 用户实体机确认手机批准后 CP 自动提交并解锁成功，无需点击 **Unlock**；无新批准保持锁定、重新批准再次自动解锁、原生 PIN/密码回归通过。手动按钮保留供定位通知失败。GATT 的前台运行方式和消息转送职责没有改变，`unlock_approved` 仍只表示服务已建立批准，不单独证明 Windows 已解锁。详细回归见 [Credential Provider](../CredentialProvider/README.md)。后台持续运行和断线重连是下一步待验证项。
+
 下一步是在锁屏、注销、重启、蓝牙断线和 package identity 条件下验证后台实现；验证成功后应替换并删除此前台启动路径，不长期维护两套 transport。

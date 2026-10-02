@@ -149,9 +149,10 @@ HBITMAP createWatermarkBitmap() {
 
 class WizardSession final {
 public:
-    WizardSession(const HINSTANCE instance, const bool resumeUninstall)
+    WizardSession(const HINSTANCE instance, const bool resumeUninstall, const bool resumeUpdate)
         : instance_(instance),
           resumeUninstall_(resumeUninstall),
+          resumeUpdate_(resumeUpdate),
           adapter_(currentModulePath()),
           transaction_(adapter_) {
         initialize();
@@ -222,6 +223,10 @@ private:
                     false,
                 };
             }
+            if (resumeUpdate_ && plan_.action != WizardAction::completeUpdate) {
+                plan_ = {WizardAction::blocked, L"No update is waiting",
+                    L"The --resume-update entry point requires a pending update transaction.", false};
+            }
         } catch (const std::exception& error) {
             plan_ = {
                 WizardAction::blocked,
@@ -239,12 +244,12 @@ private:
 
     void createPages() {
         pageSpecs_.clear();
-        if (!resumeUninstall_) {
+        if (!resumeUninstall_ && !resumeUpdate_) {
             pageSpecs_.push_back({PageKind::status, L"Component status"});
         }
 
-        if (resumeUninstall_ || plan_.action == WizardAction::cleanup) {
-            pageSpecs_.push_back({PageKind::progress, L"Completing uninstall"});
+        if (plan_.action == WizardAction::cleanup || plan_.action == WizardAction::completeUpdate) {
+            pageSpecs_.push_back({PageKind::progress, L"Completing component operation"});
         } else if (plan_.action != WizardAction::blocked) {
             pageSpecs_.push_back({PageKind::confirmation, L"Confirm operation"});
             pageSpecs_.push_back({PageKind::progress, L"Applying changes"});
@@ -331,6 +336,12 @@ private:
             finishOperation(page);
             return TRUE;
         }
+        if (message == WM_COMMAND && LOWORD(wordParam) == IDC_REMOVE_INSTEAD && HIWORD(wordParam) == BN_CLICKED) {
+            plan_.action = IsDlgButtonChecked(page, IDC_REMOVE_INSTEAD) == BST_CHECKED
+                ? WizardAction::uninstall : WizardAction::update;
+            showConfirmationPage(page);
+            return TRUE;
+        }
 
         if (message != WM_NOTIFY) {
             return FALSE;
@@ -366,6 +377,7 @@ private:
     }
 
     void updatePage(const HWND page, const PageKind kind) {
+        ShowWindow(GetDlgItem(page, IDC_REMOVE_INSTEAD), SW_HIDE);
         switch (kind) {
             case PageKind::status:
                 showStatusPage(page);
@@ -437,6 +449,10 @@ private:
         std::wstring instruction;
         std::wstring details = plan_.explanation + L"\r\n\r\n";
         switch (plan_.action) {
+            case WizardAction::update:
+                instruction = L"Confirm component update";
+                details += L"New binaries will be staged locally. The components will be paused until restart and continuation. Sign in with native PIN/password after restart; this wizard resumes for the administrator who started it. Saved passwords and phone enrollment are not cleared.";
+                break;
             case WizardAction::install:
                 instruction = L"Confirm installation";
                 details += L"The components will be installed now. Windows needs to restart before they can be used.";
@@ -454,6 +470,10 @@ private:
                 break;
         }
         setDetails(page, instruction, details);
+        if (plan_.action == WizardAction::update || plan_.action == WizardAction::uninstall) {
+            CheckDlgButton(page, IDC_REMOVE_INSTEAD, plan_.action == WizardAction::uninstall ? BST_CHECKED : BST_UNCHECKED);
+            ShowWindow(GetDlgItem(page, IDC_REMOVE_INSTEAD), SW_SHOW);
+        }
         setWizardButtons(page, PSWIZB_BACK | PSWIZB_NEXT, PSWIZB_BACK | PSWIZB_NEXT | PSWIZB_CANCEL);
         setButtonText(page, PSBTN_NEXT, nextButtonText());
         setButtonText(page, PSBTN_CANCEL, L"Cancel");
@@ -486,6 +506,12 @@ private:
         std::wstring details;
         if (result.success) {
             switch (plan_.action) {
+                case WizardAction::update:
+                case WizardAction::completeUpdate:
+                    instruction = result.rebootRequired ? L"Update ready for restart" : L"Update complete";
+                    details = result.message;
+                    if (result.rebootRequired) details += L" Select Restart, then sign in with native PIN/password.";
+                    break;
                 case WizardAction::install:
                     instruction = L"Installation complete";
                     details = L"The components were installed successfully. Windows needs to restart to apply the changes. Select Restart to restart now, or Finish to close the wizard.";
@@ -530,6 +556,10 @@ private:
         switch (plan_.action) {
             case WizardAction::install:
                 return L"Install";
+            case WizardAction::update:
+                return L"Update";
+            case WizardAction::completeUpdate:
+                return L"Complete update";
             case WizardAction::uninstall:
                 return L"Uninstall";
             case WizardAction::recover:
@@ -556,6 +586,12 @@ private:
                 };
                 try {
                     switch (plan_.action) {
+                        case WizardAction::update:
+                            result = transaction_.beginUpdate(callback);
+                            break;
+                        case WizardAction::completeUpdate:
+                            result = transaction_.completeUpdate(callback);
+                            break;
                         case WizardAction::install:
                             result = transaction_.install(callback);
                             break;
@@ -619,6 +655,7 @@ private:
 
     HINSTANCE instance_ = nullptr;
     bool resumeUninstall_ = false;
+    bool resumeUpdate_ = false;
     WindowsAdapter adapter_;
     ComponentTransaction transaction_;
     ComponentSnapshot snapshot_;
@@ -661,7 +698,8 @@ int APIENTRY wWinMain(
     int result = 1;
     try {
         const std::wstring arguments = commandLine == nullptr ? L"" : commandLine;
-        WizardSession session(instance, arguments.find(L"--resume-uninstall") != std::wstring::npos);
+        WizardSession session(instance, arguments.find(L"--resume-uninstall") != std::wstring::npos,
+            arguments.find(L"--resume-update") != std::wstring::npos);
         result = session.show();
     } catch (const std::exception& error) {
         MessageBoxW(nullptr, exceptionText(error).c_str(), kWindowTitle, MB_OK | MB_ICONERROR);

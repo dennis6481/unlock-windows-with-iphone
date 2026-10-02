@@ -4,19 +4,23 @@
 
 这个项目用 iPhone 的 Secure Enclave 私钥证明手机身份，并在 Windows 已有会话的锁屏界面消费一次性授权。
 
-当前已验证的 Windows 路径是：iPhone 签名通过后，LocalSystem 服务创建一个 120 秒、单次消费的授权；用户手动点击 Credential Provider 的 **Unlock** 按钮后，Provider 从服务领取本机加密保存的 Microsoft Account 密码，并交给 Windows 原生 Negotiate 包解锁已有控制台会话。第二次领取会被拒绝，原生 PIN/密码入口保持可用。
+当前已验证的 Windows 路径是：iPhone 签名通过后，LocalSystem 服务创建一个 120 秒、单次消费的授权；Credential Provider 自动提交，从服务领取本机加密保存的 Microsoft Account 密码，并交给 Windows 原生 Negotiate 包解锁已有控制台会话，无需点击 Windows 磁贴。手动 **Unlock** 按钮仍保留，原生 PIN/密码入口保持可用。
 
-这仍是测试实现，不是后台自动解锁产品。前台 GATT host 必须运行，Credential Provider 仍需手动提交，身份变化与部分拒绝路径尚未完成验收。
+这仍是前台原型，不是后台自动解锁产品。Windows 前台 GATT host 必须运行，iPhone App 保持前台；身份变化与部分拒绝路径尚未完成验收。重启后首次登录明确不支持手机登录：不显示自定义磁贴，使用原生登录方式；手机解锁只用于已有会话再次锁屏。
+
+2026-10-02 冻结记录（用户实体机实测反馈）：手机批准后的自动解锁通过；再次锁屏且不发起手机批准时保持锁定，重新手机批准后再次自动解锁，原生 PIN/密码仍可用。Components Wizard 的 Update 更新流程也已确认通过。冻结范围为“前台 iPhone 批准 → 自动解锁已有会话 + 安装器正常更新”，不代表完整负面测试或生产级更新恢复已通过。
 
 ## 当前边界
 
+2026-10-02 用户补充实测：重启后首次登录不显示自定义磁贴，使用原生密码进入 Windows。这符合预期，是保留的行为边界，不是缺失功能或待实现的首次登录路径。
+
 - BLE 只运输 challenge、assertion 和结果，不把“附近存在设备”当作认证。
 - iPhone 私钥不可导出；Windows 只保存登记后的 P-256 公钥和账户 SID。
-- Windows 密码由专用 LocalSystem 服务使用 DPAPI machine scope 保存；Credential Provider 只能在有效手机授权窗口内领取一次。
+- Windows 密码由专用 LocalSystem 服务使用自身 user scope 的 DPAPI 保存，不使用 `CRYPTPROTECT_LOCAL_MACHINE`；Credential Provider 只能在有效手机授权窗口内领取一次。
 - Credential Provider 不提供手输密码输入框，也没有绕过手机批准的测试开关。
 - 当前分支不包含自定义 LSA Authentication Package。此前的无密码 token 构造研究没有形成可用产品路径，相关探针和兼容层已经移除。
 - 公钥登记由提升权限运行的 `unlock_pairing_tool` 完成。GATT 不接受远程登记命令。
-- 安装、卸载和失败恢复只由原生 Components Wizard 管理；没有 PowerShell 安装兼容层，也没有跳过凭据清除确认的 emergency removal。
+- 安装、更新、卸载和失败恢复只由原生 Components Wizard 管理；Update 保留密码与公钥，重启后续办替换，正常更新流程已由用户确认通过，[步骤见 Windows 文档](windows/README.md#安装更新与卸载)。没有 PowerShell 安装兼容层，也没有跳过凭据清除确认的 emergency removal。
 
 ## Windows 组件
 
@@ -40,16 +44,16 @@ iPhone
 - `windows/CredentialProvider`：绑定当前控制台用户，只消费手机批准后的保存凭据。
 - `windows/PhoneApproval`：当前服务使用的签名验证核心与登记存储；不是独立 host。
 - `windows/PairingTool`：管理员确认公钥登记、刷新服务中的登记状态。
-- `windows/ComponentsWizard`：安装、卸载、重启后清理和事务恢复。
+- `windows/ComponentsWizard`：安装、更新、卸载、重启后续办和事务恢复。
 - `windows/Protocol`：跨平台签名载荷与 Windows CNG 验签。
 
-## 当前手动验证流程
+## 当前已验证流程
 
 1. 使用 Components Wizard 安装 `unlock_saved_credential_service` 和 Credential Provider。
 2. 在已解锁的物理控制台，以管理员身份运行 `unlock_saved_credential_manager`：点击 **Refresh**，然后设置或更新当前账户的实际 Microsoft Account 密码。
 3. 以管理员身份运行 `unlock_pairing_tool`，核对指纹并登记 iPhone 公钥。
 4. 启动前台 `unlock_gatt_host`，然后锁定 Windows。
-5. 在 iPhone 上发起认证。手机收到 `unlock_approved` 后，120 秒内选择 **Unlock with iPhone** 磁贴并点击 **Unlock**。
+5. 显示锁屏登录选项，在前台 iPhone App 上发起认证。手机收到 `unlock_approved` 后 Windows 自动解锁，不点击 **Unlock**；该按钮仍可用于手动回归与定位通知问题。
 6. 该授权在 Credential Provider 领取时立即消费；Windows 随后的密码校验失败也不会恢复授权。
 
 详细边界见 [Windows 总览](windows/README.md)、[GATT host](windows/GattHost/README.md)、[保存凭据服务](windows/SavedCredential/README.md) 和 [Credential Provider](windows/CredentialProvider/README.md)。
@@ -72,7 +76,7 @@ iOS 项目位于 `ios/ios.xcodeproj`。Secure Enclave 路径必须在实体 iPho
 ## 尚未完成
 
 - 将 Windows GATT transport 封装成经过锁屏和重启生命周期验证的后台组件。
-- 在保持单次授权语义的前提下自动选择或提交 Credential Provider。
+- 验证自动提交在 CP 重建、重复枚举、打包失败和服务中断等场景下的单次行为。
 - 为重复认证请求返回比通用 `not_ready` 更明确的“已有有效授权”状态。
 - 完成身份切换、错误签名、过期、重放、非 LogonUI 调用者和服务重启等负面路径验收。
 - 生产级安装、签名、更新和恢复策略。
@@ -86,6 +90,11 @@ iOS 项目位于 `ios/ios.xcodeproj`。Secure Enclave 路径必须在实体 iPho
 - [Microsoft: CredPackAuthenticationBuffer](https://learn.microsoft.com/en-us/windows/win32/api/wincred/nf-wincred-credpackauthenticationbuffera)
 - [Microsoft: CryptProtectData](https://learn.microsoft.com/en-us/windows/win32/api/dpapi/nf-dpapi-cryptprotectdata)
 - [Microsoft: Named Pipe Security and Access Rights](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights)
+- [Microsoft: CredentialsChanged](https://learn.microsoft.com/en-us/windows/win32/api/credentialprovider/nf-credentialprovider-icredentialproviderevents-credentialschanged)
+- [Microsoft: GetCredentialCount and automatic submission](https://learn.microsoft.com/en-us/windows/win32/api/credentialprovider/nf-credentialprovider-icredentialprovider-getcredentialcount)
+- [Microsoft: Message-only windows](https://learn.microsoft.com/en-us/windows/win32/winmsg/window-features#message-only-windows)
+- [Microsoft: RegCreateKeyExW / volatile reboot boundary](https://learn.microsoft.com/en-us/windows/win32/api/winreg/nf-winreg-regcreatekeyexw)
+- [Microsoft: ChangeServiceConfigW](https://learn.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-changeserviceconfigw)
 
 ## License
 

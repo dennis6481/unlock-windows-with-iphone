@@ -30,7 +30,27 @@ enum class Operation : std::uint16_t {
     issuePhoneChallenge = 9,
     submitPhoneAssertion = 10,
     reloadPhoneEnrollment = 11,
+    takeAutoSubmitOffer = 12,
 };
+
+inline constexpr bool isKnownOperation(const std::uint16_t value) noexcept {
+    switch (static_cast<Operation>(value)) {
+    case Operation::captureIdentity:
+    case Operation::status:
+    case Operation::setCredential:
+    case Operation::updateCredential:
+    case Operation::clearCredential:
+    case Operation::claimCredential:
+    case Operation::clearForRemoval:
+    case Operation::issuePhoneChallenge:
+    case Operation::submitPhoneAssertion:
+    case Operation::reloadPhoneEnrollment:
+    case Operation::takeAutoSubmitOffer:
+        return true;
+    default:
+        return false;
+    }
+}
 
 enum class Result : std::uint32_t {
     success = 0,
@@ -62,6 +82,11 @@ struct StatusPayload final {
     bool credentialPresent = false;
 };
 
+struct AutoSubmitOffer final {
+    std::array<std::uint8_t, kNonceSize> nonce{};
+    ULONGLONG expiresAt = 0;
+};
+
 struct Packet final {
     Operation operation = Operation::status;
     Result result = Result::success;
@@ -90,6 +115,8 @@ struct CallDiagnostics final {
 [[nodiscard]] bool decodeIdentity(const std::uint8_t* data, std::size_t size, Identity& output);
 [[nodiscard]] bool encodeStatus(const StatusPayload& status, SensitiveBytes& output);
 [[nodiscard]] bool decodeStatus(const std::uint8_t* data, std::size_t size, StatusPayload& output);
+[[nodiscard]] bool encodeAutoSubmitOffer(const AutoSubmitOffer& offer, SensitiveBytes& output);
+[[nodiscard]] bool decodeAutoSubmitOffer(const std::uint8_t* data, std::size_t size, AutoSubmitOffer& output);
 [[nodiscard]] bool writePacket(HANDLE pipe, const Packet& packet);
 [[nodiscard]] bool readPacket(HANDLE pipe, Packet& packet);
 [[nodiscard]] bool awaitReplyAcknowledgment(HANDLE pipe, Operation operation, DWORD waitMs);

@@ -33,7 +33,7 @@ void testEmptyMachineRequestsInstall() {
     expect(plan.action == WizardAction::install, "empty machine should request install");
 }
 
-void testCompleteInstallationRequestsUninstall() {
+void testCompleteInstallationRequestsUpdate() {
     auto snapshot = baseState(WizardPhase::installed);
     snapshot.credentialProviderDllPresent = true;
     snapshot.credentialProviderRegistered = true;
@@ -43,7 +43,23 @@ void testCompleteInstallationRequestsUninstall() {
     snapshot.savedCredentialServiceMatchesInstallation = true;
     snapshot.savedCredentialServiceRunning = true;
     const auto plan = determineRecoveryPlan(snapshot);
-    expect(plan.action == WizardAction::uninstall, "complete installation should request uninstall");
+    expect(plan.action == WizardAction::update, "complete installation should offer credential-preserving update");
+}
+
+void testInterruptedUpdateNeverRequestsDestructiveRecovery() {
+    for (const auto phase : {WizardPhase::updatePendingReboot, WizardPhase::updating}) {
+        auto snapshot = baseState(phase);
+        snapshot.savedCredentialServiceRegistered = true;
+        snapshot.credentialProviderDllPresent = true;
+        for (const bool needsRestart : {false, true}) {
+            snapshot.updateRebootRequired = needsRestart;
+            const auto plan = determineRecoveryPlan(snapshot);
+            expect(plan.action == WizardAction::completeUpdate,
+                "an interrupted update must resume update, not credential-clearing recovery");
+            expect(plan.explanation.find(needsRestart ? L"Restart" : L"Continue") != std::wstring::npos,
+                "update plan must explain its reboot boundary");
+        }
+    }
 }
 
 void testOrphanedInstalledStateResets() {
@@ -132,7 +148,8 @@ void testOrphanedSavedCredentialServiceIsBlocked() {
 
 int main() {
     testEmptyMachineRequestsInstall();
-    testCompleteInstallationRequestsUninstall();
+    testCompleteInstallationRequestsUpdate();
+    testInterruptedUpdateNeverRequestsDestructiveRecovery();
     testOrphanedInstalledStateResets();
     testPartialInstallationRequestsRecovery();
     testServiceMismatchRequestsRecovery();

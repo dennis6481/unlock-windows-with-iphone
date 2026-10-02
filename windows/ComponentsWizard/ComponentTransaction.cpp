@@ -170,6 +170,99 @@ OperationResult ComponentTransaction::install(const ProgressCallback& progress) 
     }
 }
 
+OperationResult ComponentTransaction::beginUpdate(const ProgressCallback& progress) {
+    WizardState state;
+    bool stateWritten = false;
+    try {
+        adapter_.assertSupportedAdministratorEnvironment();
+        const auto before = adapter_.inspect();
+        if (!before.observationValid || !before.stateValid || before.statePhase != WizardPhase::installed ||
+            !before.isCompleteInstallation() || before.continuationTaskPresent) {
+            return failure(L"Update requires a complete, verified installation with no pending operation.", before.statePresent);
+        }
+        state = newState(WizardPhase::updatePendingReboot);
+        report(progress, 15, L"Staging new binaries; preserving saved credentials and phone enrollment...");
+        adapter_.stageUpdate(state);
+        adapter_.markUpdateRequiresReboot();
+        stateWritten = true;
+        adapter_.writeState(state);
+        report(progress, 50, L"Preparing continuation after restart...");
+        adapter_.registerContinuationTask(state);
+        adapter_.removeCredentialProviderRegistration();
+        adapter_.configureSavedCredentialServiceForUpdate(true);
+        report(progress, 100, L"Update staged. Restart Windows and sign in with native PIN or password.");
+        return {true, true, true, L"Update staged. Saved credentials and phone enrollment were not cleared."};
+    } catch (const std::exception& error) {
+        const auto message = errorText(error);
+        if (stateWritten) {
+            state.lastError = message;
+            try { adapter_.writeState(state); }
+            catch (const std::exception& stateError) {
+                return failure(message + L"\r\nCould not preserve update state: " + errorText(stateError), true);
+            }
+        }
+        return failure(message, stateWritten);
+    }
+}
+
+OperationResult ComponentTransaction::completeUpdate(const ProgressCallback& progress) {
+    WizardState state;
+    bool stateLoaded = false;
+    try {
+        adapter_.assertSupportedAdministratorEnvironment();
+        const auto current = adapter_.readState();
+        if (!current || (current->phase != WizardPhase::updatePendingReboot && current->phase != WizardPhase::updating)) {
+            return failure(L"No component update is pending.", current.has_value());
+        }
+        state = *current;
+        stateLoaded = true;
+        const auto before = adapter_.inspect();
+        if (!before.observationValid || !before.stateValid) {
+            throw ComponentError(L"Could not verify component transaction before update continuation.");
+        }
+        if (adapter_.updateRebootRequired() || before.credentialProviderRegistered || before.credentialProviderClsidRegistered) {
+            adapter_.markUpdateRequiresReboot();
+            adapter_.registerContinuationTask(state);
+            adapter_.removeCredentialProviderRegistration();
+            adapter_.configureSavedCredentialServiceForUpdate(true);
+            return {true, true, true, L"Windows has not restarted yet. Restart before replacing the installed binaries."};
+        }
+        state.phase = WizardPhase::updating;
+        state.lastError.clear();
+        adapter_.writeState(state);
+        report(progress, 25, L"Replacing components from the protected update staging directory...");
+        adapter_.removeCredentialProviderRegistration();
+        adapter_.configureSavedCredentialServiceForUpdate(true);
+        adapter_.applyStagedUpdate(state);
+        report(progress, 70, L"Starting updated components...");
+        adapter_.markUpdateRequiresReboot();
+        adapter_.configureSavedCredentialServiceForUpdate(false);
+        adapter_.createCredentialProviderRegistration(adapter_.credentialProviderTarget());
+        const auto after = adapter_.inspect();
+        if (!after.observationValid || !after.isCompleteInstallation()) {
+            throw ComponentError(L"Updated installation verification failed.");
+        }
+        adapter_.removeContinuationTask();
+        auto installedState = state;
+        installedState.phase = WizardPhase::installed;
+        adapter_.writeState(installedState);
+        state = std::move(installedState);
+        report(progress, 100, L"Component update complete.");
+        return {true, false, true,
+            L"Updated component files verified and service running. Saved credentials and phone enrollment were preserved. Lock Windows and verify phone unlock again."};
+    } catch (const std::exception& error) {
+        const auto message = errorText(error);
+        if (stateLoaded) {
+            state.lastError = message;
+            try { adapter_.writeState(state); }
+            catch (const std::exception& stateError) {
+                return failure(message + L"\r\nCould not preserve update state: " + errorText(stateError), true);
+            }
+        }
+        return failure(message, stateLoaded);
+    }
+}
+
 OperationResult ComponentTransaction::beginUninstall(const ProgressCallback& progress) {
     WizardState state;
     bool stateWritten = false;
@@ -295,6 +388,9 @@ OperationResult ComponentTransaction::recover(const ProgressCallback& progress) 
         }
         if (currentState->phase == WizardPhase::uninstallPendingReboot || currentState->phase == WizardPhase::cleaningUp) {
             return completeUninstall(progress);
+        }
+        if (currentState->phase == WizardPhase::updatePendingReboot || currentState->phase == WizardPhase::updating) {
+            return completeUpdate(progress);
         }
 
         state = *currentState;

@@ -16,6 +16,7 @@
 #include <array>
 #include <cstring>
 #include <cwchar>
+#include <fstream>
 #include <sstream>
 #include <utility>
 
@@ -47,6 +48,7 @@ constexpr wchar_t kStateWizardPathValueName[] = L"WizardPath";
 constexpr wchar_t kStateCreatedAtValueName[] = L"CreatedAtUtc";
 constexpr wchar_t kStateLastErrorValueName[] = L"LastError";
 constexpr wchar_t kCredentialCleanupValueName[] = L"CredentialCleanupConfirmed";
+constexpr wchar_t kUpdateRebootGuard[] = L"SOFTWARE\\UnlockWindowsWithIPhone\\ComponentsWizard\\UpdateRebootGuard";
 
 [[noreturn]] void fail(const std::wstring& message) {
     throw ComponentError(message);
@@ -319,7 +321,7 @@ bool registryKeyExists(const wchar_t* subkey) {
 }
 
 bool isKnownPhase(const DWORD phase) {
-    return phase <= static_cast<DWORD>(WizardPhase::recoveryRequired);
+    return phase <= static_cast<DWORD>(WizardPhase::updating);
 }
 
 std::filesystem::path system32Directory() {
@@ -606,20 +608,21 @@ std::optional<WizardState> WindowsAdapter::readState() const {
 
 void WindowsAdapter::writeState(const WizardState& state) const {
     writeRegistryDword(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kSchemaVersionValueName, state.schemaVersion);
-    writeRegistryDword(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStatePhaseValueName, static_cast<DWORD>(state.phase));
     writeRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStateTransactionIdValueName, state.transactionId);
     writeRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStateWizardPathValueName, state.wizardPath);
     writeRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStateCreatedAtValueName, state.createdAtUtc);
     writeRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStateLastErrorValueName, state.lastError);
     writeRegistryDword(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath,
         kCredentialCleanupValueName, state.credentialCleanupConfirmed ? 1 : 0);
+    writeRegistryDword(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStatePhaseValueName, static_cast<DWORD>(state.phase));
 }
 
 void WindowsAdapter::clearState() const {
     deleteRegistryTree(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath);
 }
 
-void WindowsAdapter::copyNativeBinary(const std::filesystem::path& source, const std::filesystem::path& target) const {
+void WindowsAdapter::copyNativeBinary(const std::filesystem::path& source, const std::filesystem::path& target,
+    const bool replace) const {
     if (!fileExists(source)) {
         fail(L"Required build output is missing: " + source.wstring());
     }
@@ -631,7 +634,7 @@ void WindowsAdapter::copyNativeBinary(const std::filesystem::path& source, const
             L", but Windows is " + architectureName(status.nativeArchitecture) + L". Rebuild before installing."
         );
     }
-    if (fileExists(target)) {
+    if (!replace && fileExists(target)) {
         fail(L"Refusing to overwrite an existing system binary: " + target.wstring());
     }
 
@@ -654,7 +657,7 @@ void WindowsAdapter::copyNativeBinary(const std::filesystem::path& source, const
         GENERIC_WRITE,
         FILE_SHARE_READ,
         nullptr,
-        CREATE_NEW,
+        replace ? CREATE_ALWAYS : CREATE_NEW,
         FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN,
         nullptr
     );
@@ -691,6 +694,110 @@ void WindowsAdapter::copyNativeBinary(const std::filesystem::path& source, const
         }
     }
     checkWin32(FlushFileBuffers(targetFile.get()), L"Could not flush " + target.wstring());
+}
+
+std::filesystem::path WindowsAdapter::updateDirectory(const WizardState& state) const {
+    if (state.transactionId.empty() || state.transactionId.find_first_not_of(L"0123456789-") != std::wstring::npos) {
+        fail(L"The update transaction identifier is invalid.");
+    }
+    return system32Directory() / (L"UnlockWindowsUpdate-" + state.transactionId);
+}
+
+bool WindowsAdapter::updateRebootRequired() const {
+    return registryKeyExists(kUpdateRebootGuard);
+}
+
+void WindowsAdapter::markUpdateRequiresReboot() const {
+    HKEY key = nullptr;
+    const auto result = RegCreateKeyExW(HKEY_LOCAL_MACHINE, kUpdateRebootGuard, 0, nullptr,
+        REG_OPTION_VOLATILE, KEY_READ | KEY_WOW64_64KEY, nullptr, &key, nullptr);
+    if (result != ERROR_SUCCESS) fail(L"Could not establish update reboot boundary: " + win32ErrorMessage(result));
+    ScopedRegistryKey guard(key);
+}
+
+void WindowsAdapter::stageUpdate(WizardState& state) const {
+    const auto directory = updateDirectory(state);
+    checkWin32(CreateDirectoryW(directory.c_str(), nullptr), L"Could not create protected update staging directory");
+    copyNativeBinary(credentialProviderSource(), directory / kCredentialProviderDllName);
+    copyNativeBinary(savedCredentialServiceSource(), directory / kSavedCredentialServiceExeName);
+    const auto wizard = directory / L"unlock_windows_components_wizard.exe";
+    copyNativeBinary(wizardPath_, wizard);
+    state.wizardPath = wizard.wstring();
+}
+
+void WindowsAdapter::applyStagedUpdate(const WizardState& state) const {
+    const auto directory = updateDirectory(state);
+    const auto attributes = GetFileAttributesW(directory.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_DIRECTORY) ||
+        (attributes & FILE_ATTRIBUTE_REPARSE_POINT) ||
+        std::filesystem::path(state.wizardPath) != directory / L"unlock_windows_components_wizard.exe") {
+        fail(L"The protected update staging location is invalid.");
+    }
+    for (const auto* name : {kCredentialProviderDllName, kSavedCredentialServiceExeName}) {
+        const auto source = directory / name;
+        const auto target = system32Directory() / name;
+        auto temporary = target;
+        temporary += L".update";
+        copyNativeBinary(source, temporary, true);
+        checkWin32(MoveFileExW(temporary.c_str(), target.c_str(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH), L"Could not replace " + target.wstring());
+        std::ifstream expected(source, std::ios::binary), actual(target, std::ios::binary);
+        if (!expected || !actual) fail(L"Could not verify updated binary " + target.wstring());
+        std::array<char, 65536> left{}, right{};
+        do {
+            expected.read(left.data(), static_cast<std::streamsize>(left.size()));
+            actual.read(right.data(), static_cast<std::streamsize>(right.size()));
+            if (expected.bad() || actual.bad() || (expected.fail() && !expected.eof()) ||
+                (actual.fail() && !actual.eof()) || expected.gcount() != actual.gcount() ||
+                std::memcmp(left.data(), right.data(), static_cast<size_t>(expected.gcount())) != 0) {
+                fail(L"Updated binary verification failed: " + target.wstring());
+            }
+        } while (expected.gcount() != 0);
+    }
+}
+
+void WindowsAdapter::configureSavedCredentialServiceForUpdate(const bool suspend) const {
+    ScopedServiceHandle manager(OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT));
+    if (!manager.get()) fail(L"Could not open the Service Control Manager: " + win32ErrorMessage(GetLastError()));
+    ScopedServiceHandle service(OpenServiceW(manager.get(), unlock_windows::saved_credential::kServiceName,
+        SERVICE_QUERY_CONFIG | SERVICE_CHANGE_CONFIG | SERVICE_QUERY_STATUS | SERVICE_STOP | SERVICE_START));
+    if (!service.get()) fail(L"Could not open the installed service: " + win32ErrorMessage(GetLastError()));
+    DWORD bytes = 0;
+    QueryServiceConfigW(service.get(), nullptr, 0, &bytes);
+    if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || bytes < sizeof(QUERY_SERVICE_CONFIGW)) {
+        fail(L"Could not inspect the service before updating.");
+    }
+    std::vector<std::byte> configuration(bytes);
+    checkWin32(QueryServiceConfigW(service.get(), reinterpret_cast<LPQUERY_SERVICE_CONFIGW>(configuration.data()),
+        bytes, &bytes), L"Could not read installed service configuration");
+    const auto* config = reinterpret_cast<const QUERY_SERVICE_CONFIGW*>(configuration.data());
+    const auto command = L"\"" + savedCredentialServiceTarget().wstring() + L"\"";
+    if (!config->lpBinaryPathName || _wcsicmp(config->lpBinaryPathName, command.c_str()) != 0 ||
+        !config->lpServiceStartName || _wcsicmp(config->lpServiceStartName, L"LocalSystem") != 0 ||
+        config->dwServiceType != SERVICE_WIN32_OWN_PROCESS) {
+        fail(L"Refusing to update a service not owned by this installation.");
+    }
+    checkWin32(ChangeServiceConfigW(service.get(), SERVICE_NO_CHANGE,
+        suspend ? SERVICE_DISABLED : SERVICE_AUTO_START, SERVICE_NO_CHANGE,
+        nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr), L"Could not configure service startup for update");
+    SERVICE_STATUS_PROCESS status{};
+    checkWin32(QueryServiceStatusEx(service.get(), SC_STATUS_PROCESS_INFO,
+        reinterpret_cast<LPBYTE>(&status), sizeof(status), &bytes), L"Could not query installed service");
+    if (suspend && status.dwCurrentState != SERVICE_STOPPED) {
+        SERVICE_STATUS ignored{};
+        if (!ControlService(service.get(), SERVICE_CONTROL_STOP, &ignored) && GetLastError() != ERROR_SERVICE_NOT_ACTIVE) {
+            fail(L"Could not stop installed service: " + win32ErrorMessage(GetLastError()));
+        }
+    } else if (!suspend && status.dwCurrentState == SERVICE_STOPPED) {
+        checkWin32(StartServiceW(service.get(), 0, nullptr), L"Could not start updated service");
+    }
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        checkWin32(QueryServiceStatusEx(service.get(), SC_STATUS_PROCESS_INFO,
+            reinterpret_cast<LPBYTE>(&status), sizeof(status), &bytes), L"Could not verify installed service state");
+        if (status.dwCurrentState == (suspend ? SERVICE_STOPPED : SERVICE_RUNNING)) return;
+        Sleep(100);
+    }
+    fail(L"Installed service did not reach the expected state within 10 seconds.");
 }
 
 void WindowsAdapter::deleteBinaryIfPresent(const std::filesystem::path& target) const {
@@ -822,7 +929,7 @@ bool WindowsAdapter::continuationTaskExists() const {
     if (result == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)) {
         return false;
     }
-    checkHresult(result, L"Could not inspect the uninstall continuation task");
+    checkHresult(result, L"Could not inspect the component continuation task");
     return true;
 }
 
@@ -834,11 +941,11 @@ void WindowsAdapter::registerContinuationTask(const WizardState& state) const {
     auto service = taskSchedulerService();
     auto root = taskRootFolder(service.Get());
     ComPtr<ITaskDefinition> definition;
-    checkHresult(service->NewTask(0, &definition), L"Could not create the uninstall continuation task");
+    checkHresult(service->NewTask(0, &definition), L"Could not create the component continuation task");
 
     ComPtr<IRegistrationInfo> registration;
     checkHresult(definition->get_RegistrationInfo(&registration), L"Could not configure the continuation task");
-    ScopedBstr description(L"Completes one pending Unlock Windows with iPhone component uninstall after reboot.");
+    ScopedBstr description(L"Completes a pending Unlock Windows with iPhone component operation after restart.");
     checkHresult(registration->put_Description(description.get()), L"Could not set the continuation task description");
 
     const auto userName = currentUserName();
@@ -863,7 +970,8 @@ void WindowsAdapter::registerContinuationTask(const WizardState& state) const {
     checkHresult(action.As(&execution), L"Could not configure the continuation executable action");
     const auto executablePath = state.wizardPath.empty() ? wizardPath_ : std::filesystem::path(state.wizardPath);
     ScopedBstr path(executablePath.wstring());
-    ScopedBstr arguments(L"--resume-uninstall");
+    const bool updating = state.phase == WizardPhase::updatePendingReboot || state.phase == WizardPhase::updating;
+    ScopedBstr arguments(updating ? L"--resume-update" : L"--resume-uninstall");
     checkHresult(execution->put_Path(path.get()), L"Could not set the continuation executable path");
     checkHresult(execution->put_Arguments(arguments.get()), L"Could not set the continuation executable arguments");
 
@@ -894,7 +1002,7 @@ void WindowsAdapter::registerContinuationTask(const WizardState& state) const {
             empty.get(),
             &registeredTask
         ),
-        L"Could not register the uninstall continuation task"
+        L"Could not register the component continuation task"
     );
 }
 
@@ -908,7 +1016,7 @@ void WindowsAdapter::removeContinuationTask() const {
     ScopedBstr taskName(kFinalizeTaskName);
     const auto result = root->DeleteTask(taskName.get(), 0);
     if (FAILED(result) && result != HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)) {
-        checkHresult(result, L"Could not remove the uninstall continuation task");
+        checkHresult(result, L"Could not remove the component continuation task");
     }
 }
 
@@ -973,6 +1081,9 @@ ComponentSnapshot WindowsAdapter::inspect() const {
             fail(L"Could not inspect the saved credential service registration.");
         }
         snapshot.continuationTaskPresent = continuationTaskExists();
+        if (snapshot.statePhase == WizardPhase::updatePendingReboot || snapshot.statePhase == WizardPhase::updating) {
+            snapshot.updateRebootRequired = updateRebootRequired();
+        }
     } catch (const ComponentError& error) {
         snapshot.observationValid = false;
         snapshot.observationError = error.wideWhat();

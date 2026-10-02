@@ -137,8 +137,7 @@ bool readPacketWithTimeout(const HANDLE pipe, Packet& packet, const DWORD waitMs
     Header header{};
     if (!transferExactWithTimeout(pipe, &header, sizeof(header), false, waitMs)) return false;
     if (header.magic != kMagic || header.version != kVersion || header.size > kMaxPacket ||
-        header.operation < static_cast<std::uint16_t>(Operation::captureIdentity) ||
-        header.operation > static_cast<std::uint16_t>(Operation::reloadPhoneEnrollment)) {
+        !isKnownOperation(header.operation)) {
         SetLastError(ERROR_INVALID_DATA);
         return false;
     }
@@ -313,10 +312,12 @@ bool writePacket(const HANDLE pipe, const Packet& packet) {
 
 bool readPacket(const HANDLE pipe, Packet& packet) {
     Header header{};
-    if (!readExact(pipe, &header, sizeof(header)) || header.magic != kMagic ||
-        header.version != kVersion || header.size > kMaxPacket ||
-        header.operation < static_cast<std::uint16_t>(Operation::captureIdentity) ||
-        header.operation > static_cast<std::uint16_t>(Operation::reloadPhoneEnrollment)) return false;
+    if (!readExact(pipe, &header, sizeof(header))) return false;
+    if (header.magic != kMagic || header.version != kVersion || header.size > kMaxPacket ||
+        !isKnownOperation(header.operation)) {
+        SetLastError(ERROR_INVALID_DATA);
+        return false;
+    }
     packet.payload.clear();
     packet.payload.value.resize(header.size);
     if (header.size != 0 && !readExact(pipe, packet.payload.value.data(), header.size)) return false;
@@ -433,6 +434,24 @@ bool callOnPipe(const wchar_t* const pipeName, const Operation operation,
         reply.payload.clear();
         return failed(failureStage, failureError);
     }
+    return true;
+}
+
+bool encodeAutoSubmitOffer(const AutoSubmitOffer& offer, SensitiveBytes& output) {
+    output.clear();
+    if (offer.expiresAt == 0) return false;
+    append(output, offer.nonce.data(), offer.nonce.size());
+    append(output, &offer.expiresAt, sizeof(offer.expiresAt));
+    return true;
+}
+
+bool decodeAutoSubmitOffer(const std::uint8_t* data, const std::size_t size, AutoSubmitOffer& output) {
+    if (data == nullptr || size != kNonceSize + sizeof(ULONGLONG)) return false;
+    AutoSubmitOffer decoded;
+    std::memcpy(decoded.nonce.data(), data, kNonceSize);
+    std::memcpy(&decoded.expiresAt, data + kNonceSize, sizeof(decoded.expiresAt));
+    if (decoded.expiresAt == 0) return false;
+    output = decoded;
     return true;
 }
 

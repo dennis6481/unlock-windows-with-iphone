@@ -55,7 +55,14 @@ public:
     void writeState(const WizardState& state) const;
     void clearState() const;
 
-    void copyNativeBinary(const std::filesystem::path& source, const std::filesystem::path& target) const;
+    void copyNativeBinary(const std::filesystem::path& source, const std::filesystem::path& target,
+        bool replace = false) const;
+    [[nodiscard]] std::filesystem::path updateDirectory(const WizardState& state) const;
+    void stageUpdate(WizardState& state) const;
+    void applyStagedUpdate(const WizardState& state) const;
+    void configureSavedCredentialServiceForUpdate(bool suspend) const;
+    [[nodiscard]] bool updateRebootRequired() const;
+    void markUpdateRequiresReboot() const;
     void deleteBinaryIfPresent(const std::filesystem::path& target) const;
 
     void createCredentialProviderRegistration(const std::filesystem::path& target) const;

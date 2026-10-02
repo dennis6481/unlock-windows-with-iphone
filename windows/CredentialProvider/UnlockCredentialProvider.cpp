@@ -9,8 +9,14 @@
 #include <cwchar>
 #include <cstring>
 #include <cstdint>
+#include <exception>
 #include <new>
+#include <memory>
+#include <mutex>
+#include <optional>
 #include <string>
+#include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -28,6 +34,7 @@ constexpr DWORD kIconField = 0;
 constexpr DWORD kTitleField = 1;
 constexpr DWORD kSubmitField = 2;
 constexpr DWORD kFieldCount = 3;
+constexpr UINT kApprovalMessage = WM_APP + 73;
 
 struct FieldDefinition final {
     DWORD id;
@@ -46,6 +53,80 @@ struct TemporaryPassword final {
     std::vector<wchar_t> value;
     ~TemporaryPassword() {
         if (!value.empty()) SecureZeroMemory(value.data(), value.size() * sizeof(wchar_t));
+    }
+};
+
+void logAutoSubmitError(const wchar_t* operation, const HRESULT status) noexcept {
+    wchar_t message[256]{};
+    std::swprintf(message, 256, L"[UnlockCP] %ls failed: 0x%08lx\n",
+        operation, static_cast<unsigned long>(status));
+    OutputDebugStringW(message);
+}
+
+struct ApprovalWatch final {
+    unlock_windows::saved_credential::Identity identity;
+    DWORD session = 0xffffffff;
+    HWND window = nullptr;
+    UINT_PTR generation = 0;
+    HANDLE stop = nullptr;
+    std::mutex mutex;
+    std::optional<unlock_windows::saved_credential::AutoSubmitOffer> offer;
+    std::thread worker;
+
+    ~ApprovalWatch() {
+        if (stop != nullptr) SetEvent(stop);
+        if (worker.joinable()) worker.join();
+        if (stop != nullptr) CloseHandle(stop);
+    }
+
+    void run() noexcept {
+        using namespace unlock_windows::saved_credential;
+        HRESULT previousError = S_OK;
+        try {
+            while (WaitForSingleObject(stop, 0) == WAIT_TIMEOUT) {
+                SensitiveBytes request;
+                Packet reply;
+                CallDiagnostics diagnostics;
+                HRESULT status = S_OK;
+                if (!encodeIdentity(identity, request)) {
+                    status = E_INVALIDARG;
+                } else if (!call(Operation::takeAutoSubmitOffer, std::move(request), reply, 250, &diagnostics)) {
+                    status = HRESULT_FROM_WIN32(diagnostics.win32Error);
+                } else if (reply.result != Result::success) {
+                    status = E_ACCESSDENIED;
+                } else if (!reply.payload.value.empty()) {
+                    AutoSubmitOffer received;
+                    if (!decodeAutoSubmitOffer(reply.payload.value.data(), reply.payload.value.size(), received)) {
+                        status = HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
+                    } else {
+                        {
+                            std::lock_guard lock(mutex);
+                            offer = received;
+                        }
+                        if (!PostMessageW(window, kApprovalMessage, generation, 0)) {
+                            logAutoSubmitError(L"PostMessage", HRESULT_FROM_WIN32(GetLastError()));
+                            return;
+                        }
+                    }
+                }
+                if (FAILED(status) && status != previousError) {
+                    logAutoSubmitError(L"approval query", status);
+                    if (diagnostics.stage != CallStage::none) {
+                        OutputDebugStringW(callStageName(diagnostics.stage));
+                    }
+                }
+                previousError = status;
+                const DWORD waited = WaitForSingleObject(stop, 500);
+                if (waited == WAIT_OBJECT_0) return;
+                if (waited != WAIT_TIMEOUT) {
+                    logAutoSubmitError(L"approval wait", HRESULT_FROM_WIN32(GetLastError()));
+                    return;
+                }
+            }
+        } catch (const std::exception& error) {
+            OutputDebugStringA("[UnlockCP] approval watcher failed: ");
+            OutputDebugStringA(error.what());
+        }
     }
 };
 
@@ -567,6 +648,8 @@ public:
         *optionalStatusIcon = CPSI_WARNING;
         *response = CPGSR_NO_CREDENTIAL_NOT_FINISHED;
 
+        const auto automaticApproval = std::exchange(automaticApproval_, std::nullopt);
+
         if (qualifiedUserName_.empty() || userSid_.empty() || primarySid_ != userSid_ ||
             consoleSessionId_ == 0xffffffff) {
             return copyString(L"The selected Windows user identity is incomplete or inconsistent.", optionalStatusText);
@@ -621,6 +704,10 @@ public:
                     optionalStatusText);
             }
             std::copy_n(captureReply.payload.value.begin(), savedNonce.size(), savedNonce.begin());
+            if (automaticApproval && *automaticApproval != savedNonce) {
+                return copyString(L"The iPhone approval changed before automatic submission. Request a new approval.",
+                    optionalStatusText);
+            }
             unlock_windows::saved_credential::SensitiveBytes request;
             unlock_windows::saved_credential::Packet reply;
             if (!unlock_windows::saved_credential::encodeIdentity(identity, request)) {
@@ -741,6 +828,12 @@ public:
         qualifiedUserName_.clear();
         providerId_ = GUID{};
         consoleSessionId_ = 0xffffffff;
+        automaticApproval_.reset();
+    }
+
+    void armAutomaticSubmission(const std::array<std::uint8_t,
+            unlock_windows::saved_credential::kNonceSize>& nonce) noexcept {
+        automaticApproval_ = nonce;
     }
 
 private:
@@ -751,6 +844,8 @@ private:
     std::wstring qualifiedUserName_;
     GUID providerId_{};
     DWORD consoleSessionId_ = 0xffffffff;
+    std::optional<std::array<std::uint8_t,
+        unlock_windows::saved_credential::kNonceSize>> automaticApproval_;
 };
 
 class UnlockCredentialProvider final : public ICredentialProvider,
@@ -765,6 +860,8 @@ public:
     UnlockCredentialProvider& operator=(const UnlockCredentialProvider&) = delete;
 
     ~UnlockCredentialProvider() {
+        stopWatching();
+        destroyApprovalWindow();
         if (events_ != nullptr) {
             events_->Release();
         }
@@ -839,16 +936,26 @@ public:
         if (events == nullptr) {
             return E_POINTER;
         }
-        if (events_ != nullptr) {
-            events_->Release();
-        }
+        UnAdvise();
         events_ = events;
         events_->AddRef();
         adviseContext_ = adviseContext;
-        return S_OK;
+        const HRESULT windowStatus = createApprovalWindow();
+        if (FAILED(windowStatus)) {
+            logAutoSubmitError(L"approval window", windowStatus);
+            UnAdvise();
+            return windowStatus;
+        }
+        const HRESULT watchStatus = startWatching();
+        if (FAILED(watchStatus)) {
+            UnAdvise();
+        }
+        return watchStatus;
     }
 
     HRESULT STDMETHODCALLTYPE UnAdvise() override {
+        stopWatching();
+        destroyApprovalWindow();
         if (events_ != nullptr) {
             events_->Release();
             events_ = nullptr;
@@ -972,6 +1079,15 @@ public:
         );
         if (SUCCEEDED(result)) {
             hasUserSid_ = true;
+            try {
+                identity_ = {sidValue, qualifiedName, providerId};
+            } catch (const std::bad_alloc&) {
+                hasUserSid_ = false;
+                return E_OUTOFMEMORY;
+            }
+            consoleSessionId_ = SUCCEEDED(consoleStatus) && consoleSid == sidValue
+                ? consoleSessionId : 0xffffffff;
+            result = startWatching();
         }
         return result;
     }
@@ -1015,6 +1131,16 @@ public:
         *count = 1;
         *defaultIndex = CREDENTIAL_PROVIDER_NO_DEFAULT;
         *autoLogonWithDefault = FALSE;
+        if (pendingAutomaticOffer_) {
+            const auto offer = std::exchange(pendingAutomaticOffer_, std::nullopt);
+            if (events_ != nullptr && GetTickCount64() < offer->expiresAt &&
+                WTSGetActiveConsoleSessionId() == consoleSessionId_) {
+                credential_->armAutomaticSubmission(offer->nonce);
+                *defaultIndex = 0;
+                *autoLogonWithDefault = TRUE;
+                OutputDebugStringW(L"[UnlockCP] automatic submission offered once\n");
+            }
+        }
         return S_OK;
     }
 
@@ -1035,12 +1161,126 @@ public:
     }
 
 private:
+    static LRESULT CALLBACK approvalWindowProcedure(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
+        auto* provider = reinterpret_cast<UnlockCredentialProvider*>(GetWindowLongPtrW(window, GWLP_USERDATA));
+        if (message == WM_NCCREATE) {
+            const auto* creation = reinterpret_cast<const CREATESTRUCTW*>(lparam);
+            provider = static_cast<UnlockCredentialProvider*>(creation->lpCreateParams);
+            SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(provider));
+        }
+        if (message == kApprovalMessage && provider != nullptr) {
+            provider->AddRef();
+            provider->approvalArrived(static_cast<UINT_PTR>(wparam));
+            provider->Release();
+            return 0;
+        }
+        return DefWindowProcW(window, message, wparam, lparam);
+    }
+
+    HRESULT createApprovalWindow() {
+        if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                reinterpret_cast<LPCWSTR>(&approvalWindowProcedure), &windowModule_)) {
+            return HRESULT_FROM_WIN32(GetLastError());
+        }
+        try {
+            windowClassName_ = L"UnlockIPhoneApproval." + std::to_wstring(reinterpret_cast<UINT_PTR>(this));
+        } catch (const std::bad_alloc&) {
+            return E_OUTOFMEMORY;
+        }
+        WNDCLASSW windowClass{};
+        windowClass.lpfnWndProc = approvalWindowProcedure;
+        windowClass.hInstance = windowModule_;
+        windowClass.lpszClassName = windowClassName_.c_str();
+        windowClass_ = RegisterClassW(&windowClass);
+        if (windowClass_ == 0) return HRESULT_FROM_WIN32(GetLastError());
+        approvalWindow_ = CreateWindowExW(0, windowClassName_.c_str(), L"", 0,
+            0, 0, 0, 0, HWND_MESSAGE, nullptr, windowModule_, this);
+        return approvalWindow_ != nullptr ? S_OK : HRESULT_FROM_WIN32(GetLastError());
+    }
+
+    void destroyApprovalWindow() noexcept {
+        if (approvalWindow_ != nullptr) {
+            if (!DestroyWindow(approvalWindow_)) logAutoSubmitError(L"DestroyWindow", HRESULT_FROM_WIN32(GetLastError()));
+            approvalWindow_ = nullptr;
+        }
+        if (windowClass_ != 0) {
+            if (!UnregisterClassW(windowClassName_.c_str(), windowModule_)) {
+                logAutoSubmitError(L"UnregisterClass", HRESULT_FROM_WIN32(GetLastError()));
+            }
+            windowClass_ = 0;
+        }
+    }
+
+    void stopWatching() noexcept {
+        watch_.reset();
+        pendingAutomaticOffer_.reset();
+        ++watchGeneration_;
+    }
+
+    HRESULT startWatching() {
+        if (events_ == nullptr || !hasUserSid_ || consoleSessionId_ == 0xffffffff) return S_OK;
+        if (watch_ && watch_->session == consoleSessionId_ && watch_->identity.sid == identity_.sid &&
+            watch_->identity.qualifiedUserName == identity_.qualifiedUserName &&
+            IsEqualGUID(watch_->identity.providerId, identity_.providerId)) return S_OK;
+        stopWatching();
+        try {
+            auto watch = std::make_unique<ApprovalWatch>();
+            watch->identity = identity_;
+            watch->session = consoleSessionId_;
+            watch->window = approvalWindow_;
+            watch->generation = watchGeneration_;
+            watch->stop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+            if (watch->stop == nullptr) return HRESULT_FROM_WIN32(GetLastError());
+            auto* running = watch.get();
+            watch->worker = std::thread([running]() { running->run(); });
+            watch_ = std::move(watch);
+        } catch (const std::bad_alloc&) {
+            logAutoSubmitError(L"start approval watcher", E_OUTOFMEMORY);
+            return E_OUTOFMEMORY;
+        } catch (const std::system_error& error) {
+            OutputDebugStringA(error.what());
+            return E_FAIL;
+        }
+        return S_OK;
+    }
+
+    void approvalArrived(const UINT_PTR generation) noexcept {
+        if (!watch_ || generation != watchGeneration_ || !hasUserSid_ || events_ == nullptr) return;
+        std::optional<unlock_windows::saved_credential::AutoSubmitOffer> offer;
+        {
+            std::lock_guard lock(watch_->mutex);
+            offer = std::exchange(watch_->offer, std::nullopt);
+        }
+        if (!offer || GetTickCount64() >= offer->expiresAt ||
+            WTSGetActiveConsoleSessionId() != consoleSessionId_) return;
+        pendingAutomaticOffer_ = offer;
+        auto* events = events_;
+        events->AddRef();
+        const HRESULT status = events->CredentialsChanged(adviseContext_);
+        events->Release();
+        if (FAILED(status)) {
+            pendingAutomaticOffer_.reset();
+            logAutoSubmitError(L"CredentialsChanged", status);
+        } else {
+            OutputDebugStringW(L"[UnlockCP] phone approval triggered CredentialsChanged\n");
+        }
+    }
+
     std::atomic<ULONG> refCount_{1};
     UnlockCredential* credential_ = nullptr;
     ICredentialProviderEvents* events_ = nullptr;
     UINT_PTR adviseContext_ = 0;
     bool usageScenarioSet_ = false;
     bool hasUserSid_ = false;
+    unlock_windows::saved_credential::Identity identity_;
+    DWORD consoleSessionId_ = 0xffffffff;
+    HMODULE windowModule_ = nullptr;
+    ATOM windowClass_ = 0;
+    std::wstring windowClassName_;
+    HWND approvalWindow_ = nullptr;
+    UINT_PTR watchGeneration_ = 0;
+    std::unique_ptr<ApprovalWatch> watch_;
+    std::optional<unlock_windows::saved_credential::AutoSubmitOffer> pendingAutomaticOffer_;
 };
 
 class ClassFactory final : public IClassFactory {

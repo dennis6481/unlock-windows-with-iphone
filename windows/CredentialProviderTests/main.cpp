@@ -22,6 +22,28 @@ using unlock_windows::credential_provider::kUnlockCredentialProviderClsid;
 using GetClassObject = HRESULT(STDAPICALLTYPE*)(REFCLSID, REFIID, LPVOID*);
 using CanUnloadNow = HRESULT(STDAPICALLTYPE*)();
 
+class TestEvents final : public ICredentialProviderEvents {
+public:
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** value) override {
+        if (value == nullptr) return E_POINTER;
+        *value = nullptr;
+        if (!IsEqualIID(iid, IID_IUnknown) && !IsEqualIID(iid, __uuidof(ICredentialProviderEvents))) {
+            return E_NOINTERFACE;
+        }
+        *value = static_cast<ICredentialProviderEvents*>(this);
+        AddRef();
+        return S_OK;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++references; }
+    ULONG STDMETHODCALLTYPE Release() override { return --references; }
+    HRESULT STDMETHODCALLTYPE CredentialsChanged(UINT_PTR) override {
+        ++changes;
+        return S_OK;
+    }
+    std::atomic<ULONG> references{1};
+    unsigned int changes = 0;
+};
+
 void require(const bool condition, const char* message) {
     if (!condition) {
         throw std::runtime_error(message);
@@ -282,6 +304,16 @@ void run() {
             credentialCount == 1 && defaultIndex == CREDENTIAL_PROVIDER_NO_DEFAULT && autoLogon == FALSE,
         "unexpected Credential Provider credential count"
     );
+
+    TestEvents events;
+    for (unsigned int cycle = 0; cycle < 2; ++cycle) {
+        require(provider->Advise(&events, 42) == S_OK, "automatic submission advice failed");
+        require(provider->GetCredentialCount(&credentialCount, &defaultIndex, &autoLogon) == S_OK &&
+            defaultIndex == CREDENTIAL_PROVIDER_NO_DEFAULT && autoLogon == FALSE && events.changes == 0,
+            "advice must not auto-submit without a service offer");
+        require(provider->UnAdvise() == S_OK && events.references == 1,
+            "unadvice must release the callback and permit another advice cycle");
+    }
 
     ICredentialProviderCredential* credential = nullptr;
     require(provider->GetCredentialAt(0, &credential) == S_OK, "credential tile missing");

@@ -16,6 +16,55 @@
 
 如果授权不存在、已消费、已过期，账户或 session 不匹配，或服务拒绝调用，Provider 不返回凭据，并显示错误。Windows 随后的密码校验失败不会恢复已经领取的授权。
 
-安装和卸载只由 `unlock_windows_components_wizard.exe` 负责。不要手工注册 DLL，也不要恢复已经删除的 PowerShell 安装脚本。
+安装、更新和卸载只由 `unlock_windows_components_wizard.exe` 负责。不要手工注册 DLL，也不要恢复已经删除的 PowerShell 安装脚本。
 
-该实现已在物理 Windows 机器的已有 Microsoft Account 会话上完成一次“手机批准 + 手动点击磁贴 + 无需输入密码”的解锁验证。自动选择/提交和完整负面路径仍未验收。
+该实现先完成了物理 Windows 机器已有 Microsoft Account 会话的手动解锁。2026-10-02 用户确认“手机批准 + 不点击 Windows 磁贴 + 自动解锁”通过，并确认无新批准时保持锁定、重新批准后再次自动解锁、原生 PIN/密码可用。此前手动路径继续保留；完整负面路径尚未验收。
+
+## 自动提交（2026-10-02，实体机正常路径通过）
+
+Provider 在 `Advise` 和有效用户身份均就绪后启动工作线程，每 500 ms 通过现有受限管道申请 `takeAutoSubmitOffer`。该操作只返回批准 nonce 和有效期，不解密或领取密码，也不使用桌面 Manager 的 `status` 操作。
+
+服务对同一批准只发出一次 offer，包括 CP 重建或管道回复丢失的情况。CP 的工作线程不调用 COM 事件接口；它向 `Advise` 所在线程的 message-only window 投递消息，由该线程调用 `CredentialsChanged()`。`UnAdvise` 或身份变化会停止并回收工作线程；同一身份的重新枚举保留尚待提交的 offer。
+
+`GetCredentialCount()` 对尚未过期的 offer 只返回一次默认磁贴 0 和 `pbAutoLogonWithDefault=TRUE`。LogonUI 随后调用 `GetSerialization()`，Provider 将当次 capture 返回的 nonce 与 offer 比较，再走已验证的领取和 Negotiate 打包路径。服务每次手机批准生成新的 nonce。领取后打包或密码认证失败不会恢复 grant，也不会重新发出 offer；重试需要新的手机批准。自动提交通知无法交付时，尚未消费且有效的批准仍可由现有手动 **Unlock** 领取。
+
+自动提交正常路径已获用户实测确认，不代表 iPhone 或 GATT 已支持后台运行。目标仅为已有会话的锁屏解锁，重启后首次登录明确不支持手机登录。已有会话、原生 PIN/密码入口及服务端身份、session、锁屏校验继续适用；CP 重建、重复枚举和失败后的自动行为仍待专项验收。
+
+### 首次登录边界与回归
+
+2026-10-02 用户实测确认：重启后的首次登录界面不显示 **Unlock with iPhone** 自定义磁贴，使用原生密码登录 Windows。这符合用户要求，记录为首次登录边界通过，不将手机首次登录列为后续功能。此记录仅描述当前观察，不声称所有账户、策略和登录场景均已覆盖。
+
+后续后台组件或安装器变更时按以下步骤回归：
+
+1. 重启 Windows，在尚未建立用户会话时确认不显示自定义磁贴；手机批准不得用来完成首次登录。
+2. 使用 Windows 原生登录方式进入桌面。本次已观察到原生密码可用，不据此推断首次登录时所有 PIN 等选项均可用。
+3. 启动当前前台 GATT host，Win+L，再用前台 iPhone App 批准；已有会话应自动解锁。
+
+首次登录时磁贴缺席是预期结果；已有会话再次锁屏后仍无法手机解锁才属于本链路的回归问题。
+
+## 构建后的实体机验收
+
+2026-10-02 首轮自动提交未触发，DebugView 显示服务 `saved credential request read failed` 和 CP `approval query failed: 0x800700e9`。静态检查确认新操作 `takeAutoSubmitOffer=12` 被两端仍限定到 11 的包解析校验拒绝，服务直接断开连接；并非该请求进入身份授权处理后遭拒绝。两处解析校验已统一为显式合法操作列表，并补充真实管道包读取回归用例。随后用户确认自动解锁及上述三项回归通过；自动化测试执行结果未另行确认。
+
+部署同一新构建的服务和 CP DLL。已安装机器可使用 Components Wizard 的 **Update**，重启续办后保留保存密码和公钥；正常更新已由用户确认通过，详见 [更新步骤](../README.md#安装更新与卸载)。不要直接覆盖已经被 LogonUI 加载的 DLL。只有选择正常卸载才会清除保存密码，之后重装需通过 Manager 重新保存。
+
+以下命令均在仓库根目录执行。Windows 已正常登录、密码已保存、公钥已登记后，以当前控制台普通用户启动前台 transport：
+
+```powershell
+& '.\windows\build\unlock_gatt_host.exe'
+```
+
+1. Win+L，显示登录选项，但不要点击自定义磁贴的 **Unlock**。iPhone App 保持前台并发起认证。
+2. 手机显示 `unlock_approved` 后，观察 Windows 是否自动解锁；记录是否需要触碰屏幕或先选择磁贴。若必须先选择，不能记为无操作自动解锁通过。
+3. 核对恢复的是原有账户与 session。用根目录终端运行 `whoami /user` 和 `(Get-Process -Id $PID).SessionId`，与锁屏前比较。
+4. 再锁屏，不发起手机批准；应保持锁定且不自动提交。重新发起批准应可产生一次新的自动提交。
+5. 自动认证失败后不得连续重试同一批准；不要为了本轮验收反复输入错误密码。使用原生 PIN/密码恢复。
+6. 验证服务重启使旧批准失效，需要重新手机批准；完整身份变化和错误调用方测试继续单列。
+
+如自动提交未发生，先记录手机和 GATT 的结果，并尝试一次手动 **Unlock** 以区分批准/密码链路和通知链路。CP 使用 `OutputDebugString` 输出非秘密阶段：`phone approval triggered CredentialsChanged`、`automatic submission offered once`，以及带 HRESULT 的通知或 IPC 错误；不会记录密码或 nonce。
+
+## 参考资料
+
+- [CredentialsChanged](https://learn.microsoft.com/en-us/windows/win32/api/credentialprovider/nf-credentialprovider-icredentialproviderevents-credentialschanged)
+- [GetCredentialCount](https://learn.microsoft.com/en-us/windows/win32/api/credentialprovider/nf-credentialprovider-icredentialprovider-getcredentialcount)
+- [Message-only windows](https://learn.microsoft.com/en-us/windows/win32/winmsg/window-features#message-only-windows)

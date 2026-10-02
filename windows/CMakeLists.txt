@@ -1,3 +1,5 @@
+# Created by Rui MA on 26 Sep 2026
+
 cmake_minimum_required(VERSION 3.25)
 
 project(UnlockWindowsWithIPhone LANGUAGES CXX)
@@ -145,13 +147,17 @@ if(BUILD_TESTING)
     add_test(NAME unlock_enrollment_store_tests COMMAND unlock_enrollment_store_tests)
 endif()
 
-add_executable(unlock_gatt_host
+add_executable(unlock_gatt_host WIN32
     GattHost/main.cpp
 )
 
 target_compile_features(unlock_gatt_host PRIVATE cxx_std_20)
 target_compile_definitions(unlock_gatt_host PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_libraries(unlock_gatt_host PRIVATE unlock_saved_credential_ipc windowsapp)
+target_link_libraries(unlock_gatt_host PRIVATE unlock_saved_credential_ipc windowsapp user32 shell32 wtsapi32)
+
+if(MSVC)
+    target_compile_options(unlock_gatt_host PRIVATE /utf-8)
+endif()
 
 add_executable(unlock_windows_components_wizard WIN32
     ComponentsWizard/main.cpp

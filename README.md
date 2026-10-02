@@ -6,7 +6,7 @@
 
 当前已验证的 Windows 路径是：iPhone 签名通过后，LocalSystem 服务创建一个 120 秒、单次消费的授权；Credential Provider 自动提交，从服务领取本机加密保存的 Microsoft Account 密码，并交给 Windows 原生 Negotiate 包解锁已有控制台会话，无需点击 Windows 磁贴。手动 **Unlock** 按钮仍保留，原生 PIN/密码入口保持可用。
 
-这仍是前台原型，不是后台自动解锁产品。Windows 前台 GATT host 必须运行，iPhone App 保持前台；身份变化与部分拒绝路径尚未完成验收。重启后首次登录明确不支持手机登录：不显示自定义磁贴，使用原生登录方式；手机解锁只用于已有会话再次锁屏。
+这仍是原型，不是已验收的后台自动解锁产品。2026-10-02 已将同一 Windows GATT host 改为带托盘、无终端的普通用户进程，仅在确认当前物理控制台锁定时广播。用户反馈测试动作均符合预期，唯一报告的问题是实际解锁、广播停止后托盘仍显示“错误”；该提示逻辑已修正，但最新修正尚未重新构建或运行验证，第一阶段最终验收仍待完成。登录任务和安装器接入尚未实施。运行时仍须手动启动 host，iPhone App 保持前台；身份变化与部分拒绝路径尚未完成验收。重启后首次登录明确不支持手机登录：不显示自定义磁贴，使用原生登录方式；手机解锁只用于已有会话再次锁屏。
 
 2026-10-02 冻结记录（用户实体机实测反馈）：手机批准后的自动解锁通过；再次锁屏且不发起手机批准时保持锁定，重新手机批准后再次自动解锁，原生 PIN/密码仍可用。Components Wizard 的 Update 更新流程也已确认通过。冻结范围为“前台 iPhone 批准 → 自动解锁已有会话 + 安装器正常更新”，不代表完整负面测试或生产级更新恢复已通过。
 
@@ -27,7 +27,7 @@
 ```text
 iPhone
   └─ BLE challenge/assertion
-      └─ unlock_gatt_host (当前为前台进程)
+      └─ unlock_gatt_host (用户态托盘进程；锁屏广播生命周期待验收)
           └─ phone-only named pipe
               └─ unlock_saved_credential_service (LocalSystem)
                   ├─ PhoneApprovalCore：challenge、防重放、验签
@@ -39,7 +39,7 @@ iPhone
                               └─ Windows Negotiate
 ```
 
-- `windows/GattHost`：暴露四个 GATT characteristic，只处理认证请求 `0x01`、challenge、assertion 和结果。
+- `windows/GattHost`：暴露四个 GATT characteristic，只处理认证请求 `0x01`、challenge、assertion 和结果；广播按实际锁屏状态启停，停止时不主动断开连接。用户已反馈测试动作符合预期，最新托盘提示修正及最终验收仍待验证。
 - `windows/SavedCredential`：LocalSystem 服务、IPC、凭据保管和暂时保留的密码管理 GUI。
 - `windows/CredentialProvider`：绑定当前控制台用户，只消费手机批准后的保存凭据。
 - `windows/PhoneApproval`：当前服务使用的签名验证核心与登记存储；不是独立 host。
@@ -52,7 +52,7 @@ iPhone
 1. 使用 Components Wizard 安装 `unlock_saved_credential_service` 和 Credential Provider。
 2. 在已解锁的物理控制台，以管理员身份运行 `unlock_saved_credential_manager`：点击 **Refresh**，然后设置或更新当前账户的实际 Microsoft Account 密码。
 3. 以管理员身份运行 `unlock_pairing_tool`，核对指纹并登记 iPhone 公钥。
-4. 启动前台 `unlock_gatt_host`，然后锁定 Windows。
+4. 以普通用户手动启动 `unlock_gatt_host`，然后锁定 Windows。自动解锁链路此前已由用户确认；托盘 host 测试动作也已获用户预期反馈，最新提示修正尚待回归。五轮生命周期验收步骤与当前记录见 [GATT host](windows/GattHost/README.md#实体机验收记录与待验证项)。
 5. 显示锁屏登录选项，在前台 iPhone App 上发起认证。手机收到 `unlock_approved` 后 Windows 自动解锁，不点击 **Unlock**；该按钮仍可用于手动回归与定位通知问题。
 6. 该授权在 Credential Provider 领取时立即消费；Windows 随后的密码校验失败也不会恢复授权。
 
@@ -75,7 +75,7 @@ iOS 项目位于 `ios/ios.xcodeproj`。Secure Enclave 路径必须在实体 iPho
 
 ## 尚未完成
 
-- 将 Windows GATT transport 封装成经过锁屏和重启生命周期验证的后台组件。
+- 先验证最新托盘提示修正，再补齐用户态 GATT host 的五轮实体机广播生命周期验收记录；最终验收通过后再接入 Components Wizard 和登录任务，分别验收自动启动、Update 恢复和卸载。
 - 验证自动提交在 CP 重建、重复枚举、打包失败和服务中断等场景下的单次行为。
 - 为重复认证请求返回比通用 `not_ready` 更明确的“已有有效授权”状态。
 - 完成身份切换、错误签名、过期、重放、非 LogonUI 调用者和服务重启等负面路径验收。
@@ -99,3 +99,10 @@ iOS 项目位于 `ios/ios.xcodeproj`。Secure Enclave 路径必须在实体 iPho
 ## License
 
 This project is licensed under the MIT License. See [LICENSE.md](LICENSE.md).
+
+## GATT 生命周期实现参考
+
+- [Microsoft GATT foreground sample](https://github.com/microsoft/Windows-universal-samples/blob/main/Samples/BluetoothLE/cppwinrt/Scenario3_ServerForeground.cpp)
+- [Microsoft: WTSRegisterSessionNotification](https://learn.microsoft.com/en-us/windows/win32/api/wtsapi32/nf-wtsapi32-wtsregistersessionnotification)
+- [Microsoft: WTSINFOEX_LEVEL1_W](https://learn.microsoft.com/en-us/windows/win32/api/wtsapi32/ns-wtsapi32-wtsinfoex_level1_w)
+- [Microsoft: GattServiceProviderAdvertisementStatus](https://learn.microsoft.com/en-us/uwp/api/windows.devices.bluetooth.genericattributeprofile.gattserviceprovideradvertisementstatus)

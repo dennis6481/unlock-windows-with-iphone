@@ -19,7 +19,7 @@ help:
 	@echo "make release         alias for make build-release"
 	@echo "make test            build and run all CTest tests"
 	@echo "make clean           remove CMake build outputs"
-	@echo "make run-gatt        start the foreground GATT host"
+	@echo "make run-gatt        build and start the user-session GATT tray host"
 	@echo "make CONFIG=Release  use a different CMake configuration"
 	@echo "make TARGET_ARCH=x64  override automatic native architecture detection"
 	@echo "make TARGET_ARCH=arm64 override automatic native architecture detection"

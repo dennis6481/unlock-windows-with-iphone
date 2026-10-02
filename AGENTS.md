@@ -32,12 +32,26 @@
 - MUST NOT add cleanup workarounds to compensate for an incorrect
   installation state when that state can be prevented at installation time.
 - MUST NOT modify unrelated components.
+- Keep each task focused on one explicit objective and make the smallest change
+  that satisfies it.
+- Validate the highest-risk assumption with the smallest isolated experiment
+  before building product infrastructure around it.
+- Diagnostic and probe code MUST remain separate from product code unless its
+  use in the product has been explicitly approved and supported by evidence.
+- MUST NOT add abstractions, defensive logic, recovery mechanisms, or backward
+  compatibility without a validated requirement or a reproduced failure.
 - Before adding a workaround, determine and document why the invalid state
   exists and whether it can be prevented at its source.
-- If a reference link is provided, and has been approved in implementation, added them at the end of README.me.
+- Once a new path is established and `main` no longer needs the old path, remove
+  the superseded implementation. Do not use glue code to maintain historical
+  paths.
+- In documentation and status reports, clearly distinguish observed results,
+  inferences, and unverified assumptions. A successful partial experiment MUST
+  NOT be presented as completion of a product feature.
+- If a reference link is provided and used in an approved implementation, add it at the end of README.md.
 - If a reference link is provided but is not used, do not add it in README.md
 
-  ## Build and validation
+## Build and validation
 
 - MUST NOT run builds, compilation, tests that trigger compilation, packaging, or installation unless the user explicitly requests it in the current task.
 - Editing code does not imply permission to build it.

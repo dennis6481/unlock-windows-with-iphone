@@ -1,6 +1,4 @@
-// Modified by Rui MA on 26 Sep 2026
-// Modified by Codex on 26 Sep 2026
-// Modified by Rui MA on 26 Sep 2026
+// Created by Rui MA on 26 Sep 2026
 
 import CryptoKit
 import Foundation
@@ -10,6 +8,7 @@ import UIKit
 @MainActor
 @Observable
 final class UnlockSetupModel {
+    static let shared = UnlockSetupModel()
     enum State: Equatable {
         case idle
         case checking
@@ -37,6 +36,10 @@ final class UnlockSetupModel {
     var lastTestResult: String?
     var bluetoothStatus = "未启动"
     var bluetoothError: String?
+    var automaticEnabled = false
+    var rssiThreshold = -60.0
+    var currentRSSI: Int?
+    var targetIdentifier: String?
 
     private let keyStore: SecureEnclaveKeyStore
     private let bluetoothAuthenticator: BluetoothAuthenticator
@@ -44,14 +47,40 @@ final class UnlockSetupModel {
     init(keyStore: SecureEnclaveKeyStore = SecureEnclaveKeyStore()) {
         self.keyStore = keyStore
         self.bluetoothAuthenticator = BluetoothAuthenticator(keyStore: keyStore)
+        automaticEnabled = bluetoothAuthenticator.automaticEnabled
+        rssiThreshold = Double(bluetoothAuthenticator.threshold)
+        targetIdentifier = bluetoothAuthenticator.targetIdentifier?.uuidString
+        self.bluetoothAuthenticator.onStatus = { [weak self] status in self?.bluetoothStatus = status }
+        self.bluetoothAuthenticator.onRSSI = { [weak self] value in self?.currentRSSI = value }
+        self.bluetoothAuthenticator.onTarget = { [weak self] identifier in self?.targetIdentifier = identifier.uuidString }
         self.bluetoothAuthenticator.onError = { [weak self] message in
             self?.bluetoothStatus = "连接失败"
             self?.bluetoothError = message
         }
         self.bluetoothAuthenticator.onResult = { [weak self] result in
             self?.bluetoothStatus = "Windows 返回：\(result)"
-            self?.bluetoothError = nil
+            if result == "unlock_approved" || result == "enrollment_saved" || result == "enrollment_already_registered" {
+                self?.bluetoothError = nil
+            } else {
+                self?.bluetoothError = "Windows 返回：\(result)"
+            }
         }
+        bluetoothAuthenticator.activate()
+    }
+
+    func setAutomaticEnabled(_ enabled: Bool) {
+        automaticEnabled = enabled
+        bluetoothError = nil
+        bluetoothAuthenticator.setAutomaticEnabled(enabled)
+    }
+
+    func setRSSIThreshold(_ value: Double) {
+        rssiThreshold = value.rounded()
+        bluetoothAuthenticator.setThreshold(Int(rssiThreshold))
+    }
+
+    func setForeground(_ active: Bool) {
+        bluetoothAuthenticator.setForeground(active)
     }
 
     func prepareKey() {
@@ -107,7 +136,7 @@ final class UnlockSetupModel {
         bluetoothError = nil
         do {
             try bluetoothAuthenticator.start()
-            bluetoothStatus = "正在扫描 Windows GATT host"
+
         } catch {
             bluetoothStatus = "连接失败"
             bluetoothError = error.localizedDescription
@@ -118,7 +147,7 @@ final class UnlockSetupModel {
         bluetoothError = nil
         do {
             try bluetoothAuthenticator.startEnrollment()
-            bluetoothStatus = "正在向 Windows 发送登记请求，请确认 Windows 通知"
+
         } catch {
             bluetoothStatus = "登记失败"
             bluetoothError = error.localizedDescription
@@ -126,7 +155,7 @@ final class UnlockSetupModel {
     }
 
     func stopBluetooth() {
+        setAutomaticEnabled(false)
         bluetoothAuthenticator.stop()
-        bluetoothStatus = "已停止"
     }
 }

@@ -1,10 +1,9 @@
-// Modified by Codex on 26 Sep 2026
-// Modified by Rui MA on 26 Sep 2026
+// Created by Rui MA on 26 Sep 2026
 
 import SwiftUI
 
 struct ContentView: View {
-    @State private var model = UnlockSetupModel()
+    let model: UnlockSetupModel
 
     var body: some View {
         NavigationStack {
@@ -30,6 +29,12 @@ struct ContentView: View {
                         enroll: model.startEnrollment,
                         stop: model.stopBluetooth
                     )
+                    AutomaticUnlockSection(
+                        enabled: Binding(get: { model.automaticEnabled }, set: model.setAutomaticEnabled),
+                        threshold: Binding(get: { model.rssiThreshold }, set: model.setRSSIThreshold),
+                        rssi: model.currentRSSI,
+                        targetIdentifier: model.targetIdentifier
+                    )
                     ScopeSection()
                 }
                 .padding()
@@ -48,7 +53,7 @@ private struct AppIntroSection: View {
             Text("Windows 解锁 PoC")
                 .font(.title2)
                 .fontWeight(.semibold)
-            Text("此阶段验证 Secure Enclave 私钥、AfterFirstUnlockThisDeviceOnly 和 challenge 签名链路。BLE 尚未接入。")
+            Text("先在 Windows 托盘开启配对，在手机登记并核对指纹。之后点击 Windows 的 iPhone 磁贴箭头，手机按 RSSI 自动批准。")
                 .foregroundStyle(.secondary)
         }
     }
@@ -117,9 +122,9 @@ private struct ActionSection: View {
 private struct ScopeSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("当前明确未实现")
+            Text("使用边界")
                 .font(.headline)
-            Text("Windows GATT Server、iPhone 后台 BLE 会话、Credential Provider、LSA Authentication Package 和自动解锁。认证失败不会静默退回软件密钥。")
+            Text("只解锁 Windows 已有会话，重启后首次登录仍用原生方式。后台与手机锁屏响应尚待实机验收；强制退出 App 后需重新打开。RSSI 是信号强度，不代表固定距离。")
                 .foregroundStyle(.secondary)
         }
     }
@@ -144,7 +149,7 @@ private struct BluetoothSection: View {
                     .textSelection(.enabled)
             }
             HStack {
-                Button("开始连接", action: start)
+                Button("连接目标电脑", action: start)
                     .buttonStyle(.borderedProminent)
                 Button("登记到 Windows", action: enroll)
                     .buttonStyle(.bordered)
@@ -155,6 +160,39 @@ private struct BluetoothSection: View {
     }
 }
 
+private struct AutomaticUnlockSection: View {
+    @Binding var enabled: Bool
+    @Binding var threshold: Double
+    let rssi: Int?
+    let targetIdentifier: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("手机自动批准")
+                .font(.headline)
+            Toggle("自动响应 Windows 请求", isOn: $enabled)
+                .disabled(targetIdentifier == nil)
+            if let targetIdentifier {
+                Text("目标设备：\(targetIdentifier)")
+                    .font(.footnote.monospaced())
+            } else {
+                Text("请先在 Windows 托盘开启配对，并点击手机的登记按钮。")
+                    .foregroundStyle(.secondary)
+            }
+            if let rssi {
+                Text("当前 RSSI：\(rssi) dBm")
+            } else {
+                Text("当前 RSSI：尚无有效读数")
+            }
+            Text("批准阈值：\(Int(threshold)) dBm")
+            Slider(value: $threshold, in: -100 ... -30, step: 1)
+            Text("每次挑战读取新 RSSI，达到阈值才签名；信号不足直接拒绝，靠近后需重新点击 Windows 箭头。")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
 #Preview {
-    ContentView()
+    ContentView(model: UnlockSetupModel.shared)
 }

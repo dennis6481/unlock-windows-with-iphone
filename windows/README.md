@@ -2,14 +2,14 @@
 
 # Windows
 
-Windows 主线只有一条：iPhone 签名经用户态 GATT host 转交 LocalSystem 服务验证，服务创建 120 秒单次授权，Credential Provider 领取本机加密保存的密码并提交给原生 Negotiate。2026-10-02 同一 host 已改为普通用户托盘进程、按实际控制台锁定状态启停广播。用户反馈测试动作均符合预期，唯一报告的问题是实际解锁、广播停止后托盘仍显示“错误”。最新提示修正仅完成静态检查，尚未重新构建或运行验证；第一阶段最终验收、登录任务和安装器接入仍未完成。
+Windows 主线只有一条：iPhone 签名经用户态 GATT host 转交 LocalSystem 服务验证，服务创建 120 秒单次授权，Credential Provider 领取本机加密保存的密码并提交给原生 Negotiate。2026-10-02 同一 host 已改为普通用户托盘进程、按实际控制台锁定状态启停广播。用户反馈测试动作均符合预期，唯一报告的问题是实际解锁、广播停止后托盘仍显示“错误”。2026-10-02 用户确认最新提示修正回归成功；第一阶段五轮专项验收记录仍待补齐，登录任务和安装器接入尚未实施。
 
 ## 目录
 
 - `Protocol`：固定签名载荷和 CNG P-256 验签。
 - `PhoneApproval`：`PhoneApprovalCore` 与 `EnrollmentStore`，由保存凭据服务直接使用。
 - `SavedCredential`：LocalSystem 服务、两条受限 named pipe、DPAPI vault 和临时密码管理 GUI。
-- `GattHost`：无终端的普通用户托盘 BLE transport，只接受认证请求 `0x01`；当前仍手动启动，用户已反馈测试动作符合预期，最新提示修正及最终验收待验证。
+- `GattHost`：无终端的普通用户托盘 BLE transport，只接受认证请求 `0x01`；当前仍手动启动，用户已反馈测试动作符合预期，最新提示修正已获用户回归成功反馈，五轮专项验收记录仍待补齐。
 - `CredentialProvider`：LogonUI 磁贴，只领取有效手机授权对应的保存凭据。
 - `PairingTool`：管理员确认并登记 iPhone 公钥。
 - `ComponentsWizard`：唯一安装、更新、卸载和事务恢复入口。
@@ -73,7 +73,7 @@ Start-Process -FilePath '.\windows\build\unlock_windows_components_wizard.exe' -
 
 Manager GUI 在正式设置 UI 出现前必须保留；它的 Refresh、Set、Update 和 Clear 是当前唯一凭据维护入口。
 
-2026-10-02 用户实体机确认上述自动解锁和三项回归通过，现冻结这一旧前台 host 原型里程碑。用户还确认重启后首次登录不显示自定义磁贴，使用原生密码登录，符合仅解锁已有会话的目标；首次登录明确不支持手机登录，不是待实现功能。随后用户反馈托盘 host 测试动作均符合预期，但实际解锁、广播停止后仍显示“错误”；最新提示修正尚未重新构建或运行验证，原始历史错误的具体来源也尚未提供。当前托盘 GATT 仍须手动启动，iPhone App 保持前台；五轮验收步骤与当前记录见 [GATT host](GattHost/README.md#实体机验收记录与待验证项)。完整负面路径继续待验收，CP 回归步骤见 [Credential Provider](CredentialProvider/README.md)。第一阶段最终验收通过后才接入安装器，不新增 LocalSystem 蓝牙服务。
+2026-10-02 用户实体机确认上述自动解锁和三项回归通过，现冻结这一旧前台 host 原型里程碑。用户还确认重启后首次登录不显示自定义磁贴，使用原生密码登录，符合仅解锁已有会话的目标；首次登录明确不支持手机登录，不是待实现功能。随后用户反馈托盘 host 测试动作均符合预期，但实际解锁、广播停止后仍显示“错误”；提示逻辑修正后，2026-10-02 用户确认回归成功；原始历史错误的具体来源仍未提供。当前托盘 GATT 仍须手动启动，iPhone App 保持前台；五轮验收步骤与当前记录见 [GATT host](GattHost/README.md#实体机验收记录与待验证项)。完整负面路径继续待验收，CP 回归步骤见 [Credential Provider](CredentialProvider/README.md)。第一阶段最终验收通过后才接入安装器，不新增 LocalSystem 蓝牙服务。
 
 ## 更新实现参考
 

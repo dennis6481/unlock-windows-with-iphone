@@ -19,7 +19,7 @@
 - Windows 密码由专用 LocalSystem 服务使用自身 user scope 的 DPAPI 保存，不使用 `CRYPTPROTECT_LOCAL_MACHINE`；Credential Provider 只能在有效手机授权窗口内领取一次。
 - Credential Provider 不提供手输密码输入框，也没有绕过手机批准的测试开关。
 - 当前分支不包含自定义 LSA Authentication Package。此前的无密码 token 构造研究没有形成可用产品路径，相关探针和兼容层已经移除。
-- 公钥登记由提升权限运行的 `unlock_pairing_tool` 完成。GATT 不接受远程登记命令。
+- 公钥登记必须在已解锁控制台由用户主动开启配对，立即处理一次 UAC，等待窗口就绪后再经 BLE 发送公钥，在同一 `unlock_pairing_tool` 窗口核对完整指纹并确认。正常模式拒绝蓝牙登记；Windows 交互已获用户符合预期的反馈；iPhone 与完整蓝牙登记专项测试暂缓，手工登记工具仍可使用。
 - 安装、更新、卸载和失败恢复只由原生 Components Wizard 管理；Update 保留密码与公钥，重启后续办替换，正常更新流程已由用户确认通过，[步骤见 Windows 文档](windows/README.md#安装更新与卸载)。没有 PowerShell 安装兼容层，也没有跳过凭据清除确认的 emergency removal。
 
 ## Windows 组件
@@ -39,7 +39,7 @@ iPhone
                               └─ Windows Negotiate
 ```
 
-- `windows/GattHost`：暴露四个 GATT characteristic，只处理认证请求 `0x01`、challenge、assertion 和结果；广播按实际锁屏状态启停，停止时不主动断开连接。用户已反馈测试动作符合预期，最新托盘提示修正已获用户回归成功反馈，五轮专项验收记录仍待补齐。
+- `windows/GattHost`：暴露四个 GATT characteristic；正常模式处理认证请求 `0x01`，本地主动开启的配对窗口另接收 `0x02 + 公钥`。停止广播时不主动断开连接。原锁屏广播和提示修正已获用户预期反馈，新增 Windows 交互已获用户确认；完整蓝牙登记验收暂缓。
 - `windows/SavedCredential`：LocalSystem 服务、IPC、凭据保管和暂时保留的密码管理 GUI。
 - `windows/CredentialProvider`：绑定当前控制台用户，只消费手机批准后的保存凭据。
 - `windows/PhoneApproval`：当前服务使用的签名验证核心与登记存储；不是独立 host。
@@ -75,6 +75,7 @@ iOS 项目位于 `ios/ios.xcodeproj`。Secure Enclave 路径必须在实体 iPho
 
 ## 尚未完成
 
+- 构建并验收新增蓝牙公钥登记代码：两种 UAC 身份实验已获用户截图确认通过，实验探针源码已移除；Windows 交互已获用户确认；iOS、原子保存及取消／失败专项测试暂缓。[操作与验收要求](windows/GattHost/README.md#蓝牙公钥登记代码已接入产品待验收)。
 - 补齐用户态 GATT host 的五轮实体机广播生命周期验收记录；最终验收通过后再接入 Components Wizard 和登录任务，分别验收自动启动、Update 恢复和卸载。
 - 验证自动提交在 CP 重建、重复枚举、打包失败和服务中断等场景下的单次行为。
 - 为重复认证请求返回比通用 `not_ready` 更明确的“已有有效授权”状态。
@@ -106,3 +107,15 @@ This project is licensed under the MIT License. See [LICENSE.md](LICENSE.md).
 - [Microsoft: WTSRegisterSessionNotification](https://learn.microsoft.com/en-us/windows/win32/api/wtsapi32/nf-wtsapi32-wtsregistersessionnotification)
 - [Microsoft: WTSINFOEX_LEVEL1_W](https://learn.microsoft.com/en-us/windows/win32/api/wtsapi32/ns-wtsapi32-wtsinfoex_level1_w)
 - [Microsoft: GattServiceProviderAdvertisementStatus](https://learn.microsoft.com/en-us/uwp/api/windows.devices.bluetooth.genericattributeprofile.gattserviceprovideradvertisementstatus)
+
+## 配对 UI 调整（2026-10-02，Windows 交互已获用户确认）
+
+托盘图标改为将根目录 `icon.png` 嵌入 EXE，部署无需额外 PNG；菜单的退出始终位于最底部。新增移除手机登记按钮：一次 UAC 后显示目标账户和删除确认窗口，取消不修改登记，确认仅删除手机公钥并重新加载服务，不修改密码副本。移除期间不开放桌面配对广播。用户已确认 Windows 交互符合预期；完整登记、移除后的实际效力和失败专项尚未验收，测试暂缓。
+
+点击配对立即请求一次 UAC；窗口显示等待手机，工具就绪后才开启配对广播。公钥经受限本地命名管道交给工具，同一窗口随后显示完整指纹并允许确认，无第二次 UAC。通道拒绝远程连接、限定 ACL 并核对双方实际进程身份和原控制台用户 SID。用户明确要求跳过独立通信实验，已直接接入产品并删除新探针；Windows 交互已获用户确认；跨管理员产品通信及完整生命周期尚未逐项验证，测试暂缓。
+
+## 当前验证状态（2026-10-02）
+
+用户已确认 Windows 方面的交互符合预期。本记录覆盖用户对当前 Windows 交互的总体反馈，不将首次登记后解锁、更换后旧手机失效、移除后的实际效力、密码副本不变、另一管理员凭据通信及取消／超时／失败专项分别记为通过。iOS 改动及完整两端蓝牙登记仍待验证，用户明确暂缓后续测试；原子保存回归用例也未由代理编译或执行。
+
+安装器、System32 部署、普通权限登录任务、Update 停止／替换／恢复和卸载仍为独立后续阶段，尚未实施。暂缓测试不表示蓝牙登记已经最终验收。

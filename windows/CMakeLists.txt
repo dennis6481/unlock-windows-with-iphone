@@ -147,13 +147,15 @@ if(BUILD_TESTING)
     add_test(NAME unlock_enrollment_store_tests COMMAND unlock_enrollment_store_tests)
 endif()
 
+configure_file(GattHost/GattHost.rc.in GattHost.rc @ONLY)
 add_executable(unlock_gatt_host WIN32
     GattHost/main.cpp
+    ${CMAKE_CURRENT_BINARY_DIR}/GattHost.rc
 )
 
 target_compile_features(unlock_gatt_host PRIVATE cxx_std_20)
 target_compile_definitions(unlock_gatt_host PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_libraries(unlock_gatt_host PRIVATE unlock_saved_credential_ipc windowsapp user32 shell32 wtsapi32)
+target_link_libraries(unlock_gatt_host PRIVATE unlock_saved_credential_ipc unlock_enrollment_store windowsapp user32 shell32 wtsapi32 gdiplus shlwapi)
 
 if(MSVC)
     target_compile_options(unlock_gatt_host PRIVATE /utf-8)
@@ -216,7 +218,7 @@ add_executable(unlock_pairing_tool
 
 target_compile_features(unlock_pairing_tool PRIVATE cxx_std_20)
 target_compile_definitions(unlock_pairing_tool PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_libraries(unlock_pairing_tool PRIVATE unlock_enrollment_store unlock_saved_credential_ipc windowsapp shell32 ole32 propsys)
+target_link_libraries(unlock_pairing_tool PRIVATE unlock_enrollment_store unlock_saved_credential_ipc user32 wtsapi32)
 
 add_library(unlock_credential_provider SHARED
     CredentialProvider/UnlockCredentialProvider.cpp

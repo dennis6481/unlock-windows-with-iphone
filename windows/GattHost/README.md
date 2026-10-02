@@ -2,7 +2,7 @@
 
 # GATT host
 
-`unlock_gatt_host` 复用现有 BLE transport，现为无终端窗口、带托盘的普通用户进程。只有进程所属会话是当前物理控制台、会话为 Active 且 `WTSSessionInfoEx` 明确报告锁定时才请求广播。已解锁、非当前控制台或状态无法确认时停止广播；所属会话注销时退出。同一用户会话内只允许一个实例。
+`unlock_gatt_host` 复用现有 BLE transport，现为无终端窗口、带托盘的普通用户进程。正常模式只有进程所属会话是当前物理控制台、会话为 Active 且 `WTSSessionInfoEx` 明确报告锁定时才请求广播。新增例外是实际控制台用户在已解锁桌面主动开启的两分钟配对窗口。配对以外的已解锁状态、非当前控制台或状态无法确认时停止广播；所属会话注销时退出。同一用户会话内只允许一个实例。
 
 2026-10-02：第一阶段代码已实现。用户运行 Release 构建时曾在托盘 `LoadIconW` 调用处遇到 C2664：未定义 `UNICODE` 时，`IDI_APPLICATION` 展开为 ANSI 资源指针。已改为显式 `MAKEINTRESOURCEW(32512)`，资源 ID 与 Windows SDK 的默认应用图标一致。用户随后反馈托盘 host 测试动作均符合预期，唯一报告的问题是实际解锁、广播停止后仍显示“错误”。2026-10-02 用户确认最新提示修正回归成功，第一阶段五轮专项验收记录仍待补齐；此前旧前台 host 的自动解锁记录与本次托盘 host 测试反馈分别记录。
 
@@ -14,7 +14,7 @@
 
 隐藏的普通顶层窗口接收所有会话的 WTS 通知和睡眠恢复通知。启动、会话变化、广播状态事件及每秒状态核对都重新查询当前物理控制台和实际锁定状态；不把通知顺序或旧广播事件当作当前状态。睡眠及会话结束期间禁止启动广播。WinRT 回调把写请求、订阅变化和广播状态事件交回同一控制线程；广播启停和 IPC 转发串行执行。
 
-托盘提示包括“已解锁，广播停止”“锁屏，正在广播”“广播启动中”和“错误”。右键菜单只有 **状态详情**、**重新检查** 和 **退出**，没有强制广播。状态详情保留最近的广播事件数值、BluetoothError、HRESULT、IPC 阶段和 Win32 错误，同时输出到调试器；不记录 challenge、assertion、密码或批准内容。托盘错误前缀表示尚未恢复的生命周期错误；实际会话查询成功且广播状态符合当前锁屏条件后自动清除。历史通信／回调错误仍单独标注并保留在详情中，不作为当前广播状态的错误前缀，重新检查也不删除历史记录。启动广播失败不在每秒核对中反复重试；广播中止后需重新检查，仍须满足实际锁屏条件。GATT 初始化失败需退出并重新启动同一 EXE。
+托盘提示包括“已解锁，广播停止”“锁屏，正在广播”“广播启动中”、配对等待状态和“错误”。右键菜单提供 **状态详情**、**重新检查**、**配对手机**、**更换手机**、配对期间的 **取消配对** 和 **退出**。状态详情保留最近登记结果、广播事件数值、BluetoothError、HRESULT、IPC 阶段和 Win32 错误，同时输出到调试器；不记录 challenge、assertion、密码或批准内容。托盘错误前缀表示尚未恢复的生命周期错误；实际会话查询成功且广播状态符合当前模式后自动清除。历史通信／回调错误保留在详情中，重新检查不删除历史记录。启动广播失败不在每秒核对中反复重试；广播中止后需重新检查，仍须满足正常锁屏或有效配对条件。GATT 初始化失败需退出并重新启动同一 EXE。
 
 退出时先拒绝新回调入队，停止广播、撤销事件，等待已进入的异步写请求完成 deferral 清理，再丢弃尚未处理的请求并移除托盘和窗口。撤销失败记录具体错误，不静默忽略。
 
@@ -32,9 +32,9 @@ Start-Process -FilePath '.\windows\build\unlock_gatt_host.exe'
 
 - service UUID：`F1E2D3C4-B5A6-4789-8012-3456789ABCDE`。
 - request / challenge / assertion / result UUID 分别以 `ABCD1` / `ABCD2` / `ABCD3` / `ABCD4` 结尾。
-- request 只接受一个字节 `0x01`，经受限 phone-only IPC 请求服务签发 challenge。
+- 正常认证 request 接受一个字节 `0x01`，经受限 phone-only IPC 请求服务签发 challenge；有效配对窗口另接受 `0x02 + 65 字节未压缩 P-256 公钥`，不走认证 IPC。配对期间不处理认证 request 或 assertion。
 - challenge 通知服务返回的 JSON；assertion 原样转交服务；result 转发服务结果，例如 `unlock_approved`、`not_ready` 或拒绝原因。
-- 公钥登记仍由管理员在已解锁控制台运行 `unlock_pairing_tool`，人工核对指纹；不经过 GATT。
+- 公钥通过 GATT 发送后，由已解锁控制台上的提权 `unlock_pairing_tool` 人工核对完整指纹并保存。BLE 写入应答不是登记成功；其他连接不接收本次登记结果。
 - 密码保管、验签、一次性批准、CP 自动提交和 iPhone 前台操作保持现有实现。
 
 ## 实体机验收（记录与待验证项）
@@ -55,6 +55,26 @@ Start-Process -FilePath '.\windows\build\unlock_gatt_host.exe'
 
 每项记录“观察结果／失败错误／未验证条件”，不要仅以手机连接状态推断广播状态。若保留连接导致重复认证失败，先复现并记录证据，再考虑最小修改 `ios/Core/BluetoothAuthenticator.swift` 复用连接和有效订阅、重发一次认证请求；本轮未修改 iOS，不加入后台扫描或自动批准。
 
+## 蓝牙公钥登记（代码已接入，产品待验收）
+
+2026-10-02：独立身份实验的同账户和另一管理员提权场景均有用户 `PASS` 截图。同账户场景三个 SID 相同；另一管理员场景原用户 SID 与查询到的控制台 SID 相同，提权进程 SID 不同，确认 WTS 查询仍识别实际控制台用户。实验完成后按用户要求移除探针源码和操作文档，产品不调用探针。随后已接入产品配对代码，2026-10-02 用户确认 Windows 交互符合预期；完整登记测试暂缓，代理未执行产品构建或运行。截图只验证身份查询，不代表蓝牙登记、取消或原子保存已通过。
+
+操作流程（使用包含本次变更的构建；产品构建与运行须获得当前任务授权）：
+
+1. 将 `unlock_gatt_host.exe` 和 `unlock_pairing_tool.exe` 放在同一目录，以普通权限在已解锁物理控制台启动 host。
+2. 从托盘选择 **配对手机** 或 **更换手机**，立即处理一次 UAC。窗口先显示目标账户及等待手机，工具确认就绪后才开启配对广播。
+3. 在两分钟内于前台 iPhone 点击 **登记到 Windows**。候选公钥冻结后，不允许其他请求覆盖它或反复启动 UAC。
+4. 收到手机候选公钥后，同一 PairingTool 窗口显示指纹并启用确认按钮，无第二次 UAC（同一公钥重复登记也须核对）。在窗口核对目标 Windows 账户及与 iPhone 相同的完整 SHA-256 指纹（每八字符分组）。更换窗口明确告知原手机登记将失效。匹配才确认。
+5. 等待手机显示登记成功；Windows 托盘状态详情记录结果，不再弹出登记结果气泡通知；成功要求公钥已保存并且服务已重新加载。之后锁屏，手机前台发起认证。
+
+配对 deadline 固定，不因候选到达或 UAC 延长。取消、超时、发起连接断开／取消结果订阅、锁屏、会话变化、睡眠或退出均终止配对，恢复后须重新主动开启。提权工具通过只读取消事件和父进程存活检查拒绝迟到确认；上一提权调用未结束前，不开启新的配对。结束配对恢复正常广播规则，不主动断开 BLE。
+
+普通登记不覆盖已有公钥；更换模式没有旧记录时拒绝。相同公钥和账户返回已登记，不重写文件。所有 PairingTool 修改入口共用全局写入互斥；保存前后及原子替换前核对目标控制台、取消信号、deadline 和旧记录。CLI 仍保留显式手工登记、替换及清除操作，保存 SID 同样来自实际控制台，不来自 UAC 管理员。
+
+登记结果均使用 `authenticated:false`：`enrollment_saved`、`enrollment_already_registered`、`enrollment_cancelled`、`enrollment_expired`、`enrollment_busy`、`enrollment_rejected`、`enrollment_error`。保存后服务加载失败时返回 `enrollment_error` 和 `detail:"saved_reload_failed"`，Windows 明确显示公钥已保存，不自动回滚，也不报成功。通信失败保留具体诊断，不能把写入应答或手机仍连接当作完成。
+
+待验收：首次登记并解锁、更换后旧手机失效、另一管理员 UAC 的产品确认路径、指纹不符／UAC 取消／非法公钥／重复及第二候选、UAC 和确认期间的锁屏／会话切换／睡眠／断连／超时、保存失败保留旧文件、服务加载失败明确状态，以及原锁屏广播和保留连接回归。已有五轮生命周期记录要求继续保留；本轮未修改安装器或登录自动启动。
+
 ## 安装器阶段（未接入）
 
 第一阶段实体机验收通过后，才将同一 GATT EXE 纳入 Components Wizard 的 System32 安装、Update 暂存替换和卸载流程。登录任务 `UnlockWindowsWithIPhone-GattHost` 绑定安装时实际物理控制台用户 SID，使用普通权限交互用户 token，不保存密码，不使用提权管理员账户代替目标用户。
@@ -67,3 +87,17 @@ Start-Process -FilePath '.\windows\build\unlock_gatt_host.exe'
 - [Microsoft: WTSRegisterSessionNotification](https://learn.microsoft.com/en-us/windows/win32/api/wtsapi32/nf-wtsapi32-wtsregistersessionnotification)
 - [Microsoft: WTSINFOEX_LEVEL1_W](https://learn.microsoft.com/en-us/windows/win32/api/wtsapi32/ns-wtsapi32-wtsinfoex_level1_w)
 - [Microsoft: GattServiceProviderAdvertisementStatus](https://learn.microsoft.com/en-us/uwp/api/windows.devices.bluetooth.genericattributeprofile.gattserviceprovideradvertisementstatus)
+
+2026-10-02：用户报告配对未弹出核对窗口。静态检查发现提权启动使用 `SW_HIDE`，以及同一公钥提前返回绕过确认。已改为 `SW_SHOWNORMAL`，重复登记先核对再返回已登记且不重写文件，并移除登记结果托盘气泡通知。随后用户确认 Windows 交互符合预期；重复登记不重写文件等专项仍未逐项验收。
+
+## 托盘 UI 与移除登记（2026-10-02，Windows 交互已获用户确认）
+
+根目录 `icon.png` 通过资源嵌入 GATT EXE，解码和缩放失败明确报错，不回退到系统默认图标；不要求运行目录另放 PNG。菜单最后固定为分隔线及退出。新增移除手机登记按钮，UAC 后由 PairingTool 显示目标账户与删除确认窗口，确认后删除公钥并重新加载服务；取消、锁屏、用户切换、睡眠、超时或退出均使操作失效。此操作不开放桌面配对广播、不接受手机登记、不修改密码副本，也不弹出旧托盘气泡通知。移除成功在状态详情记为 `enrollment_removed`，不向手机发送此内部结果。
+
+点击配对立即 UAC 已接入产品。窗口先等待手机，显示后经受限本地命名管道发送就绪信号；托盘核对实际提权进程 ID 后才广播。公钥只传递一次，提权端核对实际托盘进程 ID、原进程 SID 和控制台身份，并独立验证 P-256 公钥，再于同一窗口核对。通道限定原用户、管理员及 SYSTEM，拒绝远程客户端。两分钟从托盘点击开始计时，工具等待阶段也接收取消、会话和睡眠变化。用户明确要求跳过独立通信实验，新探针已移除；Windows 交互已获用户确认；完整登记及跨管理员产品通信仍待实测，测试暂缓。
+
+## 当前验证状态（2026-10-02）
+
+用户已确认 Windows 方面的交互符合预期。本记录覆盖用户对当前 Windows 交互的总体反馈，不将首次登记后解锁、更换后旧手机失效、移除后的实际效力、密码副本不变、另一管理员凭据通信及取消／超时／失败专项分别记为通过。iOS 改动及完整两端蓝牙登记仍待验证，用户明确暂缓后续测试；原子保存回归用例也未由代理编译或执行。
+
+安装器、System32 部署、普通权限登录任务、Update 停止／替换／恢复和卸载仍为独立后续阶段，尚未实施。暂缓测试不表示蓝牙登记已经最终验收。

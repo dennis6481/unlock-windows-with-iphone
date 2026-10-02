@@ -3,6 +3,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -25,7 +26,7 @@ public:
     EnrollmentStore& operator=(const EnrollmentStore&) = delete;
 
     [[nodiscard]] std::optional<EnrollmentRecord> load() const;
-    void save(const EnrollmentRecord& record) const;
+    void save(const EnrollmentRecord& record, const std::function<void()>& beforeCommit = {}) const;
     void remove() const;
 
     [[nodiscard]] const std::wstring& path() const noexcept {
@@ -35,6 +36,7 @@ public:
     [[nodiscard]] static std::string fingerprint(
         const std::vector<std::uint8_t>& rawPublicKey
     );
+    static void validatePublicKey(const std::vector<std::uint8_t>& rawPublicKey);
 
 private:
     std::wstring path_;

@@ -2,28 +2,70 @@
 
 # PairingTool
 
-`unlock_pairing_tool.exe` is the current Windows-side first-enrollment prototype. It receives the iPhone's raw P-256 public key as 130 hexadecimal characters, displays its SHA-256 fingerprint, and shows a Windows notification with explicit Confirm/Cancel buttons.
+`unlock_pairing_tool.exe` 是公钥登记的短期提权工具。用户从普通权限 GATT 托盘点击配对／更换，host 立即从自身目录通过一次 UAC 启动此工具。窗口先等待手机，工具就绪后才开启配对广播；手机经 BLE 发送公钥后，同一窗口切换到指纹核对，不再请求第二次 UAC。工具显示实际控制台账户和完整 SHA-256 指纹（每八字符分组），用户核对并确认才保存。2026-10-02 用户确认 Windows 交互符合预期；完整登记验收暂缓，代理未执行产品构建或运行；同账户及另一管理员 UAC 的独立身份查询实验已获用户 `PASS` 截图，实验源码和产物已移除。
+
+## 蓝牙登记入口
+
+host 与工具必须在同一目录。内部入口为 `--bluetooth <pipe-name> <first|replace> <session> <sid> <deadline> <cancel-event> <parent-pid>`；只能由当前配对流程提供，用户无需复制或输入公钥。工具独立核对实际控制台、目标 SID、已解锁状态、deadline、管理员提升状态、取消事件和父进程存活。取消事件使用当前控制台用户与管理员可读取的明确 ACL，提权工具只请求同步读取权限。
+
+UAC 通过后显式显示专用窗口，等待手机后在同一窗口核对冻结候选（提权启动使用 `SW_SHOWNORMAL`），不再创建 Start Menu 通知快捷方式或走 toast 超时确认路径。另一管理员凭据仅用于提升写入权限，保存账户始终来自实际物理控制台。锁屏、会话变化、睡眠、取消、超时或父进程退出使本次确认失效；保存前及临时文件替换前再次核对。所有手工和蓝牙修改入口共用受保护全局互斥；已有其他写入者时明确返回 busy，不等待并发覆盖。
+
+首次模式禁止覆盖已有不同公钥，更换模式要求存在旧记录；确认前后核对旧记录未变。相同公钥和目标 SID 也先弹出完整指纹核对窗口；确认后仅重新加载服务并返回已登记，不重写文件。完整流程与待验收项见 [GATT host](../GattHost/README.md#蓝牙公钥登记代码已接入产品待验收)。
+
+## 显式手工操作
+
+以下入口仍保留，须在已解锁物理控制台以管理员权限运行；它们也使用实际控制台 SID 和同一指纹确认窗口。
 
 ```powershell
 .\windows\build\unlock_pairing_tool.exe --key-hex <130-hex-digit-public-key>
 ```
 
-The iOS app can copy the raw public key to the clipboard. After copying it, the shorter Windows command avoids putting the key in shell history:
+iPhone 的复制公钥功能仍可用于显式手工登记。将公钥传到 Windows 剪贴板后运行：
 
 ```powershell
 .\windows\build\unlock_pairing_tool.exe --key-clipboard
 ```
 
-The key is written only after Confirm is selected. It is stored at `%ProgramData%\UnlockWindowsWithIPhone\enrollment.dat`, protected with DPAPI machine scope and an ACL for SYSTEM, Administrators and the file owner. Use `--replace` for an intentional replacement:
+记录位于 `%ProgramData%\UnlockWindowsWithIPhone\enrollment.dat`，沿用 DPAPI machine scope、文件格式及 SYSTEM／Administrators／创建账户的受保护 ACL。保存使用同目录受保护临时文件，完整写入、刷新并核对取消／旧记录后原子替换；失败保留原文件，不退回原地写入。主动更换使用：
 
 ```powershell
 .\windows\build\unlock_pairing_tool.exe --key-hex <130-hex-digit-public-key> --replace
 ```
 
-To remove the enrolled key, the tool requires typing `REMOVE`:
+删除登记要求输入 `REMOVE`，随后在可见窗口确认：
 
 ```powershell
 .\windows\build\unlock_pairing_tool.exe --clear
 ```
 
-This is a foreground prototype. It creates a per-user Start Menu shortcut with an AppUserModelID so the unpackaged desktop executable can use an interactive toast. If Windows accepts the toast but does not surface it, the tool falls back to a visible Yes/No confirmation dialog after a short timeout. The final installation should provide that identity through the packaged/installer deployment. The current GATT host does not pass enrollment data to this tool; copy the public key explicitly and confirm it on Windows.
+## 结果与验证状态
+
+保存前检查服务重新加载可用，保存后再次重新加载，清除旧 challenge／批准。文件提交后加载失败不回滚，明确显示“已保存，服务加载失败”，返回失败并由手机显示同一事实。BLE 写入应答不表示完成；成功要求文件与服务均完成更新。
+
+| 退出码 | 含义 |
+| --- | --- |
+| 0 | 保存／删除并重新加载成功 |
+| 1 | 具体操作失败，窗口显示错误 |
+| 3 | 用户／父进程取消 |
+| 4 | 超时 |
+| 5 | 目标控制台失效 |
+| 6 | 首次／更换模式或记录状态被拒绝 |
+| 7 | 同一手机与账户已登记，服务已重新加载 |
+| 8 | 文件已保存／删除，但服务重新加载失败 |
+| 9 | 另一个登记修改入口持有互斥 |
+
+产品仍待首次／更换、两种 UAC、非法公钥、重复候选、UAC／确认期间取消、保存失败及服务加载失败的实体机验收。安装器尚未部署此工具或 GATT EXE，没有登录自动启动。
+
+2026-10-02：核对窗口显示及重复登记确认路径已修正，随后用户确认 Windows 交互符合预期；重复登记不重写文件等专项仍未逐项验收。登记结果不再使用托盘气泡通知。
+
+## 托盘移除入口（2026-10-02，Windows 交互已获用户确认）
+
+托盘移除手机登记通过内部参数 `--bluetooth clear remove <session> <SID> <deadline> <cancelEvent> <parentPID>` 请求一次 UAC，再显示目标账户与明确删除确认按钮。该入口不读取终端 `REMOVE`，也不依赖通知；现有手工 `--clear` 仍要求输入 `REMOVE` 并确认窗口。确认前和删除前检查实际控制台、取消事件、父进程、截止时间及旧登记未变。删除后重新加载失败明确显示登记已移除但服务加载失败，不自动恢复旧记录。密码副本不变。用户已确认 Windows 交互符合预期；删除效力、密码副本不变及失败专项仍待验收，测试暂缓。
+
+提前 UAC 已接入：参数传递本次受限管道名称而不是公钥，工具核对管道实际服务端进程 ID、原进程 SID 及物理控制台身份。显示等待窗口后发就绪信号，公钥到达后独立验证、冻结并显示完整指纹；确认按钮在此之前禁用。所有管道 I/O 使用 overlapped 并由窗口定时轮询，不阻塞会话消息处理。用户明确要求跳过独立通信实验，新探针已删除。Windows 交互已获用户符合预期的反馈；上述路径的两端完整登记、跨管理员通信及取消专项仍待验收，测试暂缓。
+
+## 当前验证状态（2026-10-02）
+
+用户已确认 Windows 方面的交互符合预期。本记录覆盖用户对当前 Windows 交互的总体反馈，不将首次登记后解锁、更换后旧手机失效、移除后的实际效力、密码副本不变、另一管理员凭据通信及取消／超时／失败专项分别记为通过。iOS 改动及完整两端蓝牙登记仍待验证，用户明确暂缓后续测试；原子保存回归用例也未由代理编译或执行。
+
+安装器、System32 部署、普通权限登录任务、Update 停止／替换／恢复和卸载仍为独立后续阶段，尚未实施。暂缓测试不表示蓝牙登记已经最终验收。

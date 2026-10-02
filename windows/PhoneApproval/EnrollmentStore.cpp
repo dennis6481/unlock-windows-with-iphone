@@ -76,16 +76,30 @@ void requireWin32(const BOOL result, const char* operation) {
 
 void requireNtStatus(const NTSTATUS status, const char* operation) {
     if (status < 0) {
-        throw std::runtime_error(std::string(operation) + " failed");
+        throw std::runtime_error(std::string(operation) + " failed: NTSTATUS=" +
+            std::to_string(static_cast<std::uint32_t>(status)));
     }
 }
 
-void validatePublicKey(const std::vector<std::uint8_t>& rawPublicKey) {
+void validateEnrollmentKey(const std::vector<std::uint8_t>& rawPublicKey) {
     if (rawPublicKey.size() != kRawPublicKeySize || rawPublicKey.front() != 0x04) {
         throw std::invalid_argument(
             "enrollment key must be a 65-byte uncompressed P-256 X9.63 public key"
         );
     }
+    BCRYPT_ALG_HANDLE algorithm = nullptr;
+    requireNtStatus(BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_ECDSA_P256_ALGORITHM, nullptr, 0),
+        "BCryptOpenAlgorithmProvider(P-256)");
+    BCRYPT_ECCKEY_BLOB header{BCRYPT_ECDSA_PUBLIC_P256_MAGIC, 32};
+    std::array<std::uint8_t, sizeof(header) + 64> blob{};
+    std::memcpy(blob.data(), &header, sizeof(header));
+    std::memcpy(blob.data() + sizeof(header), rawPublicKey.data() + 1, 64);
+    BCRYPT_KEY_HANDLE key = nullptr;
+    const NTSTATUS status = BCryptImportKeyPair(algorithm, nullptr, BCRYPT_ECCPUBLIC_BLOB, &key,
+        blob.data(), static_cast<ULONG>(blob.size()), 0);
+    if (key) BCryptDestroyKey(key);
+    BCryptCloseAlgorithmProvider(algorithm, 0);
+    requireNtStatus(status, "BCryptImportKeyPair(P-256 public key)");
 }
 
 void ensureParentDirectory(const std::wstring& path) {
@@ -216,7 +230,7 @@ std::vector<std::uint8_t> unprotect(
 }
 
 std::vector<std::uint8_t> serializeRecord(const EnrollmentRecord& record) {
-    validatePublicKey(record.publicKey);
+    validateEnrollmentKey(record.publicKey);
     if (record.accountSid.empty() ||
         record.accountSid.size() * sizeof(wchar_t) > kMaxAccountSidBytes ||
         record.accountSid.size() * sizeof(wchar_t) > UINT16_MAX) {
@@ -272,7 +286,7 @@ EnrollmentRecord parseRecord(const std::vector<std::uint8_t>& plaintext) {
         plaintext.begin() + sizeof(header),
         plaintext.begin() + sizeof(header) + header.publicKeySize
     );
-    validatePublicKey(result.publicKey);
+    validateEnrollmentKey(result.publicKey);
     result.accountSid.resize(header.accountSidBytes / sizeof(wchar_t));
     std::memcpy(
         result.accountSid.data(),
@@ -382,7 +396,7 @@ std::optional<EnrollmentRecord> EnrollmentStore::load() const {
     const HANDLE file = CreateFileW(
         path_.c_str(),
         GENERIC_READ,
-        FILE_SHARE_READ,
+        FILE_SHARE_READ | FILE_SHARE_DELETE,
         nullptr,
         OPEN_EXISTING,
         FILE_ATTRIBUTE_NORMAL,
@@ -425,7 +439,7 @@ std::optional<EnrollmentRecord> EnrollmentStore::load() const {
     return parseRecord(unprotect(bytes.data() + sizeof(header), header.encryptedSize));
 }
 
-void EnrollmentStore::save(const EnrollmentRecord& record) const {
+void EnrollmentStore::save(const EnrollmentRecord& record, const std::function<void()>& beforeCommit) const {
     ensureParentDirectory(path_);
     const auto encrypted = protect(serializeRecord(record));
     if (encrypted.empty() || encrypted.size() > UINT16_MAX) {
@@ -437,40 +451,54 @@ void EnrollmentStore::save(const EnrollmentRecord& record) const {
         kFileVersion,
         static_cast<std::uint16_t>(encrypted.size())
     };
+    std::array<std::uint8_t, 16> nonce{};
+    requireNtStatus(BCryptGenRandom(nullptr, nonce.data(), static_cast<ULONG>(nonce.size()),
+        BCRYPT_USE_SYSTEM_PREFERRED_RNG), "BCryptGenRandom(enrollment temporary file)");
+    std::wstring temporary = path_ + L".pending-";
+    constexpr wchar_t alphabet[] = L"0123456789abcdef";
+    for (const auto value : nonce) {
+        temporary += alphabet[value >> 4];
+        temporary += alphabet[value & 15];
+    }
     PSECURITY_DESCRIPTOR descriptor = nullptr;
     auto attributes = protectedFileAttributes(descriptor);
     const HANDLE file = CreateFileW(
-        path_.c_str(),
+        temporary.c_str(),
         GENERIC_WRITE,
         0,
         &attributes,
-        CREATE_ALWAYS,
+        CREATE_NEW,
         FILE_ATTRIBUTE_NORMAL,
         nullptr
     );
+    const DWORD creationError = GetLastError();
     LocalFree(descriptor);
     if (file == INVALID_HANDLE_VALUE) {
+        SetLastError(creationError);
         throw std::runtime_error(win32Error("CreateFileW(enrollment write)"));
     }
 
-    DWORD written = 0;
-    const bool headerWritten = WriteFile(
-        file,
-        &header,
-        sizeof(header),
-        &written,
-        nullptr
-    ) != FALSE && written == sizeof(header);
-    const bool bodyWritten = headerWritten && WriteFile(
-        file,
-        encrypted.data(),
-        static_cast<DWORD>(encrypted.size()),
-        &written,
-        nullptr
-    ) != FALSE && written == encrypted.size();
-    const bool flushed = bodyWritten && FlushFileBuffers(file) != FALSE;
-    CloseHandle(file);
-    requireWin32(flushed, "WriteFile(enrollment)");
+    bool open = true;
+    try {
+        DWORD written = 0;
+        requireWin32(WriteFile(file, &header, sizeof(header), &written, nullptr), "WriteFile(enrollment header)");
+        if (written != sizeof(header)) throw std::runtime_error("Incomplete enrollment header write");
+        requireWin32(WriteFile(file, encrypted.data(), static_cast<DWORD>(encrypted.size()), &written, nullptr),
+            "WriteFile(enrollment body)");
+        if (written != encrypted.size()) throw std::runtime_error("Incomplete enrollment body write");
+        requireWin32(FlushFileBuffers(file), "FlushFileBuffers(enrollment)");
+        requireWin32(CloseHandle(file), "CloseHandle(enrollment temporary file)");
+        open = false;
+        if (beforeCommit) beforeCommit();
+        requireWin32(MoveFileExW(temporary.c_str(), path_.c_str(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH), "MoveFileExW(enrollment commit)");
+    } catch (const std::exception& error) {
+        std::string message = error.what();
+        if (open && !CloseHandle(file)) message += "; " + win32Error("CloseHandle(enrollment temporary file)");
+        if (!DeleteFileW(temporary.c_str())) message += "; " + win32Error("DeleteFileW(enrollment temporary file)");
+        if (message != error.what()) throw std::runtime_error(message);
+        throw;
+    }
 }
 
 void EnrollmentStore::remove() const {
@@ -486,7 +514,7 @@ void EnrollmentStore::remove() const {
 std::string EnrollmentStore::fingerprint(
     const std::vector<std::uint8_t>& rawPublicKey
 ) {
-    validatePublicKey(rawPublicKey);
+    validateEnrollmentKey(rawPublicKey);
     const auto digest = sha256(rawPublicKey);
     constexpr char alphabet[] = "0123456789abcdef";
     std::string result;
@@ -496,6 +524,10 @@ std::string EnrollmentStore::fingerprint(
         result.push_back(alphabet[value & 0x0f]);
     }
     return result;
+}
+
+void EnrollmentStore::validatePublicKey(const std::vector<std::uint8_t>& rawPublicKey) {
+    validateEnrollmentKey(rawPublicKey);
 }
 
 } // namespace unlock_windows::phone_approval

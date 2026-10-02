@@ -6,7 +6,7 @@
 
 当前磁贴只有图标、标题和 **Unlock** 按钮。它不接受手输密码，也没有“使用保存凭据”复选框或绕过手机批准的测试模式。
 
-提交时 Provider：
+获得手机批准后的自动提交时 Provider：
 
 1. 从 `ICredentialProviderSetUserArray` 获取 Windows 提供的 SID、Primary SID、QualifiedUserName 和 provider ID，并在当前 console 身份匹配时同步身份快照，供 Manager 的 Refresh 使用。
 2. 提交时再次核对当前 active console session 与 SID。
@@ -18,7 +18,11 @@
 
 安装、更新和卸载只由 `unlock_windows_components_wizard.exe` 负责。不要手工注册 DLL，也不要恢复已经删除的 PowerShell 安装脚本。
 
-该实现先完成了物理 Windows 机器已有 Microsoft Account 会话的手动解锁。2026-10-02 用户确认“手机批准 + 不点击 Windows 磁贴 + 自动解锁”通过，并确认无新批准时保持锁定、重新批准后再次自动解锁、原生 PIN/密码可用。此前手动路径继续保留；完整负面路径尚未验收。
+该实现先完成了物理 Windows 机器已有 Microsoft Account 会话的手动解锁。2026-10-02 用户确认“手机批准 + 不点击 Windows 磁贴 + 自动解锁”通过，并确认无新批准时保持锁定、重新批准后再次自动解锁、原生 PIN/密码可用。2026-10-03 手动箭头已改为发起认证，新入口及完整负面路径尚未验收。
+
+## 当前箭头行为（2026-10-03，待验收）
+
+手动点击 **Unlock** 提交箭头调用 `beginPhoneAuthentication`，返回不含凭据的等待状态，不同步等待蓝牙或领取密码。工作线程同时查询当前请求失败信息，经原有消息窗口在 COM 所在线程更新磁贴提示。请求 ID 防止旧失败说明覆盖新请求，通信失败或五秒无响应显示明确错误。有效手机批准仍触发现有一次自动提交；该分支不会再发起 challenge。仅枚举/选择磁贴不发起认证。
 
 ## 自动提交（2026-10-02，实体机正常路径通过）
 
@@ -26,7 +30,7 @@ Provider 在 `Advise` 和有效用户身份均就绪后启动工作线程，每 
 
 服务对同一批准只发出一次 offer，包括 CP 重建或管道回复丢失的情况。CP 的工作线程不调用 COM 事件接口；它向 `Advise` 所在线程的 message-only window 投递消息，由该线程调用 `CredentialsChanged()`。`UnAdvise` 或身份变化会停止并回收工作线程；同一身份的重新枚举保留尚待提交的 offer。
 
-`GetCredentialCount()` 对尚未过期的 offer 只返回一次默认磁贴 0 和 `pbAutoLogonWithDefault=TRUE`。LogonUI 随后调用 `GetSerialization()`，Provider 将当次 capture 返回的 nonce 与 offer 比较，再走已验证的领取和 Negotiate 打包路径。服务每次手机批准生成新的 nonce。领取后打包或密码认证失败不会恢复 grant，也不会重新发出 offer；重试需要新的手机批准。自动提交通知无法交付时，尚未消费且有效的批准仍可由现有手动 **Unlock** 领取。
+`GetCredentialCount()` 对尚未过期的 offer 只返回一次默认磁贴 0 和 `pbAutoLogonWithDefault=TRUE`。LogonUI 随后调用 `GetSerialization()`，Provider 将当次 capture 返回的 nonce 与 offer 比较，再走已验证的领取和 Negotiate 打包路径。服务每次手机批准生成新的 nonce。领取后打包或密码认证失败不会恢复 grant，也不会重新发出 offer；重试需要新的手机批准。自动提交通知无法交付时保留错误，不用手动箭头绕过本次自动提交；有效授权未消费期间重复发起被拒绝。
 
 自动提交正常路径已获用户实测确认，不代表 iPhone 或 GATT 已支持后台运行。目标仅为已有会话的锁屏解锁，重启后首次登录明确不支持手机登录。已有会话、原生 PIN/密码入口及服务端身份、session、锁屏校验继续适用；CP 重建、重复枚举和失败后的自动行为仍待专项验收。
 

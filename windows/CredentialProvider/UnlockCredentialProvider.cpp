@@ -71,6 +71,8 @@ struct ApprovalWatch final {
     HANDLE stop = nullptr;
     std::mutex mutex;
     std::optional<unlock_windows::saved_credential::AutoSubmitOffer> offer;
+    std::wstring failure;
+    std::string failureRequestId;
     std::thread worker;
 
     ~ApprovalWatch() {
@@ -116,6 +118,37 @@ struct ApprovalWatch final {
                     }
                 }
                 previousError = status;
+                SensitiveBytes statusRequest;
+                Packet statusReply;
+                std::wstring latest;
+                std::string latestRequestId;
+                if (!encodeIdentity(identity, statusRequest)) {
+                    latest = L"Could not encode the phone authentication status request.";
+                    logAutoSubmitError(L"phone status identity encoding", E_INVALIDARG);
+                } else if (!call(Operation::phoneAuthenticationStatus, std::move(statusRequest), statusReply, 250, &diagnostics)) {
+                    latest = L"Phone authentication service communication failed. Click the arrow again.";
+                    logAutoSubmitError(L"phone authentication status", HRESULT_FROM_WIN32(diagnostics.win32Error));
+                } else if (statusReply.result == Result::success) {
+                    const std::string text(statusReply.payload.value.begin(), statusReply.payload.value.end());
+                    if (!text.empty() && text.size() < 36) {
+                        latest = L"Invalid phone authentication status response.";
+                        logAutoSubmitError(L"phone status framing", HRESULT_FROM_WIN32(ERROR_INVALID_DATA));
+                    } else if (text.size() >= 36) {
+                        latestRequestId = text.substr(0, 36);
+                        latest.assign(text.begin() + 36, text.end());
+                    }
+                } else {
+                    latest = L"Phone authentication status was rejected by the service.";
+                }
+                {
+                    std::lock_guard lock(mutex);
+                    failure = latest;
+                    failureRequestId = latestRequestId;
+                }
+                if (!PostMessageW(window, kApprovalMessage, generation, 0)) {
+                    logAutoSubmitError(L"phone status PostMessage", HRESULT_FROM_WIN32(GetLastError()));
+                    return;
+                }
                 const DWORD waited = WaitForSingleObject(stop, 500);
                 if (waited == WAIT_OBJECT_0) return;
                 if (waited != WAIT_TIMEOUT) {
@@ -632,6 +665,25 @@ public:
         return E_INVALIDARG;
     }
 
+    void showAuthenticationStatus(const std::wstring& text) {
+        if (events_ != nullptr) {
+            const HRESULT result = events_->SetFieldString(this, kTitleField,
+                text.empty() ? L"Unlock with iPhone" : text.c_str());
+            if (FAILED(result)) logAutoSubmitError(L"authentication status field", result);
+        }
+    }
+
+    void updateAuthenticationFailure(const std::string& requestId, const std::wstring& failure) {
+        if (!authenticationPending_) return;
+        if (!failure.empty() && (requestId.empty() || requestId == authenticationRequestId_)) {
+            authenticationPending_ = false;
+            showAuthenticationStatus(failure);
+        } else if (GetTickCount64() >= authenticationDeadline_) {
+            authenticationPending_ = false;
+            showAuthenticationStatus(L"Phone authentication timed out. Click the arrow again.");
+        }
+    }
+
     HRESULT STDMETHODCALLTYPE GetSerialization(
         CREDENTIAL_PROVIDER_GET_SERIALIZATION_RESPONSE* response,
         CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION* serialization,
@@ -675,6 +727,43 @@ public:
         }
         if (consoleSessionId != consoleSessionId_ || consoleSid != userSid_) {
             return copyString(L"The selected account is not the active console user.", optionalStatusText);
+        }
+
+        if (!automaticApproval) {
+            try {
+                using namespace unlock_windows::saved_credential;
+                SensitiveBytes request;
+                Packet reply;
+                CallDiagnostics diagnostics;
+                const Identity identity{userSid_, qualifiedUserName_, providerId_};
+                if (!encodeIdentity(identity, request)) {
+                    logAutoSubmitError(L"phone authentication identity encoding", E_INVALIDARG);
+                    return copyString(L"Could not encode the selected Windows identity.", optionalStatusText);
+                }
+                if (!call(Operation::beginPhoneAuthentication, std::move(request), reply, 250, &diagnostics)) {
+                    logAutoSubmitError(L"begin phone authentication", HRESULT_FROM_WIN32(diagnostics.win32Error));
+                    return copyString(L"Could not contact the phone authentication service.", optionalStatusText);
+                }
+                if (reply.result != Result::success) {
+                    const std::string text(reply.payload.value.begin(), reply.payload.value.end());
+                    const std::wstring message(text.begin(), text.end());
+                    return copyString(message.empty() ? L"Phone authentication is unavailable for this account." :
+                        message.c_str(), optionalStatusText);
+                }
+                if (reply.payload.value.size() != 36) {
+                    logAutoSubmitError(L"phone request framing", HRESULT_FROM_WIN32(ERROR_INVALID_DATA));
+                    return copyString(L"Invalid phone authentication request response.", optionalStatusText);
+                }
+                authenticationRequestId_.assign(reply.payload.value.begin(), reply.payload.value.end());
+                authenticationPending_ = true;
+                authenticationDeadline_ = GetTickCount64() + 5000;
+                showAuthenticationStatus(L"Waiting for iPhone RSSI approval...");
+                *optionalStatusIcon = CPSI_NONE;
+                return copyString(L"Waiting for iPhone RSSI approval...", optionalStatusText);
+            } catch (const std::bad_alloc&) {
+                logAutoSubmitError(L"phone authentication allocation", E_OUTOFMEMORY);
+                return E_OUTOFMEMORY;
+            }
         }
 
         ULONG authenticationPackage = 0;
@@ -829,15 +918,20 @@ public:
         providerId_ = GUID{};
         consoleSessionId_ = 0xffffffff;
         automaticApproval_.reset();
+        authenticationPending_ = false;
     }
 
     void armAutomaticSubmission(const std::array<std::uint8_t,
             unlock_windows::saved_credential::kNonceSize>& nonce) noexcept {
+        authenticationPending_ = false;
         automaticApproval_ = nonce;
     }
 
 private:
     std::atomic<ULONG> refCount_{1};
+    bool authenticationPending_ = false;
+    ULONGLONG authenticationDeadline_ = 0;
+    std::string authenticationRequestId_;
     ICredentialProviderCredentialEvents* events_ = nullptr;
     std::wstring userSid_;
     std::wstring primarySid_;
@@ -1247,10 +1341,15 @@ private:
     void approvalArrived(const UINT_PTR generation) noexcept {
         if (!watch_ || generation != watchGeneration_ || !hasUserSid_ || events_ == nullptr) return;
         std::optional<unlock_windows::saved_credential::AutoSubmitOffer> offer;
+        std::wstring failure;
+        std::string failureRequestId;
         {
             std::lock_guard lock(watch_->mutex);
             offer = std::exchange(watch_->offer, std::nullopt);
+            failure = watch_->failure;
+            failureRequestId = watch_->failureRequestId;
         }
+        credential_->updateAuthenticationFailure(failureRequestId, failure);
         if (!offer || GetTickCount64() >= offer->expiresAt ||
             WTSGetActiveConsoleSessionId() != consoleSessionId_) return;
         pendingAutomaticOffer_ = offer;

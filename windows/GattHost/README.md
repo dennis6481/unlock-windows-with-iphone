@@ -32,10 +32,10 @@ Start-Process -FilePath '.\windows\build\unlock_gatt_host.exe'
 
 - service UUID：`F1E2D3C4-B5A6-4789-8012-3456789ABCDE`。
 - request / challenge / assertion / result UUID 分别以 `ABCD1` / `ABCD2` / `ABCD3` / `ABCD4` 结尾。
-- 正常认证 request 接受一个字节 `0x01`，经受限 phone-only IPC 请求服务签发 challenge；有效配对窗口另接受 `0x02 + 65 字节未压缩 P-256 公钥`，不走认证 IPC。配对期间不处理认证 request 或 assertion。
-- challenge 通知服务返回的 JSON；assertion 原样转交服务；result 转发服务结果，例如 `unlock_approved`、`not_ready` 或拒绝原因。
+- 正常认证由 Windows 磁贴箭头经 LogonUI IPC 发起，host 在锁屏生命周期检查中从 phone-only IPC 单次领取 challenge；旧 `0x01` 不再接受。request 接受拒绝帧 `0x03 + 36 字节小写 ASCII requestID + 1 字节原因`；有效配对窗口另接受 `0x02 + 65 字节未压缩 P-256 公钥`，不走认证 IPC。配对期间不处理认证 request 或 assertion。
+- challenge 定向通知唯一同时订阅 challenge/result 的活动连接；没有或有多个合格连接时本次立即失败，不等待连接。assertion 原样转交服务，但只接收本次投递会话；result 定向回到该会话，并携带 requestID，例如 `unlock_approved` 或明确拒绝状态。
 - 公钥通过 GATT 发送后，由已解锁控制台上的提权 `unlock_pairing_tool` 人工核对完整指纹并保存。BLE 写入应答不是登记成功；其他连接不接收本次登记结果。
-- 密码保管、验签、一次性批准、CP 自动提交和 iPhone 前台操作保持现有实现。
+- 密码保管、验签、一次性批准和 CP 自动提交保留；iPhone 新增 RSSI 自动响应，后台/锁屏仍待实机验收。
 
 ## 实体机验收（记录与待验证项）
 
@@ -53,7 +53,7 @@ Start-Process -FilePath '.\windows\build\unlock_gatt_host.exe'
 6. 分别验证手机断开重连、快速锁屏／解锁、蓝牙关闭再开启、睡眠恢复：核对实际会话状态，桌面不因旧事件继续广播。恢复失败保留具体错误，并在托盘重新检查。
 7. 注销应退出；重新登录应由 Run 自动启动。自启项注册已获用户确认，实际重新登录自启待单独确认。账户切换、非控制台会话及查询失败继续单列。
 
-每项记录“观察结果／失败错误／未验证条件”，不要仅以手机连接状态推断广播状态。若保留连接导致重复认证失败，先复现并记录证据，再考虑最小修改 `ios/Core/BluetoothAuthenticator.swift` 复用连接和有效订阅、重发一次认证请求；本轮未修改 iOS，不加入后台扫描或自动批准。
+每项记录“观察结果／失败错误／未验证条件”，不要仅以手机连接状态推断广播状态。2026-10-03 已修改 iOS 连接复用与订阅恢复，不再由手机重发认证请求；新的 Windows 箭头触发与 RSSI 自动批准路径待实机验收，旧前台测试不能代替新路径。
 
 ## 蓝牙公钥登记（代码已接入，产品待验收）
 

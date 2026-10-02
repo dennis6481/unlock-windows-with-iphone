@@ -14,12 +14,18 @@
 
 服务使用两条 named pipe：
 
-- phone pipe 只接受 `issuePhoneChallenge` 和 `submitPhoneAssertion`，供前台 GATT transport 使用；
+- phone pipe 只接受 `takePhoneChallenge`、`reportPhoneFailure` 和 `submitPhoneAssertion`，供 GATT transport 投递和完成已有请求使用；不能签发新请求；
 - saved-credential pipe 接受身份、密码维护和领取操作，并对管理员、物理 console、锁屏状态与 LogonUI 调用方分别校验。
 
 有效 assertion 必须同时满足登记公钥、登记 SID、保存凭据身份、active console session 和当前 challenge。成功后服务创建 120 秒 grant。`claimCredential` 在返回密码前先清除 grant，因此后续 Windows 密码校验失败也不会让同一批准再次使用。
 
-自动提交增加 `takeAutoSubmitOffer`，仅允许当前锁屏 console 的合格 LogonUI 以完整身份申请。没有尚未发出的匹配批准时返回空成功回复；有匹配批准时在服务内先不可逆标记 offer 已发出，再返回 nonce 和 grant 到期时间，不返回密码。不论 CP 重建或通知丢失，同一批准都不会再次获得自动提交通知。密码的消费仍发生于 `claimCredential`，手动按钮可领取尚未消费的有效 grant。每次手机批准使用独立随机 nonce，延迟的自动提交不能领取另一份批准。2026-10-02 用户确认实体机自动解锁、无新批准不解锁、重新批准再次解锁及原生 PIN/密码回归通过；CP 重建、通知丢失和失败路径仍须专项验收。正常安装器 Update 也已确认通过，密码保管与公钥登记不走卸载清除路径。
+自动提交增加 `takeAutoSubmitOffer`，仅允许当前锁屏 console 的合格 LogonUI 以完整身份申请。没有尚未发出的匹配批准时返回空成功回复；有匹配批准时在服务内先不可逆标记 offer 已发出，再返回 nonce 和 grant 到期时间，不返回密码。不论 CP 重建或通知丢失，同一批准都不会再次获得自动提交通知。密码的消费仍发生于 `claimCredential`，箭头已改为发起新认证，不能直接领取已有 grant。每次手机批准使用独立随机 nonce，延迟的自动提交不能领取另一份批准。2026-10-02 用户确认实体机自动解锁、无新批准不解锁、重新批准再次解锁及原生 PIN/密码回归通过；CP 重建、通知丢失和失败路径仍须专项验收。正常安装器 Update 也已确认通过，密码保管与公钥登记不走卸载清除路径。
+
+## 箭头发起认证（2026-10-03，待验收）
+
+`beginPhoneAuthentication`（操作 9）仅接受锁屏控制台的合格 LogonUI，以完整 Identity 发起；与保存身份/登记一致才签发，回复 36 字节 ASCII requestID。同一时刻只保留一个请求，期限五秒。phone-only 的 `takePhoneChallenge`（13）请求为空，回复为空表示没有待投递请求，否则回复 `36 字节 requestID + challenge JSON`，服务在回复前标记已领取，不重复投递。`reportPhoneFailure`（14）载荷为 `36 字节 requestID + 1 字节原因`：1 信号不足、2 自动批准关闭、3 新 RSSI 不可用、4 没有有效连接、5 通知失败、6 手机拒绝/签名失败。有效拒绝结束本次请求，迟到请求 ID 不影响下一次认证。
+
+`phoneAuthenticationStatus`（15）仅允许 LogonUI 提交完整 Identity，回复为空或 `36 字节 requestID + ASCII 失败说明`。CP 将说明关联到当前请求；成功批准沿用 `takeAutoSubmitOffer` 和 `claimCredential`。超时、解锁、重新锁屏、会话变化和服务重启均不能继续旧请求；未领取的旧授权不能用于新锁屏周期。无构建或运行验证。
 
 ## Manager GUI
 

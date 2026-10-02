@@ -47,7 +47,7 @@ constexpr std::wstring_view kAssertionCharacteristicUuid = L"F1E2D3C4-B5A6-4789-
 constexpr std::wstring_view kResultCharacteristicUuid = L"F1E2D3C4-B5A6-4789-8012-3456789ABCD4";
 
 constexpr std::size_t kMaxTransportFrameSize = 4096;
-constexpr std::uint8_t kAuthenticateRequest = 0x01;
+constexpr std::uint8_t kRejectRequest = 0x03;
 constexpr std::uint8_t kEnrollmentRequest = 0x02;
 
 constexpr UINT kDispatch = WM_APP + 1;
@@ -198,8 +198,8 @@ public:
         );
         assertionWriteToken_ = assertionCharacteristic_.WriteRequested(
             [state = state_, this](GattLocalCharacteristic const&, GattWriteRequestedEventArgs const& args) {
-                finishRequest(state, args, [this](const std::vector<std::uint8_t>& bytes, const GattSession&, ULONGLONG) {
-                    if (!pairingActive) handleAssertionWrite(bytes);
+                finishRequest(state, args, [this](const std::vector<std::uint8_t>& bytes, const GattSession& session, ULONGLONG) {
+                    if (!pairingActive && isAuthenticationSession(session)) handleAssertionWrite(bytes);
                     else state_->record(L"Authentication assertion rejected during pairing", false);
                 });
             }
@@ -346,47 +346,103 @@ private:
             enrollmentRequest(bytes, session, receivedAt);
             return;
         }
-        if (bytes.size() == 1 && bytes.front() == kAuthenticateRequest) {
-            if (!pairingActive) handleAuthenticationRequest();
-            else state_->record(L"Authentication request rejected during pairing", false);
+        if (bytes.size() == 38 && bytes.front() == kRejectRequest && isAuthenticationSession(session) &&
+            std::string(bytes.begin() + 1, bytes.begin() + 37) == authenticationRequestId_ &&
+            (bytes.back() == 1 || bytes.back() == 2 || bytes.back() == 3 || bytes.back() == 6)) {
+            reportFailure(bytes.back());
             return;
         }
-
-        LogLine(state_, true) << "[GattHost] rejected request frame, got "
-                  << bytes.size() << " byte(s)\n";
+        LogLine(state_, true) << "[GattHost] rejected request frame, got " << bytes.size() << " byte(s)\n";
     }
 
-    void handleAuthenticationRequest() {
-        LogLine(state_, false) << "[GattHost] request frame received; asking saved-credential service for challenge\n";
-        unlock_windows::saved_credential::Packet response;
-        unlock_windows::saved_credential::CallDiagnostics diagnostics;
-        const bool received = unlock_windows::saved_credential::callPhone(
-                unlock_windows::saved_credential::Operation::issuePhoneChallenge,
-                unlock_windows::saved_credential::SensitiveBytes{}, response, 2000, &diagnostics);
-        if (!received || response.result != unlock_windows::saved_credential::Result::success ||
-            response.payload.value.empty()) {
-            const char* status = !received ? "service_unavailable" :
-                response.result == unlock_windows::saved_credential::Result::rejected ? "not_ready" : "service_error";
-            LogLine(state_, true) << "[GattHost] phone challenge failed: " << status << "\n";
-            if (!received) {
-                LogLine(state_, true) << "[GattHost] IPC stage="
-                    << to_string(unlock_windows::saved_credential::callStageName(diagnostics.stage))
-                    << " check=" << to_string(diagnostics.serverCheck)
-                    << " win32=" << diagnostics.win32Error << "\n";
+    bool isAuthenticationSession(const GattSession& session) const {
+        return authenticationSession_ && session && GetTickCount64() < authenticationDeadline_ &&
+            authenticationSession_.DeviceId().Id() == session.DeviceId().Id();
+    }
+
+    void reportFailure(std::uint8_t reason) {
+        using namespace unlock_windows::saved_credential;
+        const auto session = authenticationSession_;
+        const auto requestId = authenticationRequestId_;
+        authenticationSession_ = nullptr;
+        authenticationRequestId_.clear();
+        SensitiveBytes request;
+        request.value.assign(requestId.begin(), requestId.end());
+        request.value.push_back(reason);
+        Packet response;
+        CallDiagnostics diagnostics;
+        if (!callPhone(Operation::reportPhoneFailure, std::move(request), response, 250, &diagnostics) ||
+            response.result != Result::success) {
+            LogLine(state_, true) << "[GattHost] failure report failed, stage="
+                << to_string(callStageName(diagnostics.stage)) << " win32=" << diagnostics.win32Error;
+        }
+        if (session) {
+            const auto client = subscriber(session);
+            if (client) {
+                const char* status = reason == 1 ? "rssi_too_low" : reason == 2 ? "automatic_disabled" :
+                    reason == 3 ? "rssi_unavailable" : reason == 6 ? "signing_failed" : "transport_failed";
+                const std::string json = std::string("{\"authenticated\":false,\"status\":\"") + status +
+                    "\",\"requestID\":\"" + requestId + "\"}";
+                const auto notification = resultCharacteristic_.NotifyValueAsync(makeBuffer(json), client).get();
+                if (notification.Status() != GattCommunicationStatus::Success)
+                    state_->record(L"Phone rejection result delivery failed", true);
             }
-            logNotificationResults(resultCharacteristic_.NotifyValueAsync(
-                makeBuffer(std::string("{\"authenticated\":false,\"status\":\"") + status + "\"}")).get(), "result");
-            return;
         }
-
-        LogLine(state_, false) << "[GattHost] request accepted; service issued challenge\n";
-        LogLine(state_, false) << "[GattHost] challenge notification length=" << response.payload.value.size() << "\n";
-        logNotificationResults(
-            challengeCharacteristic_.NotifyValueAsync(makeBuffer(bytesAsText(response.payload.value))).get(),
-            "challenge"
-        );
     }
 
+public:
+    void pollAuthentication() {
+        using namespace unlock_windows::saved_credential;
+        if (authenticationSession_ && (GetTickCount64() >= authenticationDeadline_ ||
+            !subscriber(authenticationSession_))) {
+            reportFailure(4);
+        }
+        Packet response;
+        CallDiagnostics diagnostics;
+        if (!callPhone(Operation::takePhoneChallenge, SensitiveBytes{}, response, 250, &diagnostics)) {
+            const auto error = diagnostics.win32Error;
+            if (error != lastAuthenticationIpcError_) {
+                LogLine(state_, true) << "[GattHost] challenge polling failed, stage="
+                    << to_string(callStageName(diagnostics.stage)) << " win32=" << error;
+            }
+            lastAuthenticationIpcError_ = error;
+            return;
+        }
+        lastAuthenticationIpcError_ = NO_ERROR;
+        if (response.result != Result::success) {
+            LogLine(state_, true) << "[GattHost] challenge polling rejected, service result="
+                << static_cast<unsigned>(response.result);
+            return;
+        }
+        if (response.payload.value.empty()) return;
+        if (response.payload.value.size() <= 36) throw std::runtime_error("Invalid queued challenge frame");
+        authenticationRequestId_.assign(response.payload.value.begin(), response.payload.value.begin() + 36);
+        authenticationSession_ = nullptr;
+        authenticationDeadline_ = GetTickCount64() + 5000;
+        GattSubscribedClient target{nullptr};
+        if (!pairingActive) {
+            for (const auto& client : challengeCharacteristic_.SubscribedClients()) {
+                if (!subscriber(client.Session())) continue;
+                if (target) { reportFailure(4); return; }
+                target = client;
+            }
+        }
+        if (!target) { reportFailure(4); return; }
+        authenticationSession_ = target.Session();
+        try {
+            const std::string json(response.payload.value.begin() + 36, response.payload.value.end());
+            const auto result = challengeCharacteristic_.NotifyValueAsync(makeBuffer(json), target).get();
+            if (result.Status() != GattCommunicationStatus::Success) {
+                LogLine(state_, true) << "[GattHost] challenge delivery status=" << static_cast<int>(result.Status());
+                reportFailure(5);
+            }
+        } catch (...) {
+            state_->record(L"Challenge delivery: " + exceptionText(), true);
+            reportFailure(5);
+        }
+    }
+
+private:
     void handleAssertionWrite(const std::vector<std::uint8_t>& bytes) {
         if (bytes.empty() || bytes.size() > kMaxTransportFrameSize) {
             LogLine(state_, true) << "[GattHost] rejected assertion frame length=" << bytes.size() << "\n";
@@ -416,29 +472,36 @@ private:
 
         const char* failure = !received ? "service_unavailable" :
             response.result == unlock_windows::saved_credential::Result::rejected ? "not_ready" : "service_error";
-        const std::string result = received && response.result == unlock_windows::saved_credential::Result::success &&
+        std::string result = received && response.result == unlock_windows::saved_credential::Result::success &&
             !response.payload.value.empty()
             ? bytesAsText(response.payload.value)
             : std::string("{\"authenticated\":false,\"status\":\"") + failure + "\"}";
-        logNotificationResults(
-            resultCharacteristic_.NotifyValueAsync(makeBuffer(result)).get(),
-            "result"
-        );
-    }
-
-    void logNotificationResults(
-        const winrt::Windows::Foundation::Collections::IVectorView<GattClientNotificationResult>& results,
-        const char* name
-    ) {
-        for (const auto& result : results) {
-            if (result.Status() != GattCommunicationStatus::Success) {
-                LogLine(state_, true) << "[GattHost] " << name << " notification status="
-                          << static_cast<int>(result.Status()) << "\n";
-            }
+        if (result.find("request_mismatch") != std::string::npos) {
+            state_->record(L"Ignoring assertion for a different request", true);
+            return;
+        }
+        if (!result.empty() && result.back() == '}') {
+            result.pop_back();
+            result += ",\"requestID\":\"" + authenticationRequestId_ + "\"}";
+        }
+        const auto session = authenticationSession_;
+        authenticationSession_ = nullptr;
+        authenticationRequestId_.clear();
+        if (session) {
+            const auto client = subscriber(session);
+            if (client) {
+                const auto notification = resultCharacteristic_.NotifyValueAsync(makeBuffer(result), client).get();
+                if (notification.Status() != GattCommunicationStatus::Success)
+                    LogLine(state_, true) << "[GattHost] result delivery status=" << static_cast<int>(notification.Status());
+            } else state_->record(L"Authentication result subscriber disconnected", true);
         }
     }
 
     std::shared_ptr<CallbackState> state_;
+    GattSession authenticationSession_{nullptr};
+    std::string authenticationRequestId_;
+    ULONGLONG authenticationDeadline_ = 0;
+    DWORD lastAuthenticationIpcError_ = NO_ERROR;
     bool initialized_ = false;
     bool advertisingRequested_ = false;
     GattServiceProvider serviceProvider_{nullptr};
@@ -796,6 +859,7 @@ private:
                     host_.status() != GattServiceProviderAdvertisementStatus::StartedWithoutAllAdvertisementData)
                     host_.retryAdvertising();
                 host_.advertise(advertising);
+                if (locked) host_.pollAuthentication();
                 const auto status = host_.status();
                 lifecycleConfirmed = currentError.empty() && (advertising
                     ? status == GattServiceProviderAdvertisementStatus::Started

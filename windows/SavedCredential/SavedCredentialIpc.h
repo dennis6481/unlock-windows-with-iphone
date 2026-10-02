@@ -27,10 +27,13 @@ enum class Operation : std::uint16_t {
     clearCredential = 5,
     claimCredential = 7,
     clearForRemoval = 8,
-    issuePhoneChallenge = 9,
+    beginPhoneAuthentication = 9,
     submitPhoneAssertion = 10,
     reloadPhoneEnrollment = 11,
     takeAutoSubmitOffer = 12,
+    takePhoneChallenge = 13,
+    reportPhoneFailure = 14,
+    phoneAuthenticationStatus = 15,
 };
 
 inline constexpr bool isKnownOperation(const std::uint16_t value) noexcept {
@@ -42,10 +45,13 @@ inline constexpr bool isKnownOperation(const std::uint16_t value) noexcept {
     case Operation::clearCredential:
     case Operation::claimCredential:
     case Operation::clearForRemoval:
-    case Operation::issuePhoneChallenge:
+    case Operation::beginPhoneAuthentication:
     case Operation::submitPhoneAssertion:
     case Operation::reloadPhoneEnrollment:
     case Operation::takeAutoSubmitOffer:
+    case Operation::takePhoneChallenge:
+    case Operation::reportPhoneFailure:
+    case Operation::phoneAuthenticationStatus:
         return true;
     default:
         return false;

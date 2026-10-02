@@ -462,8 +462,10 @@ bool call(const Operation operation, SensitiveBytes&& request, Packet& reply, co
 
 bool callPhone(const Operation operation, SensitiveBytes&& request, Packet& reply, const DWORD waitMs,
                CallDiagnostics* const diagnostics) {
-    if (operation != Operation::issuePhoneChallenge && operation != Operation::submitPhoneAssertion) {
+    if (operation != Operation::takePhoneChallenge && operation != Operation::reportPhoneFailure &&
+        operation != Operation::submitPhoneAssertion) {
         SetLastError(ERROR_INVALID_PARAMETER);
+        if (diagnostics != nullptr) *diagnostics = {CallStage::requestValidation, ERROR_INVALID_PARAMETER};
         return false;
     }
     return callOnPipe(kPhonePipeName, operation, std::move(request), reply, waitMs, diagnostics);

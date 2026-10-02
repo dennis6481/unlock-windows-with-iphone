@@ -10,6 +10,7 @@
 #include <WtsApi32.h>
 #include <shellapi.h>
 #include <bcrypt.h>
+#include <objbase.h>
 
 #include <winrt/Windows.Devices.Bluetooth.GenericAttributeProfile.h>
 #include <winrt/Windows.Devices.Bluetooth.h>
@@ -45,6 +46,7 @@ constexpr std::wstring_view kRequestCharacteristicUuid = L"F1E2D3C4-B5A6-4789-80
 constexpr std::wstring_view kChallengeCharacteristicUuid = L"F1E2D3C4-B5A6-4789-8012-3456789ABCD2";
 constexpr std::wstring_view kAssertionCharacteristicUuid = L"F1E2D3C4-B5A6-4789-8012-3456789ABCD3";
 constexpr std::wstring_view kResultCharacteristicUuid = L"F1E2D3C4-B5A6-4789-8012-3456789ABCD4";
+constexpr std::wstring_view kComputerIdCharacteristicUuid = L"F1E2D3C4-B5A6-4789-8012-3456789ABCD5";
 
 constexpr std::size_t kMaxTransportFrameSize = 4096;
 constexpr std::uint8_t kRejectRequest = 0x03;
@@ -102,6 +104,35 @@ std::wstring exceptionText() {
 
 void requireWin32(BOOL result, const wchar_t* operation) {
     if (!result) throw hresult_error(HRESULT_FROM_WIN32(GetLastError()), operation);
+}
+
+std::string loadComputerId() {
+    HKEY key = nullptr;
+    const auto opened = RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\UnlockWindowsWithIPhone\\GattHost",
+        0, nullptr, 0, KEY_QUERY_VALUE | KEY_SET_VALUE, nullptr, &key, nullptr);
+    if (opened != ERROR_SUCCESS) throw hresult_error(HRESULT_FROM_WIN32(opened), L"Open persistent computer ID");
+    struct RegistryKey final {
+        HKEY value;
+        ~RegistryKey() { RegCloseKey(value); }
+    } registry{key};
+    GUID id{};
+    DWORD size = sizeof(id);
+    const auto read = RegGetValueW(key, nullptr, L"ComputerId", RRF_RT_REG_BINARY, nullptr, &id, &size);
+    if (read == ERROR_FILE_NOT_FOUND) {
+        check_hresult(CoCreateGuid(&id));
+        const auto written = RegSetValueExW(key, L"ComputerId", 0, REG_BINARY,
+            reinterpret_cast<const BYTE*>(&id), sizeof(id));
+        if (written != ERROR_SUCCESS) throw hresult_error(HRESULT_FROM_WIN32(written), L"Save persistent computer ID");
+        const auto flushed = RegFlushKey(key);
+        if (flushed != ERROR_SUCCESS) throw hresult_error(HRESULT_FROM_WIN32(flushed), L"Flush persistent computer ID");
+    } else {
+        if (read != ERROR_SUCCESS) throw hresult_error(HRESULT_FROM_WIN32(read), L"Read persistent computer ID");
+        if (size != sizeof(id) || IsEqualGUID(id, GUID{}))
+            throw hresult_error(E_FAIL, L"Stored computer ID is invalid; refusing to replace the registered identity");
+    }
+    wchar_t text[39]{};
+    if (StringFromGUID2(id, text, 39) != 39) throw hresult_error(E_FAIL, L"Format persistent computer ID");
+    return to_string(hstring(text + 1, 36));
 }
 
 IBuffer makeBuffer(const std::string& value) {
@@ -163,6 +194,7 @@ public:
     }
 
     void initialize(std::function<void()> statusChanged) {
+        const auto computerId = loadComputerId();
         const auto serviceResult = GattServiceProvider::CreateAsync(
             guid(kServiceUuid)
         ).get();
@@ -188,6 +220,16 @@ public:
             kResultCharacteristicUuid,
             GattCharacteristicProperties::Notify | GattCharacteristicProperties::Read
         );
+        GattLocalCharacteristicParameters identityParameters;
+        identityParameters.CharacteristicProperties(GattCharacteristicProperties::Read);
+        identityParameters.ReadProtectionLevel(GattProtectionLevel::Plain);
+        identityParameters.StaticValue(makeBuffer(computerId));
+        const auto identityResult = serviceProvider_.Service().CreateCharacteristicAsync(
+            guid(kComputerIdCharacteristicUuid), identityParameters).get();
+        if (identityResult.Error() != winrt::Windows::Devices::Bluetooth::BluetoothError::Success)
+            throw hresult_error(E_FAIL, hstring(L"Computer ID characteristic BluetoothError=" +
+                std::to_wstring(static_cast<int>(identityResult.Error()))));
+        computerIdCharacteristic_ = identityResult.Characteristic();
 
         requestWriteToken_ = requestCharacteristic_.WriteRequested(
             [state = state_, this](GattLocalCharacteristic const&, GattWriteRequestedEventArgs const& args) {
@@ -514,6 +556,7 @@ private:
     GattLocalCharacteristic challengeCharacteristic_{nullptr};
     GattLocalCharacteristic assertionCharacteristic_{nullptr};
     GattLocalCharacteristic resultCharacteristic_{nullptr};
+    GattLocalCharacteristic computerIdCharacteristic_{nullptr};
     event_token requestWriteToken_{};
     event_token assertionWriteToken_{};
     event_token challengeSubscriptionToken_{};

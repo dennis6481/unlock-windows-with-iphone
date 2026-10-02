@@ -153,7 +153,7 @@ add_executable(unlock_gatt_host WIN32
 
 target_compile_features(unlock_gatt_host PRIVATE cxx_std_20)
 target_compile_definitions(unlock_gatt_host PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_libraries(unlock_gatt_host PRIVATE unlock_saved_credential_ipc unlock_enrollment_store windowsapp user32 shell32 wtsapi32)
+target_link_libraries(unlock_gatt_host PRIVATE unlock_saved_credential_ipc unlock_enrollment_store windowsapp user32 shell32 wtsapi32 ole32 advapi32)
 
 if(MSVC)
     target_compile_options(unlock_gatt_host PRIVATE /utf-8)

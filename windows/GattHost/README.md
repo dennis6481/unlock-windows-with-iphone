@@ -10,7 +10,7 @@
 
 用户随后反馈测试动作均符合预期，但已解锁、广播停止后托盘仍带“错误”前缀。静态检查确认原实现将历史错误持续用作当前错误提示，现已修正；具体触发的原始错误尚待详情确认。2026-10-02 用户在本次提示修正后的回归中反馈“成功”；此项按用户实机反馈记录通过，代理未执行构建或运行。
 
-服务和四个 characteristic 只初始化一次。停止广播不撤销写事件、不销毁 characteristic 或订阅，也不主动断开已有 BLE 连接。`unlock_approved` 只转发到手机，不触发停止广播；实际 Windows 解锁状态才决定停止。广播停止不是授权边界，保留连接上的请求仍由保存凭据服务检查锁屏状态、验证签名并管理一次性批准。
+服务和五个 characteristic 只初始化一次。停止广播不撤销写事件、不销毁 characteristic 或订阅，也不主动断开已有 BLE 连接；手机在发现认证服务未发布时会释放连接并继续扫描。`unlock_approved` 只转发到手机，不触发停止广播；实际 Windows 解锁状态才决定停止。广播停止不是授权边界，保留连接上的请求仍由保存凭据服务检查锁屏状态、验证签名并管理一次性批准。
 
 隐藏的普通顶层窗口接收所有会话的 WTS 通知和睡眠恢复通知。启动、会话变化、广播状态事件及每秒状态核对都重新查询当前物理控制台和实际锁定状态；不把通知顺序或旧广播事件当作当前状态。睡眠及会话结束期间禁止启动广播。WinRT 回调把写请求、订阅变化和广播状态事件交回同一控制线程；广播启停和 IPC 转发串行执行。
 
@@ -32,6 +32,7 @@ Start-Process -FilePath '.\windows\build\unlock_gatt_host.exe'
 
 - service UUID：`F1E2D3C4-B5A6-4789-8012-3456789ABCDE`。
 - request / challenge / assertion / result UUID 分别以 `ABCD1` / `ABCD2` / `ABCD3` / `ABCD4` 结尾。
+- 只读 computerID UUID 以 `ABCD5` 结尾；返回 36 字节 ASCII UUID。host 首次启动生成并保存在当前用户的 `HKCU\Software\UnlockWindowsWithIPhone\GattHost\ComputerId`（REG_BINARY）；启动和配对均复用，异常已有值明确报错，不重新生成。iPhone 登记成功后保存它，重连核对该 ID，不绑定可能变化的蓝牙 UUID。Windows 用户不同则该标识也不同。此项于 2026-10-03 接入，静态检查后仍待两端一致版本和重新登记、蓝牙切换、重启专项验收。
 - 正常认证由 Windows 磁贴箭头经 LogonUI IPC 发起，host 在锁屏生命周期检查中从 phone-only IPC 单次领取 challenge；旧 `0x01` 不再接受。request 接受拒绝帧 `0x03 + 36 字节小写 ASCII requestID + 1 字节原因`；有效配对窗口另接受 `0x02 + 65 字节未压缩 P-256 公钥`，不走认证 IPC。配对期间不处理认证 request 或 assertion。
 - challenge 定向通知唯一同时订阅 challenge/result 的活动连接；没有或有多个合格连接时本次立即失败，不等待连接。assertion 原样转交服务，但只接收本次投递会话；result 定向回到该会话，并携带 requestID，例如 `unlock_approved` 或明确拒绝状态。
 - 公钥通过 GATT 发送后，由已解锁控制台上的提权 `unlock_pairing_tool` 人工核对完整指纹并保存。BLE 写入应答不是登记成功；其他连接不接收本次登记结果。

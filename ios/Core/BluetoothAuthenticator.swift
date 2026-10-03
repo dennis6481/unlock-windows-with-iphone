@@ -805,7 +805,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
         viewState.rssiMeasuredAt = Date()
         diagnostic("fresh RSSI=\(value) threshold=\(viewState.threshold)")
         guard decision == .approve else {
-            rejectPending(reason: 1, message: "RSSI 不足：\(value) dBm，阈值 \(viewState.threshold) dBm")
+            rejectPending(reason: 1, message: "请靠近电脑后重试")
             return
         }
         guard policy.acceptsAuthentication(target: viewState.target?.computerID,
@@ -956,6 +956,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
         let allowed = ["enrollment_saved", "enrollment_already_registered", "enrollment_cancelled",
             "enrollment_rejected", "enrollment_busy", "enrollment_expired", "enrollment_error", "enrollment_removed",
             "unlock_approved", "challenge_expired", "session_changed", "phone_rejected", "not_ready",
+            "rssi_too_low", "automatic_disabled", "rssi_unavailable", "signing_failed", "transport_failed",
             "malformed_json", "unsupported_version", "invalid_request_id", "request_mismatch", "challenge_replayed",
             "key_not_enrolled", "invalid_key_id", "invalid_public_key", "key_id_mismatch", "invalid_signature_encoding",
             "invalid_signature", "unlock_cooldown", "cryptographic_api_failure", "service_error", "service_unavailable"]
@@ -967,6 +968,11 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
         case "challenge_expired": "Windows 本次认证已超时，请重新按 Enter"
         case "session_changed": "Windows 控制台或锁屏会话已改变，请重新发起"
         case "phone_rejected": viewState.authentication.title
+        case "rssi_too_low": "请靠近电脑后重试"
+        case "automatic_disabled": "本次无法自动解锁，请检查设置"
+        case "rssi_unavailable": "暂时无法判断距离，请重试"
+        case "signing_failed": "本次认证未完成，请重试"
+        case "transport_failed": "与电脑的连接出现问题，请重试"
         case "service_error", "service_unavailable": "Windows 认证服务不可用"
         case "not_ready": "Windows 当前不具备解锁条件"
         default: "Windows 拒绝本次认证：\(allowedResult(code))"

@@ -9,7 +9,7 @@ struct RegisteredComputer: Codable, Equatable {
 }
 
 enum BluetoothConnectionState: Equatable {
-    case unregistered, bluetoothUnavailable, waitingComputer, connecting
+    case unregistered, bluetoothUnavailable, waitingComputer, waitingService, connecting
     case discovering, verifyingComputer, subscribing, ready, recovering
     case failed(String)
 
@@ -17,14 +17,15 @@ enum BluetoothConnectionState: Equatable {
         switch self {
         case .unregistered: "尚未登记电脑"
         case .bluetoothUnavailable: "蓝牙不可用"
-        case .waitingComputer: "等待目标电脑"
+        case .waitingComputer: "等待目标电脑广播"
+        case .waitingService: "蓝牙已连接，等待解锁服务"
         case .connecting: "正在建立蓝牙连接"
         case .discovering: "正在发现解锁服务"
         case .verifyingComputer: "正在核对目标电脑"
         case .subscribing: "正在准备通知订阅"
         case .ready: "已连接，解锁通道就绪"
         case .recovering: "正在恢复解锁服务"
-        case .failed: "连接恢复失败"
+        case .failed: "通道初始化异常"
         }
     }
 
@@ -89,7 +90,9 @@ struct BluetoothViewState: Equatable {
 
 struct BluetoothAuthenticationState {
     enum SignalDecision: Equatable { case approve, tooLow, invalid, expired }
-    enum Phase: Equatable { case idle, connecting, services, characteristics, identity, subscriptions, ready, failed }
+    enum Phase: Equatable {
+        case idle, waitingComputer, waitingService, connecting, services, characteristics, identity, subscriptions, ready, failed
+    }
     enum Completion: Equatable { case proceed, rediscover, expired }
     struct RSSIRead: Equatable {
         let sequence: UInt64
@@ -109,7 +112,28 @@ struct BluetoothAuthenticationState {
     private(set) var challengeSubscribed = false
     private(set) var resultSubscribed = false
     private(set) var rssiRead: RSSIRead?
+    private(set) var scanRound: UInt64 = 0
+    private var seenCandidates: [UUID] = []
     private var rssiSequence: UInt64 = 0
+
+    var isPassiveWait: Bool {
+        deadline == nil && (phase == .waitingComputer || phase == .waitingService ||
+            phase == .failed || phase == .connecting)
+    }
+
+    var candidateHistoryCount: Int { seenCandidates.count }
+
+    mutating func beginScanRound() {
+        scanRound &+= 1
+        seenCandidates.removeAll()
+    }
+
+    mutating func discoverCandidate(_ id: UUID) -> Bool {
+        guard !seenCandidates.contains(id) else { return false }
+        if seenCandidates.count == 64 { seenCandidates.removeFirst() }
+        seenCandidates.append(id)
+        return true
+    }
 
     static func signalDecision(rssi: Int, threshold: Int, now: TimeInterval,
                                deadline: TimeInterval) -> SignalDecision {
@@ -165,10 +189,10 @@ struct BluetoothAuthenticationState {
         return true
     }
 
-    mutating func connecting(now: TimeInterval) {
+    mutating func connecting(now: TimeInterval, rememberedTarget: Bool = false) {
         resetTransport()
         phase = .connecting
-        deadline = now + Self.initializationLifetime
+        deadline = rememberedTarget ? nil : now + Self.initializationLifetime
     }
 
     mutating func connected(now: TimeInterval) {
@@ -177,13 +201,24 @@ struct BluetoothAuthenticationState {
         deadline = now + Self.initializationLifetime
     }
 
-    mutating func invalidateServices(now: TimeInterval) -> Bool {
+    mutating func waitForComputer() {
+        resetTransport()
+        phase = .waitingComputer
+    }
+
+    mutating func waitForService() {
+        resetTransport()
+        phase = .waitingService
+    }
+
+    mutating func invalidateServices(now: TimeInterval, discoveryPending: Bool? = nil) -> Bool {
+        if deadline == nil { resetConnectionRetries() }
         generation &+= 1
         verifiedComputerID = nil
         challengeSubscribed = false
         resultSubscribed = false
         if deadline == nil { deadline = now + Self.initializationLifetime }
-        if phase == .services || phase == .characteristics || phase == .identity {
+        if discoveryPending ?? (phase == .services || phase == .characteristics || phase == .identity) {
             rediscoveryRequested = true
             return false
         }
@@ -263,5 +298,8 @@ struct BluetoothAuthenticationState {
         rssiRead = nil
     }
 
-    mutating func failed() { phase = .failed; deadline = nil }
+    mutating func failed() {
+        resetTransport()
+        phase = .failed
+    }
 }

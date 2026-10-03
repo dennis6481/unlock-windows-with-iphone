@@ -106,12 +106,13 @@ struct ContentView: View {
         switch state.connection {
         case .unregistered: return "先在 Windows 托盘开启配对，再登记电脑。"
         case .waitingComputer: return "等待电脑广播，尚未建立连接；不能据此判断电脑是否锁屏。"
+        case .waitingService: return "物理蓝牙连接仍存在，解锁服务暂时不可用；保持等待，服务恢复后重新核对身份与订阅。"
         case .connecting: return "发现了候选电脑，正在建立连接；尚未核对身份。"
         case .discovering, .verifyingComputer, .subscribing, .recovering:
             return "已进入连接准备流程，身份与双通知订阅完成前不会批准。"
         case .ready: return "目标身份与双通知订阅已就绪，等待 Windows 发起请求。"
         case .bluetoothUnavailable: return "请检查手机蓝牙权限和系统蓝牙开关。"
-        case .failed: return "没有无限重连；确认电脑广播与组件状态后可重试连接。"
+        case .failed: return "本轮初始化已结束，仍在等待电脑恢复；不会无限重连。也可检查电脑组件后手动重试。"
         }
     }
 }

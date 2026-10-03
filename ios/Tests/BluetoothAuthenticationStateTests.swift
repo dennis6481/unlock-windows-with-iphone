@@ -242,4 +242,185 @@ final class BluetoothAuthenticationStateTests: XCTestCase {
         XCTAssertEqual(snapshot.authentication.title, "RSSI 不足")
         XCTAssertEqual(PhoneAuthenticationState.approved.title, "Windows 已批准，等待电脑完成解锁")
     }
+
+    func testDesktopServiceAbsenceEntersPassiveWaitWithoutUsingRetry() {
+        var state = readyState()
+        let generation = state.generation
+        state.waitForService()
+        XCTAssertEqual(state.phase, .waitingService)
+        XCTAssertTrue(state.isPassiveWait)
+        XCTAssertNil(state.deadline)
+        XCTAssertNil(state.verifiedComputerID)
+        XCTAssertFalse(state.challengeSubscribed)
+        XCTAssertFalse(state.resultSubscribed)
+        XCTAssertGreaterThan(state.generation, generation)
+        XCTAssertEqual(state.remainingConnectionRetries, 1)
+        XCTAssertFalse(state.acceptsAuthentication(target: computer, enabled: true, enrolling: false))
+    }
+
+    func testRememberedConnectionCanWaitOvernightButCannotAuthenticate() {
+        var state = BluetoothAuthenticationState()
+        XCTAssertTrue(state.takeConnectionRetry())
+        state.connecting(now: 0, rememberedTarget: true)
+        XCTAssertNil(state.deadline)
+        XCTAssertTrue(state.isPassiveWait)
+        XCTAssertEqual(state.remainingConnectionRetries, 0)
+        XCTAssertFalse(state.acceptsAuthentication(target: computer, enabled: true, enrolling: false))
+        state.connected(now: 86_400)
+        XCTAssertEqual(state.deadline, 86_410)
+        XCTAssertFalse(state.isPassiveWait)
+        XCTAssertEqual(state.remainingConnectionRetries, 0)
+        XCTAssertEqual(state.completeDiscoveryStep(now: 86_410), .expired)
+    }
+
+    func testUnknownCandidateStillHasTenSecondConnectionWindow() {
+        var state = BluetoothAuthenticationState()
+        state.connecting(now: 8)
+        XCTAssertEqual(state.deadline, 18)
+        XCTAssertFalse(state.isPassiveWait)
+        XCTAssertEqual(state.completeDiscoveryStep(now: 18), .expired)
+    }
+
+    func testRetryExhaustionWaitsForAnEventInsteadOfRearmingItself() {
+        var state = readyState()
+        XCTAssertTrue(state.takeConnectionRetry())
+        state.failed()
+        XCTAssertTrue(state.isPassiveWait)
+        XCTAssertNil(state.deadline)
+        XCTAssertFalse(state.takeConnectionRetry())
+        XCTAssertFalse(state.acceptsAuthentication(target: computer, enabled: true, enrolling: false))
+        XCTAssertTrue(state.invalidateServices(now: 100, discoveryPending: false))
+        XCTAssertEqual(state.remainingConnectionRetries, 1)
+        XCTAssertEqual(state.deadline, 110)
+        XCTAssertFalse(state.isPassiveWait)
+        XCTAssertFalse(state.invalidateServices(now: 109, discoveryPending: true))
+        XCTAssertEqual(state.deadline, 110)
+        XCTAssertEqual(state.completeDiscoveryStep(now: 110), .expired)
+    }
+
+    func testServiceReturnsAfterLongWaitAndNeedsFreshIdentityAndSubscriptions() {
+        var state = readyState()
+        state.waitForService()
+        XCTAssertTrue(state.invalidateServices(now: 20_000, discoveryPending: false))
+        XCTAssertEqual(state.deadline, 20_010)
+        XCTAssertFalse(state.subscriptions(challenge: true, result: true, now: 20_001))
+        state.discoveredServices()
+        state.discoveredCharacteristics()
+        XCTAssertFalse(state.verifyComputer(otherComputer, expected: computer, enrolling: false))
+        XCTAssertTrue(state.verifyComputer(computer, expected: computer, enrolling: false))
+        XCTAssertFalse(state.subscriptions(challenge: true, result: false, now: 20_002))
+        XCTAssertTrue(state.subscriptions(challenge: true, result: true, now: 20_003))
+    }
+
+    func testLateDiscoveryMustDrainBeforeRecoveryDiscoveryStarts() {
+        var state = BluetoothAuthenticationState()
+        state.connected(now: 0)
+        state.discoveredServices()
+        state.failed()
+        XCTAssertFalse(state.invalidateServices(now: 30, discoveryPending: true))
+        XCTAssertEqual(state.deadline, 40)
+        XCTAssertEqual(state.completeDiscoveryStep(now: 31), .rediscover)
+        XCTAssertEqual(state.phase, .services)
+        XCTAssertEqual(state.completeDiscoveryStep(now: 32), .proceed)
+    }
+
+    func testSamePeripheralIsDeduplicatedOnlyWithinItsScanRound() {
+        var state = BluetoothAuthenticationState()
+        let peripheral = UUID()
+        state.beginScanRound()
+        let round = state.scanRound
+        XCTAssertTrue(state.discoverCandidate(peripheral))
+        XCTAssertFalse(state.discoverCandidate(peripheral))
+        state.waitForComputer()
+        XCTAssertFalse(state.discoverCandidate(peripheral))
+        state.beginScanRound()
+        XCTAssertEqual(state.scanRound, round + 1)
+        XCTAssertTrue(state.discoverCandidate(peripheral))
+    }
+
+    func testServiceAdvertisementCanRearmWaitingOnceWithinAScanRound() {
+        var state = readyState()
+        let peripheral = UUID()
+        state.waitForService()
+        state.beginScanRound()
+        XCTAssertTrue(state.discoverCandidate(peripheral))
+        XCTAssertTrue(state.invalidateServices(now: 100, discoveryPending: false))
+        XCTAssertEqual(state.deadline, 110)
+        state.waitForService()
+        XCTAssertFalse(state.discoverCandidate(peripheral))
+        XCTAssertNil(state.deadline)
+        XCTAssertTrue(state.isPassiveWait)
+        XCTAssertTrue(state.invalidateServices(now: 200, discoveryPending: false))
+        XCTAssertEqual(state.deadline, 210)
+    }
+
+    func testNewPeripheralCanBeDiscoveredWhileOldTargetConnectionIsPending() {
+        var state = BluetoothAuthenticationState()
+        let oldPeripheral = UUID()
+        let newPeripheral = UUID()
+        state.beginScanRound()
+        XCTAssertTrue(state.discoverCandidate(oldPeripheral))
+        state.connecting(now: 0, rememberedTarget: true)
+        XCTAssertTrue(state.isPassiveWait)
+        XCTAssertTrue(state.discoverCandidate(newPeripheral))
+        XCTAssertFalse(state.discoverCandidate(newPeripheral))
+        state.disconnected()
+        state.connecting(now: 20)
+        state.connected(now: 21)
+        state.discoveredServices()
+        state.discoveredCharacteristics()
+        XCTAssertFalse(state.verifyComputer(otherComputer, expected: computer, enrolling: false))
+        XCTAssertTrue(state.verifyComputer(computer, expected: computer, enrolling: false))
+    }
+
+    func testCandidateHistoryIsBoundedAndClearedAtANewScanRound() {
+        var state = BluetoothAuthenticationState()
+        state.beginScanRound()
+        for _ in 0 ..< 64 { XCTAssertTrue(state.discoverCandidate(UUID())) }
+        let next = UUID()
+        XCTAssertTrue(state.discoverCandidate(next))
+        XCTAssertEqual(state.candidateHistoryCount, 64)
+        XCTAssertFalse(state.discoverCandidate(next))
+        state.beginScanRound()
+        XCTAssertEqual(state.candidateHistoryCount, 0)
+        XCTAssertTrue(state.discoverCandidate(next))
+    }
+
+    func testWaitingInvalidatesOldRSSIAndWriteGeneration() {
+        var state = readyState()
+        let request = UUID()
+        let oldGeneration = state.generation
+        let oldRead = state.beginRSSI(requestID: request, now: 2)
+        state.waitForService()
+        XCTAssertEqual(state.rssiRead, oldRead)
+        XCTAssertFalse(state.isCurrentGeneration(oldGeneration))
+        XCTAssertNil(state.finishRSSI(now: 2.1, requestID: request))
+        XCTAssertNil(state.beginRSSI(requestID: UUID(), now: 2.2))
+        state.waitForComputer()
+        XCTAssertFalse(state.acceptsAuthentication(target: computer, enabled: true, enrolling: false))
+    }
+
+    func testWaitingDoesNotChangeAutomaticResponsePreference() {
+        let name = "BluetoothWaitingTests.\(UUID())"
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        XCTAssertTrue(BluetoothAuthenticationState.automaticPreference(defaults))
+        defaults.set(false, forKey: "automaticUnlockEnabled")
+        var state = readyState()
+        state.waitForService()
+        state.waitForComputer()
+        state.connecting(now: 100, rememberedTarget: true)
+        XCTAssertFalse(BluetoothAuthenticationState.automaticPreference(defaults))
+        XCTAssertFalse(state.acceptsAuthentication(target: computer, enabled: false, enrolling: false))
+    }
+
+    func testWaitingServiceTitleDoesNotClaimUnlockChannelReady() {
+        var snapshot = BluetoothViewState()
+        snapshot.connection = .waitingService
+        XCTAssertEqual(snapshot.connection.title, "蓝牙已连接，等待解锁服务")
+        XCTAssertNil(snapshot.connection.failure)
+        snapshot.connection = .failed("阶段：subscriptions；仍在等待电脑恢复")
+        XCTAssertEqual(snapshot.connection.title, "通道初始化异常")
+        XCTAssertNotNil(snapshot.connection.failure)
+    }
 }

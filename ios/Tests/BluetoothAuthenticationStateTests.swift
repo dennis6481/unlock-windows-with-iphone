@@ -246,8 +246,9 @@ final class BluetoothAuthenticationStateTests: XCTestCase {
     func testDesktopServiceAbsenceEntersPassiveWaitWithoutUsingRetry() {
         var state = readyState()
         let generation = state.generation
-        state.waitForService()
-        XCTAssertEqual(state.phase, .waitingService)
+        state.serviceMissing()
+        XCTAssertEqual(state.phase, .waitingComputer)
+        XCTAssertTrue(state.requiresAdvertisement)
         XCTAssertTrue(state.isPassiveWait)
         XCTAssertNil(state.deadline)
         XCTAssertNil(state.verifiedComputerID)
@@ -300,7 +301,7 @@ final class BluetoothAuthenticationStateTests: XCTestCase {
 
     func testServiceReturnsAfterLongWaitAndNeedsFreshIdentityAndSubscriptions() {
         var state = readyState()
-        state.waitForService()
+        state.serviceMissing()
         XCTAssertTrue(state.invalidateServices(now: 20_000, discoveryPending: false))
         XCTAssertEqual(state.deadline, 20_010)
         XCTAssertFalse(state.subscriptions(challenge: true, result: true, now: 20_001))
@@ -341,12 +342,12 @@ final class BluetoothAuthenticationStateTests: XCTestCase {
     func testServiceAdvertisementCanRearmWaitingOnceWithinAScanRound() {
         var state = readyState()
         let peripheral = UUID()
-        state.waitForService()
+        state.serviceMissing()
         state.beginScanRound()
         XCTAssertTrue(state.discoverCandidate(peripheral))
         XCTAssertTrue(state.invalidateServices(now: 100, discoveryPending: false))
         XCTAssertEqual(state.deadline, 110)
-        state.waitForService()
+        state.serviceMissing()
         XCTAssertFalse(state.discoverCandidate(peripheral))
         XCTAssertNil(state.deadline)
         XCTAssertTrue(state.isPassiveWait)
@@ -391,7 +392,7 @@ final class BluetoothAuthenticationStateTests: XCTestCase {
         let request = UUID()
         let oldGeneration = state.generation
         let oldRead = state.beginRSSI(requestID: request, now: 2)
-        state.waitForService()
+        state.serviceMissing()
         XCTAssertEqual(state.rssiRead, oldRead)
         XCTAssertFalse(state.isCurrentGeneration(oldGeneration))
         XCTAssertNil(state.finishRSSI(now: 2.1, requestID: request))
@@ -407,20 +408,109 @@ final class BluetoothAuthenticationStateTests: XCTestCase {
         XCTAssertTrue(BluetoothAuthenticationState.automaticPreference(defaults))
         defaults.set(false, forKey: "automaticUnlockEnabled")
         var state = readyState()
-        state.waitForService()
+        state.serviceMissing()
         state.waitForComputer()
         state.connecting(now: 100, rememberedTarget: true)
         XCTAssertFalse(BluetoothAuthenticationState.automaticPreference(defaults))
         XCTAssertFalse(state.acceptsAuthentication(target: computer, enabled: false, enrolling: false))
     }
 
-    func testWaitingServiceTitleDoesNotClaimUnlockChannelReady() {
+    func testWaitingComputerTitleDoesNotClaimUnlockChannelReady() {
         var snapshot = BluetoothViewState()
-        snapshot.connection = .waitingService
-        XCTAssertEqual(snapshot.connection.title, "蓝牙已连接，等待解锁服务")
+        snapshot.connection = .waitingComputer
+        XCTAssertEqual(snapshot.connection.title, "等待目标电脑广播")
         XCTAssertNil(snapshot.connection.failure)
         snapshot.connection = .failed("阶段：subscriptions；仍在等待电脑恢复")
         XCTAssertEqual(snapshot.connection.title, "通道初始化异常")
         XCTAssertNotNil(snapshot.connection.failure)
+    }
+
+    func testMissingServiceRestrictionSurvivesConnectionRelease() {
+        var state = readyState()
+        state.serviceMissing()
+        state.failed()
+        state.disconnected()
+        state.waitForComputer()
+        XCTAssertTrue(state.requiresAdvertisement)
+        state.connecting(now: 100, rememberedTarget: !state.requiresAdvertisement)
+        XCTAssertEqual(state.deadline, 110)
+        state.connected(now: 101)
+        state.discoveredServices()
+        state.discoveredCharacteristics()
+        XCTAssertTrue(state.verifyComputer(computer, expected: computer, enrolling: false))
+        XCTAssertFalse(state.subscriptions(challenge: true, result: false, now: 102))
+        XCTAssertTrue(state.requiresAdvertisement)
+        XCTAssertTrue(state.subscriptions(challenge: true, result: true, now: 103))
+        XCTAssertFalse(state.requiresAdvertisement)
+    }
+
+    func testEarlyReadyProbeWaitsForIdentityAndBothSubscriptions() {
+        var state = BluetoothAuthenticationState()
+        let request = UUID()
+        state.connected(now: 0)
+        XCTAssertTrue(state.cacheReadyProbe(request, generation: state.generation, now: 1))
+        XCTAssertNil(state.beginReadyAcknowledgment(now: 1))
+        XCTAssertFalse(state.acceptsPreparedChallenge(request, now: 1))
+        state.discoveredServices()
+        state.discoveredCharacteristics()
+        XCTAssertTrue(state.verifyComputer(computer, expected: computer, enrolling: false))
+        XCTAssertFalse(state.subscriptions(challenge: true, result: false, now: 2))
+        XCTAssertNil(state.beginReadyAcknowledgment(now: 2))
+        XCTAssertTrue(state.subscriptions(challenge: true, result: true, now: 3))
+        XCTAssertEqual(state.beginReadyAcknowledgment(now: 3), request)
+        XCTAssertTrue(state.acceptsPreparedChallenge(request, now: 3))
+        XCTAssertFalse(state.acceptsPreparedChallenge(UUID(), now: 3))
+    }
+
+    func testDuplicateProbeCannotExtendDeadlineOrQueueConcurrentWrites() {
+        var state = readyState()
+        let request = UUID()
+        XCTAssertTrue(state.cacheReadyProbe(request, generation: state.generation, now: 1))
+        XCTAssertEqual(state.beginReadyAcknowledgment(now: 2), request)
+        XCTAssertNil(state.beginReadyAcknowledgment(now: 2.1))
+        XCTAssertFalse(state.cacheReadyProbe(UUID(), generation: state.generation, now: 2.1))
+        XCTAssertEqual(state.readyProbe?.requestID, request)
+        XCTAssertTrue(state.cacheReadyProbe(request, generation: state.generation, now: 29))
+        XCTAssertEqual(state.readyProbe?.deadline, 31)
+        state.finishReadyAcknowledgment(request, generation: state.generation)
+        XCTAssertEqual(state.beginReadyAcknowledgment(now: 30), request)
+        XCTAssertFalse(state.cacheReadyProbe(request, generation: state.generation, now: 31))
+        XCTAssertNil(state.beginReadyAcknowledgment(now: 31))
+        XCTAssertFalse(state.acceptsPreparedChallenge(request, now: 31))
+    }
+
+    func testServiceChangeAndCancellationDiscardPreparedRequest() {
+        var state = readyState()
+        let request = UUID()
+        let generation = state.generation
+        XCTAssertTrue(state.cacheReadyProbe(request, generation: generation, now: 1))
+        XCTAssertEqual(state.beginReadyAcknowledgment(now: 2), request)
+        XCTAssertTrue(state.invalidateServices(now: 3, discoveryPending: false))
+        XCTAssertNil(state.readyProbe)
+        XCTAssertFalse(state.cacheReadyProbe(request, generation: generation, now: 4))
+        state.finishReadyAcknowledgment(request, generation: generation)
+        XCTAssertFalse(state.acceptsPreparedChallenge(request, now: 4))
+        state.connected(now: 5)
+        XCTAssertTrue(state.cacheReadyProbe(UUID(), generation: state.generation, now: 6))
+        state.disconnected()
+        XCTAssertNil(state.readyProbe)
+        XCTAssertNil(state.beginReadyAcknowledgment(now: 7))
+    }
+
+    func testOldReceiptCannotFinishNewPreparationWrite() {
+        var state = readyState()
+        let oldRequest = UUID()
+        let newRequest = UUID()
+        XCTAssertTrue(state.cacheReadyProbe(oldRequest, generation: state.generation, now: 1))
+        XCTAssertEqual(state.beginReadyAcknowledgment(now: 1), oldRequest)
+        state.clearReadyProbe()
+        XCTAssertTrue(state.cacheReadyProbe(newRequest, generation: state.generation, now: 2))
+        XCTAssertEqual(state.beginReadyAcknowledgment(now: 2), newRequest)
+        state.finishReadyAcknowledgment(oldRequest, generation: state.generation)
+        XCTAssertNil(state.beginReadyAcknowledgment(now: 2.1))
+        XCTAssertFalse(state.acceptsPreparedChallenge(oldRequest, now: 2.1))
+        XCTAssertTrue(state.acceptsPreparedChallenge(newRequest, now: 2.1))
+        state.clearReadyProbe()
+        XCTAssertFalse(state.acceptsPreparedChallenge(newRequest, now: 2.2))
     }
 }

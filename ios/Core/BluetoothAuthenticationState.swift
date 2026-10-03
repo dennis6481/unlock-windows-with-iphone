@@ -9,7 +9,7 @@ struct RegisteredComputer: Codable, Equatable {
 }
 
 enum BluetoothConnectionState: Equatable {
-    case unregistered, bluetoothUnavailable, waitingComputer, waitingService, connecting
+    case unregistered, bluetoothUnavailable, waitingComputer, connecting
     case discovering, verifyingComputer, subscribing, ready, recovering
     case failed(String)
 
@@ -18,7 +18,6 @@ enum BluetoothConnectionState: Equatable {
         case .unregistered: "尚未登记电脑"
         case .bluetoothUnavailable: "蓝牙不可用"
         case .waitingComputer: "等待目标电脑广播"
-        case .waitingService: "蓝牙已连接，等待解锁服务"
         case .connecting: "正在建立蓝牙连接"
         case .discovering: "正在发现解锁服务"
         case .verifyingComputer: "正在核对目标电脑"
@@ -91,7 +90,7 @@ struct BluetoothViewState: Equatable {
 struct BluetoothAuthenticationState {
     enum SignalDecision: Equatable { case approve, tooLow, invalid, expired }
     enum Phase: Equatable {
-        case idle, waitingComputer, waitingService, connecting, services, characteristics, identity, subscriptions, ready, failed
+        case idle, waitingComputer, connecting, services, characteristics, identity, subscriptions, ready, failed
     }
     enum Completion: Equatable { case proceed, rediscover, expired }
     struct RSSIRead: Equatable {
@@ -99,6 +98,13 @@ struct BluetoothAuthenticationState {
         let generation: UInt64
         let requestID: UUID
         let deadline: TimeInterval
+    }
+    struct ReadyProbe: Equatable {
+        let requestID: UUID
+        let generation: UInt64
+        let deadline: TimeInterval
+        var writePending = false
+        var acknowledgmentIssued = false
     }
 
     static let responseLifetime: TimeInterval = 3
@@ -113,11 +119,13 @@ struct BluetoothAuthenticationState {
     private(set) var resultSubscribed = false
     private(set) var rssiRead: RSSIRead?
     private(set) var scanRound: UInt64 = 0
+    private(set) var requiresAdvertisement = false
+    private(set) var readyProbe: ReadyProbe?
     private var seenCandidates: [UUID] = []
     private var rssiSequence: UInt64 = 0
 
     var isPassiveWait: Bool {
-        deadline == nil && (phase == .waitingComputer || phase == .waitingService ||
+        deadline == nil && (phase == .waitingComputer ||
             phase == .failed || phase == .connecting)
     }
 
@@ -206,14 +214,52 @@ struct BluetoothAuthenticationState {
         phase = .waitingComputer
     }
 
-    mutating func waitForService() {
+    mutating func serviceMissing() {
         resetTransport()
-        phase = .waitingService
+        phase = .waitingComputer
+        requiresAdvertisement = true
     }
+
+    mutating func allowRememberedConnection() { requiresAdvertisement = false }
+
+    mutating func cacheReadyProbe(_ requestID: UUID, generation: UInt64, now: TimeInterval) -> Bool {
+        guard generation == self.generation,
+              [.services, .characteristics, .identity, .subscriptions, .ready].contains(phase),
+              requestID != UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) else { return false }
+        if let readyProbe, readyProbe.requestID == requestID {
+            return now < readyProbe.deadline
+        }
+        if let readyProbe, readyProbe.acknowledgmentIssued, now < readyProbe.deadline { return false }
+        readyProbe = ReadyProbe(requestID: requestID, generation: generation, deadline: now + 30)
+        return true
+    }
+
+    mutating func beginReadyAcknowledgment(now: TimeInterval) -> UUID? {
+        guard phase == .ready, verifiedComputerID != nil, challengeSubscribed, resultSubscribed,
+              let probe = readyProbe, probe.generation == generation, now < probe.deadline,
+              !probe.writePending else { return nil }
+        readyProbe?.writePending = true
+        readyProbe?.acknowledgmentIssued = true
+        return probe.requestID
+    }
+
+    mutating func finishReadyAcknowledgment(_ requestID: UUID, generation: UInt64) {
+        guard generation == self.generation, readyProbe?.requestID == requestID else { return }
+        readyProbe?.writePending = false
+    }
+
+    func acceptsPreparedChallenge(_ requestID: UUID, now: TimeInterval) -> Bool {
+        guard let probe = readyProbe else { return false }
+        return phase == .ready && probe.generation == generation && probe.requestID == requestID &&
+            probe.acknowledgmentIssued && now < probe.deadline
+    }
+
+    mutating func clearReadyProbe() { readyProbe = nil }
 
     mutating func invalidateServices(now: TimeInterval, discoveryPending: Bool? = nil) -> Bool {
         if deadline == nil { resetConnectionRetries() }
         generation &+= 1
+        clearReadyProbe()
         verifiedComputerID = nil
         challengeSubscribed = false
         resultSubscribed = false
@@ -256,6 +302,7 @@ struct BluetoothAuthenticationState {
         guard challenge && result else { return false }
         phase = .ready
         self.deadline = nil
+        requiresAdvertisement = false
         resetConnectionRetries()
         return true
     }
@@ -285,6 +332,7 @@ struct BluetoothAuthenticationState {
 
     mutating func resetTransport() {
         generation &+= 1
+        clearReadyProbe()
         phase = .idle
         deadline = nil
         rediscoveryRequested = false

@@ -177,7 +177,7 @@ private struct HomeStatusView: View {
         case .bluetoothUnavailable:
             title = String(localized: "蓝牙不可用")
             immediate = true
-        case .waitingComputer, .waitingService:
+        case .waitingComputer:
             let paused = !state.automaticEnabled && !state.enrollment.isActive
             title = paused ? String(localized: "自动响应已暂停") : String(localized: "正在搜索Windows电脑")
             immediate = paused

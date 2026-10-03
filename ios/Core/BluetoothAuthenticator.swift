@@ -19,6 +19,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
     private let keyStore: SecureEnclaveKeyStore
     private let defaults: UserDefaults
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "iPhoneUnlock", category: "BluetoothUnlock")
+    private let diagnosticClock = ISO8601DateFormatter()
     private var policy = BluetoothAuthenticationState()
     private lazy var centralManager = CBCentralManager(delegate: self, queue: nil,
         options: [CBCentralManagerOptionRestoreIdentifierKey: "com.example.unlock-windows-with-iphone.central"])
@@ -36,7 +37,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
     private var enrolling = false
     private var enrollmentSent = false
     private var enrollmentSequence: UInt64 = 0
-    private enum WritePurpose { case enrollment(UInt64), assertion(UUID), rejection(UUID) }
+    private enum WritePurpose { case enrollment(UInt64), assertion(UUID), rejection(UUID), readyAcknowledgment(UUID) }
     private struct WriteContext {
         let characteristic: CBCharacteristic
         let generation: UInt64
@@ -53,7 +54,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
     private var initializationTimeout: Task<Void, Never>?
     private var authenticationTimeout: Task<Void, Never>?
     private var rssiTimeout: Task<Void, Never>?
-    private enum DisconnectAction: Equatable { case recover, search, resume, halt }
+    private enum DisconnectAction: Equatable { case recover, search, resume, halt, advertisement }
     private var disconnectAction: DisconnectAction?
 
     private var shouldConnect: Bool {
@@ -65,6 +66,8 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
         self.keyStore = keyStore
         self.defaults = defaults
         super.init()
+        diagnosticClock.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        diagnosticClock.timeZone = TimeZone(secondsFromGMT: 0)
         viewState.automaticEnabled = BluetoothAuthenticationState.automaticPreference(defaults)
         viewState.threshold = defaults.object(forKey: "unlockRSSIThreshold") as? Int ?? -60
         if let data = defaults.data(forKey: "registeredWindowsComputer") {
@@ -106,6 +109,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
             return
         }
         policy.resetConnectionRetries()
+        policy.allowRememberedConnection()
         rememberedTargetRejected = false
         centralManager.stopScan()
         candidates.removeAll()
@@ -132,6 +136,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
         enrollmentSent = false
         enrollmentSequence &+= 1
         policy.resetConnectionRetries()
+        centralManager.stopScan()
         candidates.removeAll()
         viewState.enrollment = .searching
         viewState.issue = nil
@@ -156,6 +161,25 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
         foreground = active
         diagnostic("lifecycle foreground=\(active)")
         if becameActive && !enrolling && disconnectAction == nil {
+            if policy.phase == .failed {
+                policy.resetConnectionRetries()
+                if let peripheral, peripheral.state == .connected {
+                    rediscoverServices(peripheral, trigger: "foreground recovery")
+                    return
+                }
+                centralManager.stopScan()
+                candidates.removeAll()
+            } else if peripheral == nil && policy.requiresAdvertisement {
+                centralManager.stopScan()
+                candidates.removeAll()
+            }
+            if let peripheral, peripheral.state == .connected {
+                if policy.phase == .subscriptions { finishSubscriptions(peripheral) }
+                else if policy.phase == .services && discoveryOperation == nil { discoverServices(peripheral) }
+            } else if let peripheral, peripheral.state == .disconnected, policy.phase == .connecting {
+                diagnostic("foreground restored missing connection operation")
+                centralManager.connect(peripheral)
+            }
             beginSearch(allowRememberedTarget: viewState.connection.failure == nil)
         }
     }
@@ -183,7 +207,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
             if viewState.connection.failure == nil { viewState.connection = .waitingComputer }
         }
         connectNextCandidate()
-        if peripheral == nil && allowRememberedTarget && !rememberedTargetRejected && !enrolling,
+        if peripheral == nil && allowRememberedTarget && !policy.requiresAdvertisement && !rememberedTargetRejected && !enrolling,
            let target = viewState.target {
             if rememberedPeripheral == nil {
                 rememberedPeripheral = centralManager.retrievePeripherals(withIdentifiers: [target.peripheralID]).first
@@ -206,7 +230,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
         candidate.delegate = self
         let remembered = !enrolling &&
             (candidate === rememberedPeripheral || candidate.identifier == viewState.target?.peripheralID)
-        policy.connecting(now: now, rememberedTarget: remembered)
+        policy.connecting(now: now, rememberedTarget: remembered && !policy.requiresAdvertisement)
         viewState.connection = remembered ? .waitingComputer : .connecting
         viewState.issue = nil
         diagnostic("candidate connecting remembered=\(remembered) scanRound=\(policy.scanRound)")
@@ -318,7 +342,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
         guard peripheral === candidate else { return }
         diagnostic("disconnected; approval discarded code=\((error as NSError?)?.code ?? 0)")
         let action = disconnectAction
-        let wasWaiting = policy.phase == .ready || policy.phase == .waitingService
+        let wasWaiting = policy.phase == .ready || policy.requiresAdvertisement
         disconnectAction = nil
         discardAuthentication(message: "蓝牙已断开，本次认证已失效")
         clearDisconnectedState()
@@ -385,6 +409,10 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
         case .resume:
             candidates.removeAll()
             beginSearch()
+        case .advertisement:
+            candidates.removeAll()
+            viewState.connection = .waitingComputer
+            beginSearch(allowRememberedTarget: false)
         case .halt:
             if shouldConnect { beginSearch(); return }
             viewState.connection = viewState.target == nil ? .unregistered : .waitingComputer
@@ -441,7 +469,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
     }
 
     private func waitForService() {
-        diagnostic("service absent; connected passive wait")
+        diagnostic("service absent; releasing connection and waiting for advertisement")
         discardAuthentication(message: "解锁服务暂时不可用，本次认证已失效")
         if enrolling {
             enrolling = false
@@ -453,10 +481,14 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
         clearCharacteristics()
         serviceInDiscovery = nil
         identityReadInDiscovery = nil
-        policy.waitForService()
+        let newAvailabilityRound = !policy.requiresAdvertisement
+        policy.serviceMissing()
         viewState.issue = nil
-        viewState.connection = .waitingService
-        if shouldConnect { beginSearch(allowRememberedTarget: false) }
+        if newAvailabilityRound {
+            centralManager.stopScan()
+            candidates.removeAll()
+        }
+        if shouldConnect { disconnect(action: .advertisement) }
         else { disconnect(action: .halt) }
         publish()
     }
@@ -515,7 +547,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
         guard self.peripheral === peripheral, discoveryOperation == .services else { return }
         discoveryOperation = nil
         guard advanceDiscovery(peripheral) else { return }
-        if let error { failConnection("发现服务失败：\(error.localizedDescription)"); return }
+        if let error { diagnosticError("service discovery", error); failConnection("发现服务失败：\(error.localizedDescription)"); return }
         guard let service = peripheral.services?.first(where: { $0.uuid == Self.serviceUUID }) else {
             waitForService()
             return
@@ -532,7 +564,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
               discoveryOperation == .characteristics else { return }
         discoveryOperation = nil
         guard advanceDiscovery(peripheral) else { return }
-        if let error { failConnection("发现特征失败：\(error.localizedDescription)"); return }
+        if let error { diagnosticError("characteristic discovery", error); failConnection("发现特征失败：\(error.localizedDescription)"); return }
         guard let chars = service.characteristics,
               let request = chars.first(where: { $0.uuid == Self.requestCharacteristicUUID }),
               let challenge = chars.first(where: { $0.uuid == Self.challengeCharacteristicUUID }),
@@ -562,7 +594,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
         guard self.peripheral === peripheral,
               characteristic === challengeCharacteristic || characteristic === resultCharacteristic else { return }
         guard policy.phase == .subscriptions || policy.phase == .ready else { return }
-        if let error { failConnection("通知订阅失败：\(error.localizedDescription)"); return }
+        if let error { diagnosticError("notification subscription", error); failConnection("通知订阅失败：\(error.localizedDescription)"); return }
         guard characteristic.isNotifying else { failConnection("Windows 通知订阅已失效"); return }
         finishSubscriptions(peripheral)
     }
@@ -583,6 +615,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
         else if var target = viewState.target {
             target.peripheralID = peripheral.identifier
             saveTarget(target)
+            sendReadyAcknowledgment(peripheral)
         }
         publish()
     }
@@ -621,6 +654,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
         if characteristic === identityReadInDiscovery && discoveryOperation == .identity {
             discoveryOperation = nil
             guard advanceDiscovery(peripheral) else { return }
+            if let error { diagnosticError("computer identity read", error) }
             guard error == nil, let data = characteristic.value,
                   let id = BluetoothAuthenticationState.computerID(from: data) else {
                 rejectCandidate("Windows ComputerId 缺失或格式无效")
@@ -650,9 +684,51 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
             publish()
             return
         }
+        guard disconnectAction == nil else {
+            diagnostic("notification discarded during connection cancellation")
+            return
+        }
+        if characteristic.uuid == Self.resultCharacteristicUUID, error == nil,
+           characteristic === resultCharacteristic,
+           let data = characteristic.value,
+           let result = try? JSONDecoder().decode(WindowsResult.self, from: data),
+           result.status == "transport_ready_required" {
+            guard !result.authenticated, let id = result.requestID, !enrolling else {
+                diagnostic("invalid or stale ready probe rejected")
+                return
+            }
+            if id == lastHandledRequest {
+                diagnostic("ready probe for handled challenge ignored")
+                return
+            }
+            guard pendingChallenge == nil, awaitingResultID == nil,
+                  policy.cacheReadyProbe(id, generation: policy.generation, now: now) else {
+                diagnostic("stale or overlapping ready probe rejected")
+                return
+            }
+            diagnostic("ready probe received requestID=\(id.uuidString.lowercased()) phase=\(policy.phase)")
+            sendReadyAcknowledgment(peripheral)
+            return
+        }
+        if characteristic === resultCharacteristic, error == nil, policy.phase != .ready,
+           let data = characteristic.value,
+           let result = try? JSONDecoder().decode(WindowsResult.self, from: data),
+           !result.authenticated, result.requestID != nil, result.requestID == policy.readyProbe?.requestID {
+            handleWindowsResult(data, peripheral: peripheral)
+            return
+        }
+        guard characteristic === resultCharacteristic || characteristic === challengeCharacteristic else {
+            if characteristic.uuid == Self.resultCharacteristicUUID || characteristic.uuid == Self.challengeCharacteristicUUID {
+                diagnostic("notification from an old characteristic ignored")
+            }
+            return
+        }
+        if let error { diagnosticError("notification", error); failConnection("蓝牙通知失败：\(error.localizedDescription)"); return }
         guard policy.phase == .ready,
-              characteristic === resultCharacteristic || characteristic === challengeCharacteristic else { return }
-        if let error { failConnection("蓝牙通知失败：\(error.localizedDescription)"); return }
+              characteristic === resultCharacteristic || characteristic === challengeCharacteristic else {
+            diagnostic("notification before Ready ignored; challenge was not accepted")
+            return
+        }
         guard let data = characteristic.value else { failConnection("Windows 通知没有数据"); return }
         if characteristic === resultCharacteristic { handleWindowsResult(data, peripheral: peripheral) }
         else { handleChallenge(data, peripheral: peripheral) }
@@ -663,6 +739,23 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
         let status: String
         let detail: String?
         let requestID: UUID?
+    }
+
+    private func sendReadyAcknowledgment(_ peripheral: CBPeripheral) {
+        guard self.peripheral === peripheral, disconnectAction == nil,
+              policy.acceptsAuthentication(target: viewState.target?.computerID,
+                  enabled: viewState.automaticEnabled, enrolling: enrolling),
+              let requestCharacteristic, challengeCharacteristic?.isNotifying == true,
+              resultCharacteristic?.isNotifying == true,
+              let id = policy.beginReadyAcknowledgment(now: now) else { return }
+        var frame = Data([0x04])
+        frame.append(Data(id.uuidString.lowercased().utf8))
+        if write(frame, to: requestCharacteristic, purpose: .readyAcknowledgment(id)) {
+            diagnostic("ready acknowledgment sent requestID=\(id.uuidString.lowercased())")
+        } else {
+            policy.clearReadyProbe()
+            diagnostic("ready acknowledgment could not be written")
+        }
     }
 
     private func handleWindowsResult(_ data: Data, peripheral: CBPeripheral) {
@@ -699,7 +792,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
                 diagnostic("unknown or stale enrollment result ignored")
                 return
             }
-            if result.requestID == nil && (pendingChallenge != nil || awaitingResultID != nil) {
+            if result.requestID == nil && (pendingChallenge != nil || awaitingResultID != nil || policy.readyProbe != nil) {
                 finishPending()
                 viewState.authentication = .rejected("Windows 认证结果缺少 requestID，请重新发起")
                 diagnostic("authentication result missing request association")
@@ -707,7 +800,12 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
                 return
             }
             guard BluetoothAuthenticationState.acceptsResult(requestID: result.requestID,
-                pending: pendingChallenge?.requestID, awaiting: awaitingResultID) else { return }
+                pending: pendingChallenge?.requestID ?? policy.readyProbe?.requestID, awaiting: awaitingResultID) else { return }
+            if result.requestID == policy.readyProbe?.requestID &&
+                (result.authenticated || result.status == "unlock_approved") {
+                diagnostic("approval result during preparation ignored")
+                return
+            }
             diagnostic("Windows authentication result=\(allowedResult(result.status)) authenticated=\(result.authenticated)")
             finishPending()
             if result.authenticated && result.status == "unlock_approved" {
@@ -727,6 +825,11 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
         do {
             let challenge = try UnlockProtocol.decodeChallenge(from: data)
             guard challenge.requestID != lastHandledRequest else { return }
+            guard policy.acceptsPreparedChallenge(challenge.requestID, now: now) else {
+                diagnostic("challenge without current ready acknowledgment rejected requestID=\(challenge.requestID.uuidString.lowercased())")
+                return
+            }
+            policy.clearReadyProbe()
             if pendingChallenge != nil { rejectPending(reason: 6, message: "新请求替代了旧请求") }
             finishPending()
             pendingChallenge = challenge
@@ -742,7 +845,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
                 return
             }
             viewState.authentication = .readingRSSI
-            diagnostic("challenge received foreground=\(foreground); fresh RSSI required")
+            diagnostic("challenge received requestID=\(challenge.requestID.uuidString.lowercased()) foreground=\(foreground); fresh RSSI required")
             let id = challenge.requestID
             authenticationTimeout = Task { [weak self] in
                 do { try await Task.sleep(for: .seconds(BluetoothAuthenticationState.responseLifetime)) }
@@ -851,7 +954,24 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
         guard var queue = writes[key], !queue.isEmpty else { return }
         let context = queue.removeFirst()
         if queue.isEmpty { writes.removeValue(forKey: key) } else { writes[key] = queue }
-        guard error != nil, policy.phase == .ready, policy.isCurrentGeneration(context.generation) else { return }
+        guard policy.phase == .ready, policy.isCurrentGeneration(context.generation) else {
+            diagnostic("stale write callback drained")
+            return
+        }
+        if case let .readyAcknowledgment(id) = context.purpose {
+            guard policy.readyProbe?.requestID == id else {
+                diagnostic("ready acknowledgment callback for ended preparation ignored")
+                return
+            }
+            policy.finishReadyAcknowledgment(id, generation: context.generation)
+            if let error {
+                diagnosticError("ready acknowledgment write", error)
+                diagnostic("ready acknowledgment write failed requestID=\(id.uuidString.lowercased()) code=\((error as NSError).code)")
+                failConnection("解锁通道就绪确认发送失败")
+            }
+            return
+        }
+        guard error != nil else { return }
         switch context.purpose {
         case let .assertion(id):
             guard id == awaitingResultID, characteristic === assertionCharacteristic else { return }
@@ -872,6 +992,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
         case let .rejection(id):
             guard id == awaitingResultID else { return }
             viewState.issue = "手机拒绝结果未能送达 Windows"
+        case .readyAcknowledgment: return
         }
         diagnostic("BLE write failed for current operation")
         publish()
@@ -909,6 +1030,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
     }
 
     private func finishPending() {
+        policy.clearReadyProbe()
         pendingChallenge = nil
         awaitingResultID = nil
         authenticationTimeout?.cancel()
@@ -916,6 +1038,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
     }
 
     private func discardAuthentication(message: String) {
+        policy.clearReadyProbe()
         if !viewState.automaticEnabled { viewState.authentication = .paused }
         else if pendingChallenge != nil || awaitingResultID != nil { viewState.authentication = .rejected(message) }
         else { viewState.authentication = .waiting }
@@ -923,6 +1046,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
     }
 
     private func clearCharacteristics() {
+        policy.clearReadyProbe()
         viewState.connectedComputer = nil
         requestCharacteristic = nil
         challengeCharacteristic = nil
@@ -947,9 +1071,15 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
     private func publish() { onUpdate?(viewState) }
 
     private func diagnostic(_ event: String) {
-        let text = "\(Int(now))s \(event)"
+        let request = pendingChallenge?.requestID ?? awaitingResultID ?? policy.readyProbe?.requestID
+        let text = "\(diagnosticClock.string(from: Date())) uptimeMs=\(Int(now * 1000)) generation=\(policy.generation) requestID=\(request?.uuidString.lowercased() ?? "none") \(event)"
         logger.info("\(text, privacy: .public)")
         onDiagnostic?(text)
+    }
+
+    private func diagnosticError(_ operation: String, _ error: Error) {
+        let native = error as NSError
+        diagnostic("\(operation) failed domain=\(native.domain) code=\(native.code) detail=\(native.localizedDescription)")
     }
 
     private func allowedResult(_ code: String) -> String {

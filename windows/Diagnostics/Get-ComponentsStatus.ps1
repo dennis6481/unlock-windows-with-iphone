@@ -17,25 +17,43 @@ $credentialProviderPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authe
 $clsidPath = "HKLM:\SOFTWARE\Classes\CLSID\$credentialProviderClsid"
 $taskName = 'UnlockWindowsWithIPhone-CompleteOperation'
 $savedCredentialServiceName = 'UnlockWindowsSavedCredentialService'
-$files = @(
-    (Join-Path $BuildDirectory 'setup.exe'),
-    (Join-Path $BuildDirectory 'unlock_credential_provider.dll'),
-    (Join-Path $BuildDirectory 'unlock_saved_credential_service.exe'),
-    (Join-Path $BuildDirectory 'unlock_saved_credential_manager.exe'),
-    (Join-Path $BuildDirectory 'unlock_gatt_host.exe'),
-    (Join-Path $BuildDirectory 'unlock_pairing_tool.exe'),
-    (Join-Path $env:windir 'System32\unlock_credential_provider.dll'),
-    (Join-Path $env:windir 'System32\unlock_saved_credential_service.exe'),
-    (Join-Path $env:windir 'System32\unlock_gatt_host.exe'),
-    (Join-Path $env:windir 'System32\unlock_pairing_tool.exe'),
-    (Join-Path $env:windir 'System32\unlock_saved_credential_manager.exe'),
-    (Join-Path $env:windir 'System32\unlock_windows_components_wizard.exe')
-)
+$manifestPath = Join-Path $PSScriptRoot '..\ComponentFiles.h'
+$manifest = Get-Content -LiteralPath $manifestPath -Raw -ErrorAction Stop
+$names = @{}
+foreach ($match in [regex]::Matches($manifest, 'inline constexpr wchar_t (k\w+)\[\] = L"([^"\r\n]+)";')) {
+    $key = $match.Groups[1].Value
+    if ($names.ContainsKey($key)) { throw "Duplicate component name: $key" }
+    $names[$key] = $match.Groups[2].Value
+}
+$entries = [regex]::Matches($manifest, '\{(k\w+), (k\w+), (true|false)\}')
+$count = [regex]::Match($manifest, 'std::array<ComponentFile, (\d+)>')
+if (-not $count.Success -or $entries.Count -ne [int]$count.Groups[1].Value -or $entries.Count -eq 0) {
+    throw "Could not parse the complete shared component manifest: $manifestPath"
+}
+$seen = @{}
+$files = foreach ($entry in $entries) {
+    $installedKey = $entry.Groups[1].Value
+    $buildKey = $entry.Groups[2].Value
+    if (-not $names.ContainsKey($installedKey) -or -not $names.ContainsKey($buildKey)) {
+        throw "Undefined filename in component manifest: $installedKey / $buildKey"
+    }
+    $installed = $names[$installedKey]
+    $build = $names[$buildKey]
+    if ($seen.ContainsKey($installed)) { throw "Duplicate installed component: $installed" }
+    $seen[$installed] = $true
+    foreach ($name in @($installed, $build)) {
+        if ([IO.Path]::GetFileName($name) -ne $name -or [IO.Path]::IsPathRooted($name)) {
+            throw "Component manifest contains a non-filename value: $name"
+        }
+    }
+    Join-Path $BuildDirectory $build
+    Join-Path (Join-Path $env:windir 'System32') $installed
+}
 
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = [Security.Principal.WindowsPrincipal]::new($identity)
 $tasks = @(Get-ScheduledTask -ErrorAction Stop | Where-Object {
-    $_.TaskName -in @($taskName, 'UnlockWindowsWithIPhone-GattHost', 'UnlockWindowsWithIPhone-ComponentResult')
+    $_.TaskName -in @($taskName, 'UnlockWindowsWithIPhone-ComponentResult')
 })
 $task = $tasks | Where-Object TaskName -eq $taskName
 $taskInfo = if ($task) { Get-ScheduledTaskInfo -InputObject $task -ErrorAction Stop } else { $null }
@@ -76,7 +94,6 @@ Write-Host ('Unlock Windows with iPhone' + [char]0x00AE + ' Components diagnosti
     StartupTargetSid = if ($state) { $state.TargetSid } else { $null }
     StartupRunCommand = $startupCommand
     StartupObservation = $startupObservation
-    PreviousGattLoginTaskPresent = $null -ne ($tasks | Where-Object TaskName -eq 'UnlockWindowsWithIPhone-GattHost')
     CredentialCleanupConfirmed = if ($state) { $state.CredentialCleanupConfirmed } else { $null }
     SavedCredentialServicePresent = $null -ne $savedCredentialService
     SavedCredentialServiceState = if ($savedCredentialService) { $savedCredentialService.State } else { $null }

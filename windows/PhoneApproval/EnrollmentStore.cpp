@@ -1,6 +1,7 @@
 // Created by Rui MA on 26 Sep 2026
 
 #include "EnrollmentStore.h"
+#include "UnlockCrypto.h"
 
 #include <Windows.h>
 #include <aclapi.h>
@@ -22,7 +23,6 @@ namespace {
 
 constexpr std::uint32_t kFileMagic = 0x324B4E45; // "ENK2" in little-endian memory
 constexpr std::uint16_t kFileVersion = 1;
-constexpr std::size_t kRawPublicKeySize = 65;
 constexpr std::uint32_t kRecordMagic = 0x31434E45; // "ENC1" in little-endian memory
 constexpr std::uint16_t kRecordVersion = 1;
 constexpr std::size_t kMaxAccountSidBytes = 1024;
@@ -82,7 +82,7 @@ void requireNtStatus(const NTSTATUS status, const char* operation) {
 }
 
 void validateEnrollmentKey(const std::vector<std::uint8_t>& rawPublicKey) {
-    if (rawPublicKey.size() != kRawPublicKeySize || rawPublicKey.front() != 0x04) {
+    if (rawPublicKey.size() != protocol::kP256RawPublicKeySize || rawPublicKey.front() != 0x04) {
         throw std::invalid_argument(
             "enrollment key must be a 65-byte uncompressed P-256 X9.63 public key"
         );
@@ -274,7 +274,7 @@ EnrollmentRecord parseRecord(const std::vector<std::uint8_t>& plaintext) {
     RecordHeader header{};
     std::memcpy(&header, plaintext.data(), sizeof(header));
     if (header.magic != kRecordMagic || header.version != kRecordVersion ||
-        header.publicKeySize != kRawPublicKeySize ||
+        header.publicKeySize != protocol::kP256RawPublicKeySize ||
         header.accountSidBytes == 0 || header.accountSidBytes > kMaxAccountSidBytes ||
         header.accountSidBytes % sizeof(wchar_t) != 0 ||
         plaintext.size() != sizeof(header) + header.publicKeySize + header.accountSidBytes) {
@@ -301,69 +301,6 @@ EnrollmentRecord parseRecord(const std::vector<std::uint8_t>& plaintext) {
     );
     LocalFree(parsedSid);
     return result;
-}
-
-std::array<std::uint8_t, 32> sha256(const std::vector<std::uint8_t>& bytes) {
-    BCRYPT_ALG_HANDLE algorithm = nullptr;
-    requireNtStatus(
-        BCryptOpenAlgorithmProvider(
-            &algorithm,
-            BCRYPT_SHA256_ALGORITHM,
-            nullptr,
-            0
-        ),
-        "BCryptOpenAlgorithmProvider"
-    );
-
-    ULONG objectSize = 0;
-    ULONG resultSize = 0;
-    NTSTATUS status = BCryptGetProperty(
-        algorithm,
-        BCRYPT_OBJECT_LENGTH,
-        reinterpret_cast<PUCHAR>(&objectSize),
-        sizeof(objectSize),
-        &resultSize,
-        0
-    );
-    if (status < 0) {
-        BCryptCloseAlgorithmProvider(algorithm, 0);
-        requireNtStatus(status, "BCryptGetProperty");
-    }
-
-    std::vector<std::uint8_t> object(objectSize);
-    BCRYPT_HASH_HANDLE hash = nullptr;
-    status = BCryptCreateHash(
-        algorithm,
-        &hash,
-        object.data(),
-        objectSize,
-        nullptr,
-        0,
-        0
-    );
-    if (status < 0) {
-        BCryptCloseAlgorithmProvider(algorithm, 0);
-        requireNtStatus(status, "BCryptCreateHash");
-    }
-
-    status = BCryptHashData(
-        hash,
-        const_cast<PUCHAR>(reinterpret_cast<const UCHAR*>(bytes.data())),
-        static_cast<ULONG>(bytes.size()),
-        0
-    );
-    if (status < 0) {
-        BCryptDestroyHash(hash);
-        BCryptCloseAlgorithmProvider(algorithm, 0);
-        requireNtStatus(status, "BCryptHashData");
-    }
-
-    std::array<std::uint8_t, 32> digest{};
-    status = BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0);
-    BCryptDestroyHash(hash);
-    BCryptCloseAlgorithmProvider(algorithm, 0);
-    requireNtStatus(status, "BCryptFinishHash");
-    return digest;
 }
 
 } // namespace
@@ -515,14 +452,9 @@ std::string EnrollmentStore::fingerprint(
     const std::vector<std::uint8_t>& rawPublicKey
 ) {
     validateEnrollmentKey(rawPublicKey);
-    const auto digest = sha256(rawPublicKey);
-    constexpr char alphabet[] = "0123456789abcdef";
     std::string result;
-    result.reserve(digest.size() * 2);
-    for (const auto value : digest) {
-        result.push_back(alphabet[value >> 4]);
-        result.push_back(alphabet[value & 0x0f]);
-    }
+    requireNtStatus(protocol::publicKeyFingerprint(rawPublicKey.data(), rawPublicKey.size(), result),
+        "publicKeyFingerprint");
     return result;
 }
 

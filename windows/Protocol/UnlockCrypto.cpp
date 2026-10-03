@@ -3,6 +3,7 @@
 #include <cstring>
 #include <limits>
 #include <vector>
+#include <utility>
 
 namespace unlock_windows::protocol {
 namespace {
@@ -88,6 +89,56 @@ private:
 
 } // namespace
 
+NTSTATUS sha256(const std::uint8_t* bytes, const std::size_t size, Sha256Digest& output) noexcept {
+    output.fill(0);
+    if ((bytes == nullptr && size != 0) || size > std::numeric_limits<ULONG>::max())
+        return STATUS_INVALID_PARAMETER;
+    try {
+        AlgorithmHandle algorithm;
+        NTSTATUS status = BCryptOpenAlgorithmProvider(algorithm.receive(), BCRYPT_SHA256_ALGORITHM, nullptr, 0);
+        if (status < 0) return status;
+        ULONG objectSize = 0;
+        ULONG resultSize = 0;
+        status = BCryptGetProperty(algorithm.get(), BCRYPT_OBJECT_LENGTH,
+            reinterpret_cast<PUCHAR>(&objectSize), sizeof(objectSize), &resultSize, 0);
+        if (status < 0) return status;
+        if (objectSize == 0 || resultSize != sizeof(objectSize)) return STATUS_INVALID_PARAMETER;
+        std::vector<std::uint8_t> object(objectSize);
+        HashHandle hash;
+        status = BCryptCreateHash(algorithm.get(), hash.receive(), object.data(), objectSize, nullptr, 0, 0);
+        if (status < 0) return status;
+        if (size != 0) {
+            status = BCryptHashData(hash.get(), const_cast<PUCHAR>(bytes), static_cast<ULONG>(size), 0);
+            if (status < 0) return status;
+        }
+        Sha256Digest digest{};
+        status = BCryptFinishHash(hash.get(), digest.data(), static_cast<ULONG>(digest.size()), 0);
+        if (status >= 0) output = digest;
+        return status;
+    } catch (...) { return STATUS_NO_MEMORY; }
+}
+
+NTSTATUS publicKeyFingerprint(const std::uint8_t* publicKey, const std::size_t size,
+    std::string& output) noexcept {
+    output.clear();
+    if (publicKey == nullptr || size != kP256RawPublicKeySize || publicKey[0] != 0x04)
+        return STATUS_INVALID_PARAMETER;
+    Sha256Digest digest{};
+    const auto status = sha256(publicKey, size, digest);
+    if (status < 0) return status;
+    try {
+        constexpr char alphabet[] = "0123456789abcdef";
+        std::string result;
+        result.reserve(digest.size() * 2);
+        for (const auto value : digest) {
+            result.push_back(alphabet[value >> 4]);
+            result.push_back(alphabet[value & 0x0f]);
+        }
+        output = std::move(result);
+        return STATUS_SUCCESS;
+    } catch (...) { return STATUS_NO_MEMORY; }
+}
+
 VerificationResult verifyP256Signature(
     const std::uint8_t* publicKeyRaw,
     const std::size_t publicKeyRawSize,
@@ -104,64 +155,11 @@ VerificationResult verifyP256Signature(
     }
 
     try {
-        AlgorithmHandle sha256Algorithm;
-        NTSTATUS status = BCryptOpenAlgorithmProvider(
-        sha256Algorithm.receive(),
-        BCRYPT_SHA256_ALGORITHM,
-        nullptr,
-        0
-        );
+        Sha256Digest digest{};
+        NTSTATUS status = sha256(message, messageSize, digest);
         if (status < 0) {
-            return failure(VerificationCode::cryptographic_api_failure, status);
-        }
-
-        if (messageSize > std::numeric_limits<ULONG>::max()) {
-            return failure(VerificationCode::invalid_argument, STATUS_INVALID_PARAMETER);
-        }
-
-        ULONG hashObjectSize = 0;
-        ULONG resultSize = 0;
-        status = BCryptGetProperty(
-        sha256Algorithm.get(),
-        BCRYPT_OBJECT_LENGTH,
-        reinterpret_cast<PUCHAR>(&hashObjectSize),
-        sizeof(hashObjectSize),
-        &resultSize,
-        0
-        );
-        if (status < 0 || hashObjectSize == 0) {
-            return failure(VerificationCode::cryptographic_api_failure, status);
-        }
-
-        std::vector<std::uint8_t> hashObject(hashObjectSize);
-        HashHandle hash;
-        status = BCryptCreateHash(
-        sha256Algorithm.get(),
-        hash.receive(),
-        hashObject.data(),
-        static_cast<ULONG>(hashObject.size()),
-        nullptr,
-        0,
-        0
-        );
-        if (status < 0) {
-            return failure(VerificationCode::cryptographic_api_failure, status);
-        }
-
-        status = BCryptHashData(
-        hash.get(),
-        const_cast<PUCHAR>(reinterpret_cast<const UCHAR*>(message)),
-        static_cast<ULONG>(messageSize),
-        0
-        );
-        if (status < 0) {
-            return failure(VerificationCode::cryptographic_api_failure, status);
-        }
-
-        std::uint8_t digest[32]{};
-        status = BCryptFinishHash(hash.get(), digest, sizeof(digest), 0);
-        if (status < 0) {
-            return failure(VerificationCode::cryptographic_api_failure, status);
+            return failure(status == STATUS_INVALID_PARAMETER ? VerificationCode::invalid_argument
+                : VerificationCode::cryptographic_api_failure, status);
         }
 
         AlgorithmHandle ecdsaAlgorithm;
@@ -198,8 +196,8 @@ VerificationResult verifyP256Signature(
         status = BCryptVerifySignature(
         publicKey.get(),
         nullptr,
-        digest,
-        sizeof(digest),
+        digest.data(),
+        static_cast<ULONG>(digest.size()),
         const_cast<PUCHAR>(reinterpret_cast<const UCHAR*>(signatureRaw)),
         static_cast<ULONG>(signatureRawSize),
         0

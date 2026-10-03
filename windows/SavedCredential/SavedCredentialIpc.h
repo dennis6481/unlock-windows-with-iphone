@@ -3,6 +3,7 @@
 #pragma once
 
 #include <Windows.h>
+#include "../Protocol/SigningPayload.h"
 
 #include <array>
 #include <cstddef>
@@ -15,10 +16,9 @@ namespace unlock_windows::saved_credential {
 inline constexpr wchar_t kPipeName[] = L"\\\\.\\pipe\\unlock-windows-saved-credential-v1";
 inline constexpr wchar_t kPhonePipeName[] = L"\\\\.\\pipe\\unlock-windows-phone-approval-v1";
 inline constexpr wchar_t kServiceName[] = L"UnlockWindowsSavedCredentialService";
-inline constexpr wchar_t kServiceExeName[] = L"unlock_saved_credential_service.exe";
 inline constexpr std::size_t kMaxPacket = 16 * 1024;
 inline constexpr std::size_t kNonceSize = 16;
-inline constexpr ULONGLONG kPhoneAuthenticationLifetimeMs = 30'000;
+inline constexpr ULONGLONG kPhoneAuthenticationLifetimeMs = protocol::kChallengeLifetimeMilliseconds;
 
 enum class Operation : std::uint16_t {
     captureIdentity = 1,
@@ -165,6 +165,8 @@ struct CallDiagnostics final {
 [[nodiscard]] bool decodeAutoSubmitOffer(const std::uint8_t* data, std::size_t size, AutoSubmitOffer& output);
 [[nodiscard]] bool writePacket(HANDLE pipe, const Packet& packet);
 [[nodiscard]] bool readPacket(HANDLE pipe, Packet& packet);
+[[nodiscard]] bool writePacket(HANDLE pipe, const Packet& packet, DWORD waitMs);
+[[nodiscard]] bool readPacket(HANDLE pipe, Packet& packet, DWORD waitMs);
 [[nodiscard]] bool awaitReplyAcknowledgment(HANDLE pipe, Operation operation, DWORD waitMs);
 [[nodiscard]] const wchar_t* callStageName(CallStage stage);
 [[nodiscard]] bool call(Operation operation, SensitiveBytes&& request, Packet& reply,

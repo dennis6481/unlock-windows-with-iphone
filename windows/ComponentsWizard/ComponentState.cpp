@@ -4,103 +4,51 @@
 
 namespace unlock::components {
 
-bool ComponentSnapshot::hasKnownArtifacts() const noexcept {
-    return credentialProviderDllPresent ||
-        credentialProviderRegistered ||
-        credentialProviderClsidRegistered ||
-        savedCredentialServiceExePresent ||
-        savedCredentialServiceRegistered ||
-        continuationTaskPresent || userStartupPresent || desktopArtifactsPresent;
-}
-
 bool ComponentSnapshot::hasAnyArtifacts() const noexcept {
-    return hasKnownArtifacts();
-}
-
-bool ComponentSnapshot::isCompleteInstallation() const noexcept {
-    return credentialProviderDllPresent &&
-        credentialProviderRegistered &&
-        credentialProviderClsidRegistered &&
-        savedCredentialServiceExePresent &&
-        savedCredentialServiceRegistered &&
-        savedCredentialServiceMatchesInstallation &&
-        savedCredentialServiceRunning;
+    return credentialProviderDllPresent || credentialProviderRegistered ||
+        credentialProviderClsidRegistered || savedCredentialServiceExePresent ||
+        savedCredentialServiceRegistered || continuationTaskPresent ||
+        userStartupPresent || desktopArtifactsPresent;
 }
 
 bool ComponentSnapshot::isFullInstallation() const noexcept {
-    return observationValid && stateValid && isCompleteInstallation() && userStartupPresent && toolsPresent && shortcutsPresent && !targetSid.empty();
+    return observationValid && stateValid && credentialProviderDllPresent &&
+        credentialProviderRegistered && credentialProviderClsidRegistered &&
+        savedCredentialServiceExePresent && savedCredentialServiceRegistered &&
+        savedCredentialServiceMatchesInstallation && savedCredentialServiceRunning &&
+        userStartupPresent && toolsPresent && shortcutsPresent && !targetSid.empty();
 }
 
-const wchar_t* wizardPhaseName(const WizardPhase phase) noexcept {
-    switch (phase) {
-        case WizardPhase::none:
-            return L"None";
-        case WizardPhase::installing:
-            return L"Installing";
-        case WizardPhase::installed:
-            return L"Installed";
-        case WizardPhase::uninstallPendingReboot:
-            return L"UninstallPendingReboot";
-        case WizardPhase::cleaningUp:
-            return L"CleaningUp";
-        case WizardPhase::recoveryRequired:
-            return L"RecoveryRequired";
-        case WizardPhase::updatePendingReboot:
-            return L"UpdatePendingReboot";
-        case WizardPhase::updating:
-            return L"Updating";
-        case WizardPhase::installPendingReboot:
-            return L"InstallPendingReboot";
-        default:
-            return L"Unknown";
-    }
-}
-
-const wchar_t* wizardActionName(const WizardAction action) noexcept {
-    switch (action) {
-        case WizardAction::install:
-            return L"Install";
-        case WizardAction::update:
-            return L"Update";
-        case WizardAction::completeUpdate:
-            return L"CompleteUpdate";
-        case WizardAction::uninstall:
-            return L"Uninstall";
-        case WizardAction::cleanup:
-            return L"Cleanup";
-        case WizardAction::blocked:
-            return L"Blocked";
-        default:
-            return L"Unknown";
-    }
-}
-
-RecoveryPlan determineRecoveryPlan(const ComponentSnapshot& snapshot) {
+MaintenancePlan determineMaintenancePlan(const ComponentSnapshot& snapshot,
+    const WizardState* state, const CompletionRecord* completion, bool rebootRequired) {
     if (!snapshot.observationValid)
-        return {WizardAction::blocked, L"Cannot read component status", snapshot.observationError, false};
-    if (!snapshot.statePresent)
+        return {MaintenanceAction::blocked, snapshot.observationError};
+    if (snapshot.statePresent && (!snapshot.stateValid || !state))
+        return {MaintenanceAction::blocked, snapshot.stateError.empty()
+            ? L"The installation record is invalid." : snapshot.stateError};
+    if (!state)
         return snapshot.hasAnyArtifacts()
-            ? RecoveryPlan{WizardAction::blocked, L"Unregistered artifacts", L"No changes will be made automatically.", false}
-            : RecoveryPlan{WizardAction::install, L"Install", L"Install phone connectivity and lock-screen unlock.", true};
-    if (!snapshot.stateValid)
-        return {WizardAction::blocked, L"Invalid transaction", snapshot.stateError, false};
-    switch (snapshot.statePhase) {
-        case WizardPhase::installed:
-            if (snapshot.isCompleteInstallation() && !snapshot.continuationTaskPresent)
-                return {WizardAction::update, L"Installed", L"Update preserves credentials and phone registration.", true};
-            return {WizardAction::blocked, L"Installation needs attention", L"State preserved; no destructive recovery.", false};
-        case WizardPhase::installPendingReboot:
-            return {WizardAction::blocked, L"Restart required", L"Restart to verify installation.", false};
-        case WizardPhase::updatePendingReboot:
-        case WizardPhase::updating:
-            return {WizardAction::completeUpdate, L"Pending update",
-                snapshot.updateRebootRequired ? L"Restart before replacing files." : L"Continue the registered update.", true};
-        case WizardPhase::uninstallPendingReboot:
-        case WizardPhase::cleaningUp:
-            return {WizardAction::cleanup, L"Pending removal", L"Continue only the registered removal.", true};
-        default:
-            return {WizardAction::blocked, L"Interrupted operation", L"State preserved for diagnosis. No automatic cleanup.", false};
+            ? MaintenancePlan{MaintenanceAction::blocked, L"Unregistered component artifacts exist. No changes were made."}
+            : MaintenancePlan{MaintenanceAction::install};
+    if (state->schemaVersion != kWizardStateSchemaVersion || state->targetSid.empty())
+        return {MaintenanceAction::blocked, L"This installation record is unsupported or has no startup account. No migration will run."};
+    const bool unfinishedHandoff = completion && completion->transactionId == state->transactionId && !completion->finished;
+    const bool pending = unfinishedHandoff || state->phase == WizardPhase::installPendingReboot ||
+        state->phase == WizardPhase::updatePendingReboot || state->phase == WizardPhase::updating ||
+        state->phase == WizardPhase::uninstallPendingReboot || state->phase == WizardPhase::cleaningUp;
+    if (pending) {
+        if (!state->lastError.empty())
+            return {rebootRequired ? MaintenanceAction::restart : MaintenanceAction::resume,
+                state->lastError + L"\r\n\r\nThe transaction is preserved. No other operation may start.", true, true};
+        if (unfinishedHandoff && !rebootRequired && state->phase == WizardPhase::installed)
+            return {MaintenanceAction::resume, L"Continue verification of the existing transaction. No new operation may start.", true, true};
+        return {MaintenanceAction::restart, L"A component operation is pending. Restart Windows to complete it. No other operation can start.", true};
     }
+    if (state->phase != WizardPhase::installed)
+        return {MaintenanceAction::blocked, L"An interrupted transaction is preserved for diagnosis. No automatic removal or rollback will be performed.\r\n" + state->lastError};
+    if (!snapshot.isFullInstallation() || snapshot.continuationTaskPresent)
+        return {MaintenanceAction::blocked, L"The current complete installation could not be verified. Older or incomplete installations are not supported. No changes were made."};
+    return {MaintenanceAction::maintain};
 }
 
 } // namespace unlock::components

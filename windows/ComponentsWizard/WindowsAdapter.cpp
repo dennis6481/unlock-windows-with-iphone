@@ -497,6 +497,14 @@ std::optional<WizardState> WindowsAdapter::readState() const {
     state.targetSid = readRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, L"TargetSid").value_or(L"");
     state.credentialCleanupConfirmed = readRegistryDword(
         HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kCredentialCleanupValueName).value_or(0) == 1;
+    if (state.schemaVersion != kWizardStateSchemaVersion || !isKnownPhase(*phase) || state.targetSid.empty())
+        fail(L"Unsupported or incomplete installation record. No migration will run.");
+    PSID target = nullptr;
+    if (!ConvertStringSidToSidW(state.targetSid.c_str(), &target))
+        fail(L"The recorded startup account SID is invalid.");
+    const bool valid = IsValidSid(target) != FALSE;
+    LocalFree(target);
+    if (!valid) fail(L"The recorded startup account SID is invalid.");
     return state;
 }
 
@@ -614,7 +622,7 @@ void WindowsAdapter::markUpdateRequiresReboot() const {
 void WindowsAdapter::stageUpdate(WizardState& state) const {
     const auto native = environment().nativeArchitecture;
     for (const auto& component : kComponentFiles) {
-        const auto source = wcscmp(component.name, kInstallerFile) == 0 ? wizardPath_ : wizardPath_.parent_path() / component.name;
+        const auto source = wcscmp(component.name, kInstallerFile) == 0 ? wizardPath_ : wizardPath_.parent_path() / component.buildName;
         if (!fileExists(source) || executableArchitecture(source) != native)
             fail(L"Missing or wrong-architecture precompiled component: " + source.wstring());
     }
@@ -629,7 +637,7 @@ void WindowsAdapter::stageUpdate(WizardState& state) const {
     checkWin32(created, L"Could not create protected update staging directory");
     logOperation(L"Create protected staging directory: " + directory.wstring());
     for (const auto& component : kComponentFiles) {
-        const auto source = wcscmp(component.name, kInstallerFile) == 0 ? wizardPath_ : wizardPath_.parent_path() / component.name;
+        const auto source = wcscmp(component.name, kInstallerFile) == 0 ? wizardPath_ : wizardPath_.parent_path() / component.buildName;
         copyNativeBinary(source, directory / component.name);
     }
     state.wizardPath = (directory / kInstallerFile).wstring();
@@ -851,13 +859,7 @@ ComponentSnapshot WindowsAdapter::inspect() const {
         snapshot.statePresent = state.has_value();
         if (state) {
             snapshot.targetSid = state->targetSid;
-            snapshot.statePhase = state->phase;
-            snapshot.stateLastError = state->lastError;
-            snapshot.stateValid = isKnownPhase(static_cast<DWORD>(state->phase)) &&
-                state->schemaVersion == 3;
-            if (!snapshot.stateValid) {
-                snapshot.stateError = L"The saved transaction state has an unsupported schema or phase.";
-            }
+            snapshot.stateValid = true;
         }
     } catch (const ComponentError& error) {
         snapshot.statePresent = true;
@@ -911,9 +913,6 @@ ComponentSnapshot WindowsAdapter::inspect() const {
         snapshot.desktopArtifactsPresent = desktopArtifactsPresent();
         snapshot.shortcutsPresent = shortcutsPresent();
         snapshot.trayRunning = trayRunning();
-        if (snapshot.statePhase == WizardPhase::updatePendingReboot || snapshot.statePhase == WizardPhase::updating) {
-            snapshot.updateRebootRequired = updateRebootRequired();
-        }
     } catch (const ComponentError& error) {
         snapshot.observationValid = false;
         snapshot.observationError = error.wideWhat();

@@ -1,6 +1,7 @@
 // Created by Rui MA on 26 Sep 2026
 
 #include "SavedCredentialIpc.h"
+#include "../ComponentFiles.h"
 #include "EnrollmentStore.h"
 #include "../PairingTool/EnrollmentSession.h"
 #include "../PairingTool/EnrollmentChannel.h"
@@ -681,10 +682,10 @@ private:
             const DWORD size = GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
             if (!size || size >= executable.size()) throw std::runtime_error("GetModuleFileNameW failed");
             executable.resize(size);
-            const auto helper = std::filesystem::path(executable).parent_path() / L"unlock_pairing_tool.exe";
+            const auto helper = std::filesystem::path(executable).parent_path() / unlock::components::kPairingToolFile;
             const DWORD attributes = GetFileAttributesW(helper.c_str());
             if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY))
-                throw std::runtime_error("unlock_pairing_tool.exe must exist beside the GATT host");
+                throw std::runtime_error("The pairing helper must exist beside the GATT host");
             auto job = std::make_shared<Pairing>();
             job->target = target;
             job->deadline = GetTickCount64() + unlock_windows::enrollment::kPairingLifetime;
@@ -1079,7 +1080,7 @@ private:
             const auto size = GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
             if (!size || size >= executable.size()) throw std::runtime_error("Could not locate installed tools");
             executable.resize(size);
-            const auto tool = std::filesystem::path(executable).parent_path() / L"unlock_saved_credential_manager.exe";
+            const auto tool = std::filesystem::path(executable).parent_path() / unlock::components::kCredentialManagerFile;
             SHELLEXECUTEINFOW request{sizeof(request)};
             request.lpVerb = L"runas";
             request.lpFile = tool.c_str();

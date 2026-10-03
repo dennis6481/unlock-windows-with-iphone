@@ -1,6 +1,6 @@
 <!-- Created by Rui MA on 26 Sep 2026 -->
 
-# Unlock Windows with iPhone
+# Unlock Windows with iPhone®
 
 这个项目用 iPhone 的 Secure Enclave 私钥证明手机身份，并在 Windows 已有会话的锁屏界面消费一次性授权。
 
@@ -24,22 +24,9 @@
 
 ## Windows 组件
 
-```text
-iPhone
-  └─ BLE challenge/assertion
-      └─ unlock_gatt_host (用户态托盘进程；锁屏广播生命周期待验收)
-          └─ phone-only named pipe
-              └─ unlock_saved_credential_service (LocalSystem)
-                  ├─ PhoneApprovalCore：challenge、防重放、验签
-                  ├─ EnrollmentStore：已确认的公钥与账户 SID
-                  ├─ SavedCredentialVault：本机加密凭据
-                  └─ 120 秒单次授权
-                      └─ LogonUI-only named pipe
-                          └─ unlock_credential_provider
-                              └─ Windows Negotiate
-```
+整体架构 Mermaid 流程图、信任边界及跨端消息格式统一见 [Protocol.md](Protocol.md#整体架构流程图)。
 
-- `windows/GattHost`：暴露四个 GATT characteristic；正常模式处理认证请求 `0x01`，本地主动开启的配对窗口另接收 `0x02 + 公钥`。停止广播时不主动断开连接。原锁屏广播和提示修正已获用户预期反馈，新增 Windows 交互已获用户确认；完整蓝牙登记验收暂缓。
+- `windows/GattHost`：暴露五个 GATT characteristic，转送 CP 发起的认证，并提供 ComputerId；本地主动开启的配对窗口接收 `0x02 + 公钥`，不再接受旧 `0x01` 认证请求。停止广播时不主动断开连接。原锁屏广播和提示修正已获用户预期反馈，新增 Windows 交互已获用户确认；完整蓝牙登记验收暂缓。
 - `windows/SavedCredential`：LocalSystem 服务、IPC、凭据保管和暂时保留的密码管理 GUI。
 - `windows/CredentialProvider`：绑定当前控制台用户，只消费手机批准后的保存凭据。
 - `windows/PhoneApproval`：当前服务使用的签名验证核心与登记存储；不是独立 host。
@@ -71,7 +58,7 @@ make build-release
 
 `make test` 会先构建。仓库自动化代理不得在未获得当前任务明确授权时运行这些命令。
 
-iOS 项目位于 `ios/ios.xcodeproj`。Secure Enclave 路径必须在实体 iPhone 上验证；模拟器不会退回软件密钥。协议格式见 [protocol/README.md](protocol/README.md)。
+iOS 项目位于 `ios/ios.xcodeproj`。Secure Enclave 路径必须在实体 iPhone 上验证；模拟器不会退回软件密钥。协议格式见 [Protocol.md](Protocol.md)。
 
 ## 尚未完成
 
@@ -185,3 +172,17 @@ iOS 对系统恢复的候选设备读取 ComputerId 并重新核实订阅；长�
 现有 ComputerId 登记无需再次迁移或重新登记。本轮仅修改 iOS 及公共说明，没有修改现有 Windows 工作区改动；已补长期等待、事件恢复、扫描去重及旧数据隔离用例，未构建、执行测试、安装或实机验收。详见 [iOS 状态合同、迁移与验收](ios/README.md)。先验收桌面等待至少一分钟、手机保持后台且不点击重试，随后 Windows 锁屏／Enter 解锁及连续五轮循环，再测托盘重启、新 UUID 与整夜待机。若服务重新发布不能触发系统恢复事件，保留证据并报告，不增加无限轮询或私自修改 Windows 广播；完整配对取消／失败专项继续单列。
 
 参考：[Apple 服务失效与重新发现](https://developer.apple.com/documentation/corebluetooth/cbperipheraldelegate/peripheral(_:didmodifyservices:))、[Apple 指定服务扫描](https://developer.apple.com/documentation/corebluetooth/cbcentralmanager/scanforperipherals(withservices:options:))、[Apple 后台蓝牙与长期待连接](https://developer.apple.com/library/archive/documentation/NetworkingInternetWeb/Conceptual/CoreBluetooth_concepts/CoreBluetoothBackgroundProcessingForIOSApps/PerformingTasksWhileYourAppIsInTheBackground.html)。
+
+## Windows UI 整理与功能冻结（2026-10-03）
+
+用户确认当前功能可定型；历史手机批准／自动解锁和正常 Update 成果保留，不扩大为完整配对、整夜后台或负面测试已通过。本轮只整理 Windows 展示与登记入口，不修改 iOS、广播条件、签名、RSSI 阈值、认证期限、密码保管、一次性消费及自动提交。圆点动画与 Enter 初始焦点问题不混入。
+
+托盘菜单统一为 Status… / Pair iPhone… / Manage saved password… / Remove paired iPhone… / Quit。一台电脑仍只有一份登记，Pair iPhone 按真实记录提示首次、已登记或明确替换；移除手机不删除密码副本、ComputerId 或系统蓝牙配对。密码管理只维护本机加密副本，不修改 Microsoft Account 密码。
+
+桌面窗口保留 Win32，使用系统主题、Segoe UI、紧凑原生按钮及 PerMonitorV2，技术身份和历史错误折叠显示，安装器说明与操作日志分层且保留既有事务。磁贴名称为 Unlock with iPhone®，用户提示按等待、靠近、连接中断、超时等动作解释，内部结构化错误仍保留。CP 与服务没有桌面 DPI 注入。
+
+代码及测试源码已更新，仅静态检查，未构建、执行测试、安装或提交。新界面待验收；详细操作与 DPI／登记／维护／解锁回归清单集中在 [Windows UI 验收](windows/README.md#windows-ui-验收2026-10-03)。
+
+本轮追加将安装器默认页收紧，展开详情才增加高度，打开时在活动显示器居中，调整大小保持中心。Windows 可见完整产品名统一为 **Unlock Windows with iPhone®**，已安装页标题为 **Unlock Windows with iPhone® installed**。对外安装产物为 `setup.exe`；系统内部维护文件名与注册标识保留，避免破坏既有续办记录。未构建或运行，新布局仍待验收。
+
+参考：[Microsoft 高 DPI 桌面开发指南](https://learn.microsoft.com/en-us/windows/win32/hidpi/high-dpi-desktop-application-development-on-windows)。

@@ -32,7 +32,7 @@ std::filesystem::path modulePath() {
     return std::wstring(text.data(), n);
 }
 std::wstring startupAccountLabel(const std::wstring& sid, std::wstring& details) {
-    if (sid.empty()) return L"Will be confirmed during update";
+    if (sid.empty()) throw ComponentError(L"The installation has no recorded startup account.");
     details = L"Startup account SID: " + sid;
     PSID binary = nullptr;
     if (!ConvertStringSidToSidW(sid.c_str(), &binary))
@@ -192,31 +192,23 @@ struct Window {
     void home() {
         const auto status = adapter.inspect();
         const auto state = adapter.readState();
-        if (!status.observationValid || (status.statePresent && !status.stateValid))
-            throw ComponentError(status.observationValid ? status.stateError : status.observationError);
-        installed = state && state->phase == WizardPhase::installed;
         const auto completion = adapter.readCompletion();
-        const bool unfinishedHandoff = state && completion && completion->transactionId == state->transactionId && !completion->finished;
-        pending = state && (unfinishedHandoff || state->phase == WizardPhase::installPendingReboot ||
-            state->phase == WizardPhase::updatePendingReboot || state->phase == WizardPhase::updating ||
-            state->phase == WizardPhase::uninstallPendingReboot || state->phase == WizardPhase::cleaningUp);
+        const auto plan = determineMaintenancePlan(status, state ? &*state : nullptr,
+            completion ? &*completion : nullptr, adapter.updateRebootRequired());
+        installed = plan.action == MaintenanceAction::maintain;
+        pending = plan.pending;
+        if (plan.action == MaintenanceAction::blocked) throw ComponentError(plan.explanation);
         if (pending) {
-            if (!state->lastError.empty()) {
-                setPage(Page::failure, L"Operation needs attention", state->lastError + L"\r\n\r\nThe transaction is preserved. No other operation may start.");
-                buttons(nullptr, adapter.updateRebootRequired() ? L"Restart now" : L"Continue", L"Close");
-            } else if (unfinishedHandoff && !adapter.updateRebootRequired() && state->phase == WizardPhase::installed) {
-                setPage(Page::failure, L"Completion handoff interrupted", L"Continue verification of the existing transaction. No new operation may start.");
-                buttons(nullptr, L"Continue", L"Close");
+            if (plan.attentionRequired) {
+                setPage(Page::failure, L"Operation needs attention", plan.explanation);
+                buttons(nullptr, plan.action == MaintenanceAction::restart ? L"Restart now" : L"Continue", L"Close");
             } else {
-                setPage(Page::restart, L"Restart required",
-                    L"A component operation is pending. Restart Windows to complete it. No other operation can start.");
+                setPage(Page::restart, L"Restart required", plan.explanation);
                 buttons(nullptr, L"Restart now", L"Later");
             }
             return;
         }
-        if (state && !installed) throw ComponentError(L"An interrupted transaction is preserved for diagnosis. No automatic removal or rollback will be performed.\r\n" + state->lastError);
         if (installed) {
-            if (!status.isCompleteInstallation()) throw ComponentError(L"Core installation verification failed. No destructive recovery will run automatically.");
             log.clear();
             const auto account = startupAccountLabel(state->targetSid, log);
             setPage(Page::home, L"Unlock Windows with iPhone\u00ae installed", L"Startup account: " + account +
@@ -225,7 +217,6 @@ struct Window {
             text(IDC_LOG_TOGGLE, L"Technical details");
             buttons(L"Uninstall", L"Update", L"Cancel");
         } else {
-            if (status.hasAnyArtifacts()) throw ComponentError(L"Unregistered component artifacts exist. Installation has not started.");
             log.clear();
             setPage(Page::home, L"Install Unlock Windows with iPhone\u00ae",
                 L"Use your iPhone to unlock this PC after signing in normally.\r\n\r\n"

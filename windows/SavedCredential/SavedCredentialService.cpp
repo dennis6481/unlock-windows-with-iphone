@@ -227,7 +227,6 @@ struct Grant final {
     ULONGLONG expiresAt = 0;
     std::array<std::uint8_t, kNonceSize> nonce{};
     ULONGLONG consoleGeneration = 0;
-    bool phone = false;
     bool autoSubmitOffered = false;
 };
 
@@ -411,7 +410,7 @@ public:
                 Identity identity;
                 if (!decodeIdentity(request.payload.value.data(), request.payload.value.size(), identity) ||
                     identity.sid != console.sid) return response;
-                if (grant_ && grant_->phone && !grant_->autoSubmitOffered &&
+                if (grant_ && !grant_->autoSubmitOffered &&
                     grant_->session == console.session && GetTickCount64() < grant_->expiresAt &&
                     grant_->consoleGeneration == gConsoleGeneration.load() &&
                     sameIdentity(identity, grant_->identity) && enrollmentMatches()) {
@@ -437,7 +436,7 @@ public:
                     currentPipePid != client.pid ||
                     WaitForSingleObject(client.process.value, 0) != WAIT_TIMEOUT ||
                     grant_->consoleGeneration != gConsoleGeneration.load() ||
-                    (grant_->phone && !enrollmentMatches())) return response;
+                    !enrollmentMatches()) return response;
                 grant_.reset();
                 if (!authenticationStatus_.requestId.empty()) {
                     authenticationStatus_.stage = AuthenticationStage::consumed;
@@ -565,7 +564,7 @@ private:
             fail("phone grant nonce RNG failed");
         }
         grant_ = Grant{*stored, console.session, GetTickCount64() + kGrantLifetimeMs,
-            nonce, generation, true};
+            nonce, generation};
         authenticationStatus_.stage = AuthenticationStage::approved;
         authenticationStatus_.deadline = grant_->expiresAt;
         logAuthentication();
@@ -586,7 +585,7 @@ private:
                 console.session == grant_->session && console.sid == grant_->identity.sid &&
                 gConsoleGeneration.load() == grant_->consoleGeneration, console.locked);
             if (reason != AuthenticationFailure::none) {
-                if (grant_->phone) rejectAuthentication(reason);
+                rejectAuthentication(reason);
                 grant_.reset();
             }
         }

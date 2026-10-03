@@ -27,28 +27,6 @@ namespace {
 using winrt::Windows::Data::Json::JsonObject;
 
 constexpr std::size_t kRequestIdSize = 16;
-constexpr std::size_t kNonceSize = 32;
-constexpr std::size_t kRawPublicKeySize = 65;
-
-struct AlgorithmHandle final {
-    BCRYPT_ALG_HANDLE value = nullptr;
-
-    ~AlgorithmHandle() {
-        if (value != nullptr) {
-            BCryptCloseAlgorithmProvider(value, 0);
-        }
-    }
-};
-
-struct HashHandle final {
-    BCRYPT_HASH_HANDLE value = nullptr;
-
-    ~HashHandle() {
-        if (value != nullptr) {
-            BCryptDestroyHash(value);
-        }
-    }
-};
 
 [[nodiscard]] bool isHex(const char value) noexcept {
     return (value >= '0' && value <= '9') ||
@@ -197,71 +175,6 @@ struct HashHandle final {
     return result;
 }
 
-[[nodiscard]] bool sha256(
-    const std::uint8_t* input,
-    const std::size_t inputSize,
-    std::array<std::uint8_t, 32>& output
-) {
-    AlgorithmHandle algorithm;
-    if (BCryptOpenAlgorithmProvider(
-            &algorithm.value, BCRYPT_SHA256_ALGORITHM, nullptr, 0
-        ) < 0) {
-        return false;
-    }
-
-    ULONG objectSize = 0;
-    ULONG resultSize = 0;
-    if (BCryptGetProperty(
-            algorithm.value,
-            BCRYPT_OBJECT_LENGTH,
-            reinterpret_cast<PUCHAR>(&objectSize),
-            sizeof(objectSize),
-            &resultSize,
-            0
-        ) < 0 || objectSize == 0) {
-        return false;
-    }
-
-    std::vector<std::uint8_t> object(objectSize);
-    HashHandle hash;
-    if (BCryptCreateHash(
-            algorithm.value,
-            &hash.value,
-            object.data(),
-            objectSize,
-            nullptr,
-            0,
-            0
-        ) < 0 || BCryptHashData(
-            hash.value,
-            const_cast<PUCHAR>(reinterpret_cast<const UCHAR*>(input)),
-            static_cast<ULONG>(inputSize),
-            0
-        ) < 0 || BCryptFinishHash(
-            hash.value,
-            output.data(),
-            static_cast<ULONG>(output.size()),
-            0
-        ) < 0) {
-        return false;
-    }
-    return true;
-}
-
-[[nodiscard]] std::string fingerprint(const std::vector<std::uint8_t>& publicKey) {
-    std::array<std::uint8_t, 32> digest{};
-    if (!sha256(publicKey.data(), publicKey.size(), digest)) {
-        return {};
-    }
-
-    std::ostringstream output;
-    output << std::hex << std::setfill('0');
-    for (const auto value : digest) {
-        output << std::setw(2) << static_cast<unsigned int>(value);
-    }
-    return output.str();
-}
-
 [[nodiscard]] std::optional<std::string> requiredString(
     const JsonObject& object,
     const wchar_t* name
@@ -333,7 +246,7 @@ IssuedChallenge PhoneApprovalCore::issueChallenge(const std::int64_t issuedAtMil
 }
 
 void PhoneApprovalCore::setEnrolledPublicKey(std::vector<std::uint8_t> rawPublicKey) {
-    if (rawPublicKey.size() != kRawPublicKeySize || rawPublicKey.front() != 0x04) {
+    if (rawPublicKey.size() != protocol::kP256RawPublicKeySize || rawPublicKey.front() != 0x04) {
         throw std::invalid_argument("enrolled public key must be a raw P-256 key");
     }
     std::lock_guard lock(mutex_);
@@ -402,7 +315,7 @@ AssertionResult PhoneApprovalCore::verifyAssertion(
         return {AssertionCode::challenge_replayed};
     }
     if (nowMilliseconds < outstandingChallenge_->issuedAtMilliseconds ||
-        nowMilliseconds - outstandingChallenge_->issuedAtMilliseconds > challengeLifetimeMilliseconds_) {
+        nowMilliseconds - outstandingChallenge_->issuedAtMilliseconds >= challengeLifetimeMilliseconds_) {
         return {AssertionCode::challenge_expired};
     }
 
@@ -437,15 +350,15 @@ AssertionResult PhoneApprovalCore::verifyAssertion(
         }
         const auto publicKey = base64Decode(*publicKeyEncoded);
         const auto signature = base64Decode(*signatureEncoded);
-        if (!publicKey || publicKey->size() != kRawPublicKeySize || publicKey->front() != 0x04) {
+        if (!publicKey || publicKey->size() != protocol::kP256RawPublicKeySize || publicKey->front() != 0x04) {
             return {AssertionCode::invalid_public_key};
         }
         if (!signature || signature->size() != protocol::kP256RawSignatureSize) {
             return {AssertionCode::invalid_signature_encoding};
         }
 
-        const auto expectedKeyId = fingerprint(*publicKey);
-        if (expectedKeyId.empty()) {
+        std::string expectedKeyId;
+        if (protocol::publicKeyFingerprint(publicKey->data(), publicKey->size(), expectedKeyId) < 0) {
             return {AssertionCode::cryptographic_api_failure};
         }
         if (lowerAscii(*keyId) != expectedKeyId) {

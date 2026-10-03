@@ -2,12 +2,12 @@
 
 #pragma once
 
-#include <cstddef>
 #include <cstdint>
 #include <string>
-#include <vector>
 
 namespace unlock::components {
+
+inline constexpr std::uint32_t kWizardStateSchemaVersion = 3;
 
 enum class WizardPhase : std::uint32_t {
     none = 0,
@@ -24,14 +24,12 @@ enum class WizardPhase : std::uint32_t {
 enum class WizardAction {
     install,
     update,
-    completeUpdate,
     uninstall,
-    cleanup,
     blocked,
 };
 
 struct WizardState final {
-    std::uint32_t schemaVersion = 3;
+    std::uint32_t schemaVersion = kWizardStateSchemaVersion;
     WizardPhase phase = WizardPhase::none;
     std::wstring transactionId;
     std::wstring wizardPath;
@@ -44,9 +42,7 @@ struct WizardState final {
 struct ComponentSnapshot final {
     bool statePresent = false;
     bool stateValid = false;
-    WizardPhase statePhase = WizardPhase::none;
     std::wstring stateError;
-    std::wstring stateLastError;
 
     bool credentialProviderDllPresent = false;
     bool credentialProviderRegistered = false;
@@ -56,7 +52,6 @@ struct ComponentSnapshot final {
     bool savedCredentialServiceMatchesInstallation = false;
     bool savedCredentialServiceRunning = false;
     bool continuationTaskPresent = false;
-    bool updateRebootRequired = false;
     bool userStartupPresent = false;
     bool toolsPresent = false;
     bool desktopArtifactsPresent = false;
@@ -67,9 +62,7 @@ struct ComponentSnapshot final {
     bool observationValid = true;
     std::wstring observationError;
 
-    [[nodiscard]] bool hasKnownArtifacts() const noexcept;
     [[nodiscard]] bool hasAnyArtifacts() const noexcept;
-    [[nodiscard]] bool isCompleteInstallation() const noexcept;
     [[nodiscard]] bool isFullInstallation() const noexcept;
 };
 
@@ -82,15 +75,16 @@ struct CompletionRecord final {
     bool success = false;
 };
 
-struct RecoveryPlan final {
-    WizardAction action = WizardAction::blocked;
-    std::wstring title;
+enum class MaintenanceAction { install, maintain, restart, resume, blocked };
+
+struct MaintenancePlan final {
+    MaintenanceAction action = MaintenanceAction::blocked;
     std::wstring explanation;
-    bool safeToAutomate = false;
+    bool pending = false;
+    bool attentionRequired = false;
 };
 
-[[nodiscard]] RecoveryPlan determineRecoveryPlan(const ComponentSnapshot& snapshot);
-[[nodiscard]] const wchar_t* wizardPhaseName(WizardPhase phase) noexcept;
-[[nodiscard]] const wchar_t* wizardActionName(WizardAction action) noexcept;
+[[nodiscard]] MaintenancePlan determineMaintenancePlan(const ComponentSnapshot& snapshot,
+    const WizardState* state, const CompletionRecord* completion, bool rebootRequired);
 
 } // namespace unlock::components

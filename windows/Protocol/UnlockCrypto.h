@@ -6,6 +6,8 @@
 #include <ntstatus.h>
 #include <bcrypt.h>
 
+#include <array>
+#include <string>
 #include <cstddef>
 #include <cstdint>
 
@@ -14,6 +16,12 @@ namespace unlock_windows::protocol {
 inline constexpr std::size_t kP256RawPublicKeySize = 65; // SEC1 uncompressed: 0x04 || X || Y
 inline constexpr std::size_t kP256CoordinateSize = 32;
 inline constexpr std::size_t kP256RawSignatureSize = 64; // fixed-width r || s
+
+using Sha256Digest = std::array<std::uint8_t, 32>;
+
+[[nodiscard]] NTSTATUS sha256(const std::uint8_t* bytes, std::size_t size, Sha256Digest& output) noexcept;
+[[nodiscard]] NTSTATUS publicKeyFingerprint(const std::uint8_t* publicKey, std::size_t size,
+    std::string& output) noexcept;
 
 enum class VerificationCode {
     valid,
@@ -33,7 +41,7 @@ struct VerificationResult {
 
 // Verifies an iOS CryptoKit P-256 signature.
 //
-// message is the fixed binary signing payload defined in protocol/README.md.
+// message is the fixed binary signing payload defined in Protocol.md.
 // The function hashes message with SHA-256 before calling BCryptVerifySignature,
 // because the Windows CNG ECDSA verifier consumes the pre-hash.
 //

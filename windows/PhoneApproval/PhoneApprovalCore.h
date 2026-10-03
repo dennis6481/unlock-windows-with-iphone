@@ -84,10 +84,6 @@ public:
     void setEnrolledAccountSid(std::string accountSid);
     void clearEnrolledPublicKey() noexcept;
 
-    [[nodiscard]] const std::string& audience() const noexcept {
-        return audience_;
-    }
-
     [[nodiscard]] static std::string serializeChallenge(
         const protocol::FixedChallenge& challenge
     );

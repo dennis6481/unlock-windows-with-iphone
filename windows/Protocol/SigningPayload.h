@@ -8,7 +8,7 @@
 namespace unlock_windows::protocol {
 
 inline constexpr char kUnlockAudience[] = "windows-unlock";
-inline constexpr std::int64_t kChallengeLifetimeMilliseconds = 120'000;
+inline constexpr std::int64_t kChallengeLifetimeMilliseconds = 30'000;
 
 struct FixedChallenge {
     std::uint32_t version = 0;

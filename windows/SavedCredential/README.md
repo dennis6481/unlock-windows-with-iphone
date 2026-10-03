@@ -2,62 +2,40 @@
 
 # Saved credential service
 
-`unlock_saved_credential_service.exe` 是当前 Windows 解锁链的唯一长期状态所有者。它以 LocalSystem 运行并管理：
+LocalSystem 服务是 Windows 手机认证和密码领取的权威。保存记录绑定 SID、系统 QualifiedUserName 和 ProviderID；CP 每次枚举重新核对 PrimarySid＝SID，领取身份必须精确匹配，不因 SID 相同而释放旧在线身份的密码。
 
-- 当前控制台账户身份快照；
-- LocalSystem user-scope DPAPI 加密的 Microsoft Account 密码（不使用 machine scope）；
-- 已登记 iPhone 公钥和账户 SID；
-- challenge、防重放、签名验证；
-- 120 秒、单次领取的手机批准。
+密码以 LocalSystem user-scope DPAPI 保存，使用 CRYPTPROTECT_UI_FORBIDDEN，不使用 machine scope。文件及目录仅 SYSTEM；管理员最终取得 SYSTEM 不在抵御范围。可控明文尽早清零，打包只在 LogonUI 内 CP 执行，不在 Session 0 预打包。
 
-## IPC 边界
+## 请求与领取
 
-服务使用两条 named pipe：
+1. LogonUI 的 unlockEligibility 核对已有物理控制台 token、SID、session 和明确 locked 状态；首次登录不合格。
+2. beginPhoneAuthentication 仅由合格 LogonUI 发起；保存身份、登记 SID 及控制台一致才签发。服务和验签核心共用 30 秒 challenge 期限。
+3. phone pipe 仅接受 takePhoneChallenge、reportPhoneFailure 和 submitPhoneAssertion，不开放密码操作或新请求签发。host 双订阅就绪后单次领取 challenge。
+4. 服务验签、防重放和登记核对通过，形成独立 120 秒内存 grant；服务重启、解锁／会话变化使旧请求及批准失效。
+5. takeAutoSubmitOffer 只向合格 LogonUI 发出一次 nonce／期限，不解密。claimCredential 首次合格领取先不可逆消费，再解密；打包失败、错误密码或 CP 重建不恢复批准。
 
-- phone pipe 只接受 `takePhoneChallenge`、`reportPhoneFailure` 和 `submitPhoneAssertion`，供 GATT transport 投递和完成已有请求使用；不能签发新请求；
-- saved-credential pipe 接受身份、密码维护和领取操作，并对管理员、物理 console、锁屏状态与 LogonUI 调用方分别校验。
+唯一批准来源是手机 assertion；Manager 不提供测试授权，Grant 不再区分非手机类别。登记一致性检查始终执行。
 
-有效 assertion 必须同时满足登记公钥、登记 SID、保存凭据身份、active console session 和当前 challenge。成功后服务创建 120 秒 grant。`claimCredential` 在返回密码前先清除 grant，因此后续 Windows 密码校验失败也不会让同一批准再次使用。
+## IPC 与状态
 
-自动提交增加 `takeAutoSubmitOffer`，仅允许当前锁屏 console 的合格 LogonUI 以完整身份申请。没有尚未发出的匹配批准时返回空成功回复；有匹配批准时在服务内先不可逆标记 offer 已发出，再返回 nonce 和 grant 到期时间，不返回密码。不论 CP 重建或通知丢失，同一批准都不会再次获得自动提交通知。密码的消费仍发生于 `claimCredential`，箭头已改为发起新认证，不能直接领取已有 grant。每次手机批准使用独立随机 nonce，延迟的自动提交不能领取另一份批准。2026-10-02 用户确认实体机自动解锁、无新批准不解锁、重新批准再次解锁及原生 PIN/密码回归通过；CP 重建、通知丢失和失败路径仍须专项验收。正常安装器 Update 也已确认通过，密码保管与公钥登记不走卸载清除路径。
+saved-credential pipe 按操作核对管理员、当前控制台和 LogonUI；phone pipe 限当前控制台用户。连接建立持有进程句柄，核对映像、SYSTEM、session；实际管道 token 校验和 impersonation 后恢复 LocalSystem 再执行 DPAPI 的边界不变。
 
-## 箭头发起认证（2026-10-03，待验收）
+内部 IPC v2 拒绝旧包，所有组件使用同一构建。同步／带超时传输共用报头构造与校验；服务映像名来自共享组件清单。
 
-`beginPhoneAuthentication`（操作 9）仅接受锁屏控制台的合格 LogonUI，以完整 Identity 发起；与保存身份/登记一致才签发，回复结构化 AuthenticationStatus（requestID、阶段、失败原因、服务单调时钟 deadline）。同一时刻只保留一个请求，整次认证期限 30 秒。phone-only 的 `takePhoneChallenge`（13）请求为空，回复结构化 PhoneChallengePayload（AuthenticationStatus 与可为空的 challenge JSON）；仅有可投递请求时 JSON 非空，服务在回复前标记已领取，不重复投递。`reportPhoneFailure`（14）载荷为 `36 字节 requestID + 1 字节原因`：1 信号不足、2 自动批准关闭、3 新 RSSI 不可用、4 没有有效连接、5 通知失败、6 手机拒绝/签名失败。有效拒绝结束本次请求，迟到请求 ID 不影响下一次认证。
+AuthenticationStatus 提供 requestID、阶段、原因和单调时钟 deadline。阶段为 idle／waitingPhone／awaitingAssertion／approved／failed／consumed；等待、距离失败、断连、超时和真实 session 变化分开。无关 session 事件不使目标请求失效；每次操作仍重新核对实际控制台。
 
-`phoneAuthenticationStatus`（15）仅允许 LogonUI 提交完整 Identity，回复 IPC v2 的结构化 AuthenticationStatus；CP 将状态关联到当前请求，再映射为用户提示。成功批准沿用 `takeAutoSubmitOffer` 和 `claimCredential`。超时、解锁、重新锁屏、会话变化和服务重启均不能继续旧请求；未领取的旧授权不能用于新锁屏周期。
+reportPhoneFailure 保留 `36 字节 requestID + 1 字节原因`，原因 1–6 为 RSSI 不足、自动批准关闭、新读数失败、订阅／连接丢失、投递失败、签名失败。迟到结果不覆盖新请求。日志不记录密码、nonce、密钥或断言正文。
 
-## Manager GUI
+## 密码管理
 
-`unlock_saved_credential_manager.exe` 是当前凭据副本管理界面。通过托盘 **Manage saved password…** 或现有开始菜单入口启动，请求 UAC；仅在提升权限、已解锁的物理控制台使用。主区域显示目标账户及真实保存状态，按钮为：
+从托盘 **Manage saved password…** 或开始菜单打开，正常请求 UAC，仅在已解锁控制台操作。目标是控制台用户，不是提权管理员。
 
-- **Refresh**：读取最新 LogonUI 身份快照和保存状态；
-- **Save password…**：首次保存当前身份的实际 Microsoft Account 密码；
-- **Update saved password…**：替换已有保存密码；
-- **Remove saved password…**：确认后删除保存记录，确认默认取消；
-- **Close**：关闭窗口。
+首次设置／更新：先锁屏，再以原生 PIN／密码返回桌面；Refresh 核对账户，Save password… 或 Update saved password…。服务身份快照保留五分钟；失效时需重复原生锁屏／解锁，不读取诊断文件或拼接 online identity。
 
-此工具不修改 Windows／Microsoft Account 密码。SID、QualifiedUserName、ProviderID 及 IPC 错误在 **Technical details** 展开查看，目标身份核验没有放宽；另一管理员完成 UAC 时，目标仍是实际控制台用户。快照失效会提示先锁屏、用原生 PIN／密码返回桌面，然后 Refresh，不把历史快照当作有效身份。
+Remove saved password… 确认后清除本机副本；Close 关闭工具。SID、QualifiedUserName、ProviderID 和错误码在 Technical details。工具不修改 Windows／Microsoft Account 密码。
 
-Manager 不再创建解锁授权。唯一授权来源是通过 iPhone 验证的 assertion。
+## 删除与验收
 
-典型设置顺序：先锁定并用原生 PIN/密码解锁一次，让服务获得当前 LogonUI 身份快照；从托盘打开管理窗口，Refresh 后核对账户，Save 或 Update。此 GUI 是现有维护入口，不应删除。
+卸载前 clearForRemoval 必须由服务确认密码、grant、snapshot 和 challenge 已清除，安装器才继续。没有绕过清除失败的应急成功路径。
 
-2026-10-03：改为原生主题对话框及 PerMonitorV2，技术详情默认折叠，正文约 10 pt、标题约 14 pt，支持对话框键盘导航。只静态检查，未构建或执行；DPI、跨管理员、移除及解锁回归见 [Windows UI 验收](../README.md#windows-ui-验收2026-10-03)。DPAPI 范围、保存格式、领取授权及清零策略不变。
-
-## 删除语义
-
-Components Wizard 卸载前调用 `clearForRemoval`。只有服务确认 vault、grant、snapshot 和 challenge 已清除后，Wizard 才继续注销服务与 Credential Provider。没有忽略此失败的 emergency removal。
-
-## 结构化状态与已有会话资格（2026-10-03，待验收）
-
-内部管道包版本为 2（管道名称未改）；旧版本包明确拒绝，不保留旧字符串状态兼容路径。全部 Windows 组件须来自同一构建。
-
-- unlockEligibility（16）：仅 credential 端点合格 LogonUI 可调用；服务用 WTSQueryUserToken 核对已有控制台 token SID／session、锁定状态和已登记目标 SID；不返回密码或授权。
-- AuthenticationStatus：版本、阶段、原因、requestID、GetTickCount64 deadline。阶段包括 idle、waitingPhone、awaitingAssertion、approved、failed、consumed。
-- beginPhoneAuthentication：成功回复 AuthenticationStatus，服务限定请求总期限 30 秒。
-- phoneAuthenticationStatus：回复 AuthenticationStatus，不再拼接 requestID 和自由文本。
-- takePhoneChallenge：回复 PhoneChallengePayload（结构化状态与可为空的 JSON）。托盘只在唯一有效客户端且双通知订阅就绪后调用；非空 JSON 在服务内不可逆地标记已投递。
-- 原有 reportPhoneFailure 原因 1–6 保留；认证超时与真实会话／锁定变化单列。无关 session 的通知不递增本次 console generation；每次操作仍核对实际 console。锁定通知本身不作失效事件，避免已在锁定状态发出的请求被延迟到达的锁定通知取消；目标会话解锁、注销或断开仍递增 generation，使旧请求和批准失效。
-
-一次性 grant、领取前消费及 DPAPI 格式不变；阶段日志只记录代码、剩余时间和 session，不记录密码、nonce、密钥或断言。新增静态用例没有执行；首次登录、后台待机及会话变化仍需验收。
+已确认成果与未验证的身份变化、错误调用方、自动提交失败及本轮清理回归统一见 [Windows 验收记录](../Validation.md)。

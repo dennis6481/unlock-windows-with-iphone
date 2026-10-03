@@ -1,6 +1,7 @@
 // Created by Rui MA on 27 Sep 2026
 
 #include "UnlockCredentialProvider.h"
+#include "../ComponentFiles.h"
 #include "../Resources/resource.h"
 
 #include <Windows.h>
@@ -231,7 +232,7 @@ void run() {
     const auto comResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     require(SUCCEEDED(comResult), "CoInitializeEx failed");
 
-    const auto dllPath = moduleDirectory() + L"unlock_credential_provider.dll";
+    const auto dllPath = moduleDirectory() + unlock::components::kCredentialProviderFile;
     const auto module = LoadLibraryW(dllPath.c_str());
     require(module != nullptr, "could not load Credential Provider prototype DLL");
 

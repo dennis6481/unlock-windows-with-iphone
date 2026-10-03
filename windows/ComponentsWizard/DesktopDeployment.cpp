@@ -19,7 +19,6 @@
 namespace unlock::components {
 namespace {
 using Microsoft::WRL::ComPtr;
-constexpr wchar_t previousLoginTaskName[] = L"UnlockWindowsWithIPhone-GattHost";
 constexpr wchar_t startupKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 constexpr wchar_t startupName[] = L"Unlock Windows with iPhone";
 constexpr wchar_t bootName[] = L"UnlockWindowsWithIPhone-CompleteOperation";
@@ -346,7 +345,6 @@ void WindowsAdapter::registerContinuationTask(const WizardState& state) const {
 }
 void WindowsAdapter::registerUserStartup(const WizardState& state) const {
     logOperation(L"Register target-user Run startup: " + std::wstring(startupName) + L"; target SID=" + state.targetSid);
-    Scheduler scheduler; scheduler.remove(previousLoginTaskName);
     withUserHive(state.targetSid, [](HKEY hive) {
         Registry key;
         regCheck(RegCreateKeyExW(hive, startupKey, 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key.value, nullptr), L"Create target-user startup key");
@@ -412,8 +410,6 @@ bool WindowsAdapter::trayRunning() const {
     return search.found;
 }
 void WindowsAdapter::stopTray(const WizardState& state) const {
-    Scheduler scheduler; auto task = scheduler.get(previousLoginTaskName);
-    if (task) hr(task->put_Enabled(VARIANT_FALSE), L"Disable previous Bluetooth login task before migration");
     logOperation(L"Remove target-user Run startup before component maintenance.");
     removeUserStartup(state.targetSid);
     TraySearch search{systemDirectory() / kGattHostFile, state.targetSid, WTSGetActiveConsoleSessionId(), true};
@@ -440,8 +436,7 @@ void WindowsAdapter::installDesktopIntegration(const WizardState& state) const {
     logOperation(L"Bluetooth Run startup registered; the ordinary completion UI starts the tray once, then Windows starts it at later sign-ins.");
 }
 void WindowsAdapter::removeDesktopIntegration() const {
-    logOperation(L"Delete target-user Run startup, previous Bluetooth login task and Start menu shortcuts.");
-    Scheduler scheduler; scheduler.remove(previousLoginTaskName);
+    logOperation(L"Delete target-user Run startup and Start menu shortcuts.");
     const auto state = readState();
     if (state && !state->targetSid.empty()) removeUserStartup(state->targetSid);
     auto directory = menuDirectory();

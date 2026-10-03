@@ -294,6 +294,12 @@ void run() {
         "expired challenge was not rejected"
     );
 
+    const auto boundary = service.issueChallenge(1'000);
+    require(service.verifyAssertion("{}", 30'999).code != AssertionCode::challenge_expired,
+        "challenge expired before the 30-second deadline");
+    require(service.verifyAssertion("{}", 31'000).code == AssertionCode::challenge_expired,
+        "challenge must expire exactly at the 30-second boundary");
+
     const auto validIssued = service.issueChallenge(2'000);
     const auto payload = unlock_windows::protocol::buildSigningPayload(validIssued.challenge);
     require(payload.succeeded(), "test payload did not build");

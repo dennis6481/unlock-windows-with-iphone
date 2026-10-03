@@ -329,6 +329,31 @@ void testSigningPayload() {
     );
 }
 
+void testSharedHashAndFingerprint() {
+    using namespace unlock_windows::protocol;
+    const std::uint8_t input[]{'a', 'b', 'c'};
+    Sha256Digest digest{};
+    require(unlock_windows::protocol::sha256(input, sizeof(input), digest) >= 0, "shared SHA-256 failed");
+    const Sha256Digest expected{0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea,
+        0x41, 0x41, 0x40, 0xde, 0x5d, 0xae, 0x22, 0x23, 0xb0, 0x03, 0x61, 0xa3,
+        0x96, 0x17, 0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad};
+    require(digest == expected, "SHA-256 known-answer mismatch");
+    require(unlock_windows::protocol::sha256(nullptr, 1, digest) == STATUS_INVALID_PARAMETER, "invalid hash input accepted");
+    const auto fixture = signForTest({1, 2, 3});
+    const auto independent = sha256(fixture.publicKeyRaw);
+    constexpr char alphabet[] = "0123456789abcdef";
+    std::string expectedFingerprint;
+    for (auto value : independent) {
+        expectedFingerprint += alphabet[value >> 4];
+        expectedFingerprint += alphabet[value & 0x0f];
+    }
+    std::string fingerprint;
+    require(publicKeyFingerprint(fixture.publicKeyRaw.data(), fixture.publicKeyRaw.size(), fingerprint) >= 0 &&
+        fingerprint == expectedFingerprint, "shared fingerprint differs from independent hash");
+    require(publicKeyFingerprint(nullptr, 65, fingerprint) == STATUS_INVALID_PARAMETER && fingerprint.empty(),
+        "invalid fingerprint input must clear output");
+}
+
 void testCngVerifier() {
     const auto challenge = makeFixture();
     const auto payloadResult = unlock_windows::protocol::buildSigningPayload(challenge);
@@ -365,6 +390,7 @@ void testCngVerifier() {
 int main() {
     try {
         testSigningPayload();
+        testSharedHashAndFingerprint();
         testCngVerifier();
         std::cout << "unlock_protocol_tests: passed\n";
         return 0;

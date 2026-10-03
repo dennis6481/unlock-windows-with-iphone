@@ -30,7 +30,7 @@ public:
     [[nodiscard]] OperationResult completeUninstall(const ProgressCallback& progress = {});
 
 private:
-    [[nodiscard]] WizardState newState(WizardPhase phase) const;
+    [[nodiscard]] WizardState newState(WizardPhase phase, std::wstring targetSid) const;
     [[nodiscard]] OperationResult failure(const std::wstring& message, bool statePreserved) const;
     void report(const ProgressCallback& progress, int percent, const std::wstring& message) const;
     [[nodiscard]] std::wstring errorText(const std::exception& error) const;

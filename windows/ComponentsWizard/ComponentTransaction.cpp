@@ -4,10 +4,11 @@
 #define _UNICODE
 #include "ComponentTransaction.h"
 #include <Windows.h>
+#include <utility>
 
 namespace unlock::components {
 ComponentTransaction::ComponentTransaction(WindowsAdapter& adapter) : adapter_(adapter) {}
-WizardState ComponentTransaction::newState(WizardPhase phase) const {
+WizardState ComponentTransaction::newState(WizardPhase phase, std::wstring targetSid) const {
     WizardState state;
     state.phase = phase;
     state.transactionId = std::to_wstring(GetTickCount64()) + L"-" + std::to_wstring(GetCurrentProcessId());
@@ -15,7 +16,7 @@ WizardState ComponentTransaction::newState(WizardPhase phase) const {
     FILETIME time{}; GetSystemTimeAsFileTime(&time);
     ULARGE_INTEGER value{}; value.LowPart = time.dwLowDateTime; value.HighPart = time.dwHighDateTime;
     state.createdAtUtc = std::to_wstring(value.QuadPart);
-    state.targetSid = adapter_.consoleUserSid();
+    state.targetSid = std::move(targetSid);
     return state;
 }
 OperationResult ComponentTransaction::failure(const std::wstring& message, bool preserved) const {
@@ -34,9 +35,12 @@ OperationResult ComponentTransaction::install(const ProgressCallback& progress) 
     try {
         adapter_.assertSupportedAdministratorEnvironment();
         const auto before = adapter_.inspect();
-        if (!before.observationValid || before.statePresent || before.hasAnyArtifacts())
+        const auto previous = adapter_.readState();
+        const auto completion = adapter_.readCompletion();
+        if (determineMaintenancePlan(before, previous ? &*previous : nullptr,
+                completion ? &*completion : nullptr, adapter_.updateRebootRequired()).action != MaintenanceAction::install)
             return failure(L"Installation requires empty, readable component state.", before.statePresent);
-        state = newState(WizardPhase::installing);
+        state = newState(WizardPhase::installing, adapter_.consoleUserSid());
         report(progress, 10, L"Stage complete installation in a protected System32 directory.");
         adapter_.stageUpdate(state);
         adapter_.writeState(state); written = true;
@@ -84,11 +88,11 @@ OperationResult ComponentTransaction::beginUpdate(const ProgressCallback& progre
     try {
         adapter_.assertSupportedAdministratorEnvironment();
         const auto before = adapter_.inspect(); const auto old = adapter_.readState();
-        if (!old || !before.observationValid || !before.stateValid || old->phase != WizardPhase::installed ||
-            !before.isCompleteInstallation() || before.continuationTaskPresent)
+        const auto completion = adapter_.readCompletion();
+        if (!old || determineMaintenancePlan(before, &*old, completion ? &*completion : nullptr,
+                adapter_.updateRebootRequired()).action != MaintenanceAction::maintain)
             return failure(L"Update requires a verified installation without a pending transaction.", old.has_value());
-        state = newState(WizardPhase::updatePendingReboot);
-        if (!old->targetSid.empty()) state.targetSid = old->targetSid;
+        state = newState(WizardPhase::updatePendingReboot, old->targetSid);
         report(progress, 10, L"Stage all new files; saved credentials and enrollment remain untouched.");
         adapter_.stageUpdate(state); adapter_.markUpdateRequiresReboot(); adapter_.writeState(state); written = true;
         adapter_.writeCompletion({state.transactionId, state.targetSid, L"Waiting for restart.", L"", false, false});
@@ -141,9 +145,12 @@ OperationResult ComponentTransaction::beginUninstall(const ProgressCallback& pro
     try {
         adapter_.assertSupportedAdministratorEnvironment();
         const auto old = adapter_.readState();
-        if (!old || old->phase != WizardPhase::installed) return failure(L"No installed transaction is available for removal.", old.has_value());
-        state = newState(WizardPhase::uninstallPendingReboot);
-        if (!old->targetSid.empty()) state.targetSid = old->targetSid;
+        const auto before = adapter_.inspect();
+        const auto completion = adapter_.readCompletion();
+        if (!old || determineMaintenancePlan(before, &*old, completion ? &*completion : nullptr,
+                adapter_.updateRebootRequired()).action != MaintenanceAction::maintain)
+            return failure(L"Removal requires a verified current installation without a pending transaction.", old.has_value());
+        state = newState(WizardPhase::uninstallPendingReboot, old->targetSid);
         report(progress, 10, L"Stage protected maintenance installer for reboot continuation.");
         adapter_.stageContinuation(state);
         report(progress, 20, L"Ask running service to confirm saved credential deletion.");

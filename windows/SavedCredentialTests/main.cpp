@@ -90,6 +90,54 @@ void testAuthenticationOperationPackets() {
     }
 }
 
+void testPacketTransportParity() {
+    const auto name = L"\\\\.\\pipe\\unlock-packet-test-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64());
+    const HANDLE server = CreateNamedPipeW(name.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
+        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, 1, kMaxPacket, kMaxPacket, 0, nullptr);
+    require(server != INVALID_HANDLE_VALUE, "packet test server must open");
+    const HANDLE client = CreateFileW(name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
+        FILE_FLAG_OVERLAPPED, nullptr);
+    require(client != INVALID_HANDLE_VALUE, "overlapped packet test client must open");
+    require(ConnectNamedPipe(server, nullptr) || GetLastError() == ERROR_PIPE_CONNECTED, "test pipe must connect");
+    for (auto operation : {std::uint16_t{9}, std::uint16_t{12}, std::uint16_t{6}, std::uint16_t{65535}}) {
+        Packet outbound;
+        outbound.operation = static_cast<Operation>(operation);
+        outbound.payload.value = {17, 91};
+        require(writePacket(server, outbound), "synchronous writer must write");
+        Packet inbound;
+        const bool timedAccepted = readPacket(client, inbound, 250);
+        const DWORD timedError = GetLastError();
+        if (!timedAccepted) {
+            std::uint8_t discarded[2]{};
+            OVERLAPPED pending{};
+            pending.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+            require(pending.hEvent != nullptr, "drain event must open");
+            DWORD read = 0;
+            const BOOL started = ReadFile(client, discarded, sizeof(discarded), &read, &pending);
+            require(started || (GetLastError() == ERROR_IO_PENDING && GetOverlappedResult(client, &pending, &read, TRUE)), "reject payload must drain");
+            require(read == sizeof(discarded) && CloseHandle(pending.hEvent), "reject drain must complete");
+        }
+        require(writePacket(client, outbound, 250), "timed writer must write");
+        Packet synchronous;
+        const bool syncAccepted = readPacket(server, synchronous);
+        const DWORD syncError = GetLastError();
+        if (!syncAccepted) {
+            std::uint8_t discarded[2]{};
+            DWORD read = 0;
+            require(ReadFile(server, discarded, sizeof(discarded), &read, nullptr) && read == sizeof(discarded), "reject payload must drain");
+        }
+        require(timedAccepted == isKnownOperation(operation) && syncAccepted == timedAccepted,
+            "timed and synchronous packet validation disagree");
+        if (timedAccepted) {
+            require(inbound.operation == outbound.operation && synchronous.operation == outbound.operation &&
+                inbound.payload.value == outbound.payload.value && synchronous.payload.value == outbound.payload.value,
+                "packet codec round-trip mismatch");
+        } else require(timedError == ERROR_INVALID_DATA && syncError == ERROR_INVALID_DATA,
+            "both transports must report the same rejection");
+    }
+    require(CloseHandle(client) && CloseHandle(server), "packet test handles must close");
+}
+
 void testAutoSubmitOffer() {
     AutoSubmitOffer offer;
     offer.nonce[0] = 17;
@@ -212,6 +260,7 @@ int main() {
     testIdentityRoundTrip();
     testStatusRoundTrip();
     testPhoneEndpointRejectsCredentialOperations();
+    testPacketTransportParity();
     testAutoSubmitOffer();
     testAuthenticationOperationPackets();
     testAuthenticationState();

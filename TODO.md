@@ -2,6 +2,21 @@
 
 # TODO
 
+## Windows UI 整理（2026-10-03）
+
+- [x] 源码：安装器默认页缩小、折叠详情释放空白；首次在活动显示器居中，页面／详情切换按中心调整大小。对外产物 setup.exe，已安装页标题 Unlock Windows with iPhone® installed，Windows 可见完整产品名加 ®；系统内部标识及维护文件名保持不变。
+- [ ] 验收新尺寸、展开／折叠及跨屏后中心位置；setup.exe 正常 Update／重启续办。未授权构建或运行。
+
+- [x] 源码：托盘统一 Status / Pair iPhone / Manage saved password / Remove paired iPhone / Quit；Refresh 在状态窗，取消在配对窗，历史错误置于 Technical details。
+- [x] 源码：统一登记入口按真实记录区分首次、相同手机及替换；完整八组指纹核对、相同记录不重写、替换明确警告、取消保留原记录。手工 CLI 仍须显式 --replace。
+- [x] 源码：配对及密码管理改原生主题对话框，统一 Segoe UI、紧凑按钮、PerMonitorV2、键盘导航及可展开技术详情；安装器复用原 DPI 与事务核心，说明／日志分层。
+- [x] 源码：磁贴名 Unlock with iPhone®、结构化状态到英文用户文案；底层错误码、密码保管、认证期限、RSSI 阈值、批准及自动提交不变；没有修改 iOS。
+- [x] 补充登记策略／完整指纹／状态文案／磁贴名称用例并静态检查。未构建、运行测试、安装或提交。
+- [ ] 另行授权后构建、测试及 [统一 UI 实机验收](windows/README.md#windows-ui-验收2026-10-03)：4K 全部缩放与跨屏、长账户、完整指纹、默认焦点、键盘、高对比度。
+- [ ] 首次／重复／替换／取消／移除手机、密码副本不受手机移除影响、另一管理员 UAC、快照失效操作提示及部署流程回归。
+- [ ] 新 UI 手机解锁及原生 PIN／密码回归。完整配对和旧负面测试继续单列，不自动标绿。
+- 圆点等待动画与 Enter 初始焦点问题不在本轮范围，保持独立待办；功能冻结不代表新界面实测通过。
+
 ## Windows 主线
 
 - [x] 2026-10-02 用户截图确认两种独立提权身份实验 `PASS`：同账户三个 SID 相同；另一管理员提权时原用户 SID 等于实际控制台 SID，提权进程 SID 不同。仅证明身份查询可行，不代表产品配对通过；探针源码和操作文档按用户要求移除，记录见 [GATT host](windows/GattHost/README.md#蓝牙公钥登记代码已接入产品待验收)。
@@ -32,7 +47,7 @@
 
 ## 当前保留的临时工具
 
-- [ ] 正式设置 UI 完成后，再删除 `unlock_saved_credential_manager`。在此之前保留 Refresh、Set credential、Update stored 和 Clear stored。
+- [ ] 仅在凭据维护能力被正式替代后，才评估删除 `unlock_saved_credential_manager`。当前保留 Refresh、Save password、Update saved password 和 Remove saved password，托盘已接入此维护界面。
 - [ ] 正式登记 UI 完成后，再评估是否删除独立 `unlock_pairing_tool`。
 
 ## iPhone 后续

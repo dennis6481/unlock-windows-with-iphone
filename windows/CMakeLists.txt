@@ -94,7 +94,7 @@ target_include_directories(unlock_enrollment_store
 
 target_compile_features(unlock_enrollment_store PUBLIC cxx_std_20)
 target_compile_definitions(unlock_enrollment_store PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_libraries(unlock_enrollment_store PUBLIC advapi32 bcrypt crypt32)
+target_link_libraries(unlock_enrollment_store PUBLIC unlock_protocol_crypto advapi32 bcrypt crypt32)
 
 add_library(unlock_phone_approval_core STATIC
     PhoneApproval/PhoneApprovalCore.cpp
@@ -175,7 +175,7 @@ target_include_directories(unlock_windows_components_wizard
 )
 
 target_compile_features(unlock_windows_components_wizard PRIVATE cxx_std_20)
-set_target_properties(unlock_windows_components_wizard PROPERTIES OUTPUT_NAME setup)
+
 target_compile_definitions(unlock_windows_components_wizard PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(
     unlock_windows_components_wizard
@@ -258,6 +258,27 @@ if(BUILD_TESTING)
 
     add_test(NAME unlock_credential_provider_tests COMMAND unlock_credential_provider_tests)
 endif()
+
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/ComponentFiles.h" unlock_component_manifest)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/ComponentFiles.h")
+foreach(unlock_component IN ITEMS
+    "unlock_credential_provider|kCredentialProviderFile"
+    "unlock_saved_credential_service|kSavedCredentialServiceFile"
+    "unlock_saved_credential_manager|kCredentialManagerFile"
+    "unlock_gatt_host|kGattHostFile"
+    "unlock_pairing_tool|kPairingToolFile"
+    "unlock_windows_components_wizard|kInstallerBuildFile"
+)
+    string(REPLACE "|" ";" unlock_component_parts "${unlock_component}")
+    list(GET unlock_component_parts 0 unlock_component_target)
+    list(GET unlock_component_parts 1 unlock_component_key)
+    string(REGEX MATCH "${unlock_component_key}\\[\\] = L\"([^\"]+)\";" unlock_component_match "${unlock_component_manifest}")
+    if(NOT unlock_component_match)
+        message(FATAL_ERROR "Missing shared component filename: ${unlock_component_key}")
+    endif()
+    get_filename_component(unlock_component_output "${CMAKE_MATCH_1}" NAME_WE)
+    set_target_properties(${unlock_component_target} PROPERTIES OUTPUT_NAME "${unlock_component_output}")
+endforeach()
 
 set(UNLOCK_APP_ICON_ASSET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../ios/Assets.xcassets/AppIcon.appiconset")
 file(READ "${UNLOCK_APP_ICON_ASSET_DIR}/Contents.json" unlock_icon_manifest)

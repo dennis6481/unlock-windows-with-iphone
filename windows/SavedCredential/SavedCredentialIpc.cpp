@@ -1,6 +1,7 @@
 // Created by Rui MA on 30 Sep 2026
 
 #include "SavedCredentialIpc.h"
+#include "../ComponentFiles.h"
 
 #include <sddl.h>
 #include <winsvc.h>
@@ -124,18 +125,19 @@ bool transferExactWithTimeout(const HANDLE pipe, void* buffer, const DWORD size,
     return true;
 }
 
-bool writePacketWithTimeout(const HANDLE pipe, const Packet& packet, const DWORD waitMs) {
+template<class Transfer>
+bool writePacketUsing(const Packet& packet, Transfer transfer) {
     if (packet.payload.value.size() > kMaxPacket) return false;
     Header header{kMagic, kVersion, static_cast<std::uint16_t>(packet.operation),
         static_cast<std::uint32_t>(packet.result), static_cast<std::uint32_t>(packet.payload.value.size())};
-    return transferExactWithTimeout(pipe, &header, sizeof(header), true, waitMs) &&
-        (header.size == 0 || transferExactWithTimeout(pipe,
-            const_cast<std::uint8_t*>(packet.payload.value.data()), header.size, true, waitMs));
+    return transfer(&header, sizeof(header)) && (header.size == 0 ||
+        transfer(const_cast<std::uint8_t*>(packet.payload.value.data()), header.size));
 }
 
-bool readPacketWithTimeout(const HANDLE pipe, Packet& packet, const DWORD waitMs) {
+template<class Transfer>
+bool readPacketUsing(Packet& packet, Transfer transfer) {
     Header header{};
-    if (!transferExactWithTimeout(pipe, &header, sizeof(header), false, waitMs)) return false;
+    if (!transfer(&header, sizeof(header))) return false;
     if (header.magic != kMagic || header.version != kVersion || header.size > kMaxPacket ||
         !isKnownOperation(header.operation)) {
         SetLastError(ERROR_INVALID_DATA);
@@ -143,8 +145,7 @@ bool readPacketWithTimeout(const HANDLE pipe, Packet& packet, const DWORD waitMs
     }
     packet.payload.clear();
     packet.payload.value.resize(header.size);
-    if (header.size != 0 && !transferExactWithTimeout(pipe,
-            packet.payload.value.data(), header.size, false, waitMs)) return false;
+    if (header.size != 0 && !transfer(packet.payload.value.data(), header.size)) return false;
     packet.operation = static_cast<Operation>(header.operation);
     packet.result = static_cast<Result>(header.result);
     return true;
@@ -203,7 +204,7 @@ bool isExpectedServer(const HANDLE pipe, CallDiagnostics* const diagnostics) {
     const UINT systemSize = GetSystemDirectoryW(systemDirectory, MAX_PATH);
     if (systemSize == 0) return false;
     if (systemSize >= MAX_PATH) return mismatch();
-    const auto expectedImage = std::wstring(systemDirectory) + L"\\" + kServiceExeName;
+    const auto expectedImage = std::wstring(systemDirectory) + L"\\" + unlock::components::kSavedCredentialServiceFile;
     const auto expectedCommand = L"\"" + expectedImage + L"\"";
     step(L"scm-service-identity");
     if (config->dwServiceType != SERVICE_WIN32_OWN_PROCESS ||
@@ -303,27 +304,23 @@ bool decodeStatus(const std::uint8_t* data, const std::size_t size, StatusPayloa
 }
 
 bool writePacket(const HANDLE pipe, const Packet& packet) {
-    if (packet.payload.value.size() > kMaxPacket) return false;
-    const Header header{kMagic, kVersion, static_cast<std::uint16_t>(packet.operation),
-        static_cast<std::uint32_t>(packet.result), static_cast<std::uint32_t>(packet.payload.value.size())};
-    return writeExact(pipe, &header, sizeof(header)) &&
-        (header.size == 0 || writeExact(pipe, packet.payload.value.data(), header.size));
+    return writePacketUsing(packet, [pipe](void* data, DWORD size) { return writeExact(pipe, data, size); });
 }
 
 bool readPacket(const HANDLE pipe, Packet& packet) {
-    Header header{};
-    if (!readExact(pipe, &header, sizeof(header))) return false;
-    if (header.magic != kMagic || header.version != kVersion || header.size > kMaxPacket ||
-        !isKnownOperation(header.operation)) {
-        SetLastError(ERROR_INVALID_DATA);
-        return false;
-    }
-    packet.payload.clear();
-    packet.payload.value.resize(header.size);
-    if (header.size != 0 && !readExact(pipe, packet.payload.value.data(), header.size)) return false;
-    packet.operation = static_cast<Operation>(header.operation);
-    packet.result = static_cast<Result>(header.result);
-    return true;
+    return readPacketUsing(packet, [pipe](void* data, DWORD size) { return readExact(pipe, data, size); });
+}
+
+bool writePacket(const HANDLE pipe, const Packet& packet, const DWORD waitMs) {
+    return writePacketUsing(packet, [pipe, waitMs](void* data, DWORD size) {
+        return transferExactWithTimeout(pipe, data, size, true, waitMs);
+    });
+}
+
+bool readPacket(const HANDLE pipe, Packet& packet, const DWORD waitMs) {
+    return readPacketUsing(packet, [pipe, waitMs](void* data, DWORD size) {
+        return transferExactWithTimeout(pipe, data, size, false, waitMs);
+    });
 }
 
 bool awaitReplyAcknowledgment(const HANDLE pipe, const Operation operation, const DWORD waitMs) {
@@ -406,10 +403,10 @@ bool callOnPipe(const wchar_t* const pipeName, const Operation operation,
     outbound.payload = std::move(request);
     CallStage failureStage = CallStage::none;
     DWORD failureError = NO_ERROR;
-    if (!writePacketWithTimeout(pipe, outbound, waitMs)) {
+    if (!writePacket(pipe, outbound, waitMs)) {
         failureStage = CallStage::requestWrite;
         failureError = GetLastError();
-    } else if (!readPacketWithTimeout(pipe, reply, waitMs)) {
+    } else if (!readPacket(pipe, reply, waitMs)) {
         failureStage = CallStage::replyRead;
         failureError = GetLastError();
     } else if (reply.operation != operation) {

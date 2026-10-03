@@ -3,7 +3,7 @@
 #pragma once
 
 #include "ComponentState.h"
-#include "ComponentFiles.h"
+#include "../ComponentFiles.h"
 
 #include <exception>
 #include <filesystem>

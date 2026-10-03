@@ -4,197 +4,159 @@ import SwiftUI
 
 struct ContentView: View {
     let model: UnlockSetupModel
+    @State private var showingEnrollment = false
+
+    private var state: BluetoothViewState { model.bluetooth }
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    AppIntroSection()
-                    KeyStatusSection(
-                        state: model.state,
-                        fingerprint: model.publicKeyFingerprint,
-                        errorMessage: model.lastError,
-                        testResult: model.lastTestResult
-                    )
-                    ActionSection(
-                        prepareKey: model.prepareKey,
-                        signTestChallenge: model.signTestChallenge,
-                        copyPublicKey: model.copyPublicKey,
-                        copyStatus: model.publicKeyCopyStatus
-                    )
-                    BluetoothSection(
-                        status: model.bluetoothStatus,
-                        errorMessage: model.bluetoothError,
-                        start: model.startBluetooth,
-                        enroll: model.startEnrollment,
-                        stop: model.stopBluetooth
-                    )
-                    AutomaticUnlockSection(
-                        enabled: Binding(get: { model.automaticEnabled }, set: model.setAutomaticEnabled),
-                        threshold: Binding(get: { model.rssiThreshold }, set: model.setRSSIThreshold),
-                        rssi: model.currentRSSI,
-                        targetIdentifier: model.targetIdentifier
-                    )
-                    ScopeSection()
-                    DisclosureGroup("蓝牙诊断（最近 64 条）") {
+            Form {
+                Section {
+                    Label(state.enrollment.isActive ? state.connectedComputer?.name ?? "正在寻找登记电脑" :
+                          state.target?.name ?? "尚未登记 Windows 电脑",
+                          systemImage: state.connection == .ready ? "desktopcomputer" : "antenna.radiowaves.left.and.right")
+                        .font(.headline)
+                    Text(state.connection.title)
+                        .foregroundStyle(state.connection == .ready ? Color.green : Color.secondary)
+                    Text(connectionHint)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    if let failure = state.connection.failure {
+                        Text(failure).foregroundStyle(.red).textSelection(.enabled)
+                        Button("重试连接", action: model.retryConnection)
+                    }
+                    if let issue = state.issue, issue != state.connection.failure {
+                        Text(issue).font(.footnote).foregroundStyle(.orange).textSelection(.enabled)
+                    }
+                    Button(state.target == nil ? "登记电脑" : "重新登记电脑") {
+                        showingEnrollment = true
+                    }
+                    .disabled(state.enrollment.isActive)
+                } header: {
+                    Text("目标电脑")
+                }
+
+                Section {
+                    Toggle("自动响应 Windows 请求",
+                           isOn: Binding(get: { state.automaticEnabled }, set: model.setAutomaticEnabled))
+                    Text(state.authentication.title)
+                        .textSelection(.enabled)
+                    Text("仅响应已登记电脑的请求。断连不会改变此开关；关闭后暂停自动批准。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                } header: {
+                    Text("解锁")
+                }
+
+                Section {
+                    Text("RSSI 批准阈值：\(state.threshold) dBm")
+                    Slider(value: Binding(get: { Double(state.threshold) }, set: model.setRSSIThreshold),
+                           in: -100 ... -30, step: 1)
+                    if let rssi = state.rssi, let date = state.rssiMeasuredAt {
+                        Text("最近认证 RSSI：\(rssi) dBm")
+                        Text(date, style: .time).font(.footnote).foregroundStyle(.secondary)
+                    } else {
+                        Text("尚无本次认证的有效 RSSI 读数").foregroundStyle(.secondary)
+                    }
+                    Text("每次请求都读取新信号。最近读数不用于下一次批准，也不代表固定距离。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                } header: {
+                    Text("距离设置")
+                }
+
+                Section {
+                    DisclosureGroup("登记信息与诊断") {
+                        Text("登记状态：\(state.enrollment.title)")
+                        if let id = state.target?.computerID {
+                            Text("ComputerId：\(id.uuidString.lowercased())")
+                                .font(.caption.monospaced()).textSelection(.enabled)
+                        }
+                        if let fingerprint = model.publicKeyFingerprint {
+                            Text("手机公钥指纹")
+                            Text(fingerprint).font(.caption.monospaced()).textSelection(.enabled)
+                        }
+                        if let error = model.keyError {
+                            Text("手机密钥不可用：\(error)").foregroundStyle(.red)
+                        }
+                        Text("蓝牙诊断（最近 64 条）").font(.caption)
                         Text(model.bluetoothDiagnostics.joined(separator: "\n"))
-                            .font(.caption.monospaced())
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .font(.caption.monospaced()).textSelection(.enabled)
                     }
                 }
-                .padding()
+
+                Section {
+                    Text("只解锁已有 Windows 会话。重启后首次登录仍使用原生 PIN／密码，锁屏后按一次 Enter 发起手机认证。")
+                    Text("后台及整夜待机仍待实机验收；强制退出 App 后需重新打开。")
+                        .foregroundStyle(.secondary)
+                } header: {
+                    Text("使用边界")
+                }
             }
             .navigationTitle("iPhone Unlock")
+            .sheet(isPresented: $showingEnrollment) {
+                EnrollmentView(model: model)
+            }
         }
-        .onAppear {
-            model.prepareKey()
+    }
+
+    private var connectionHint: String {
+        if !state.automaticEnabled {
+            return "自动响应已暂停；登记仍可单独进行。"
+        }
+        if state.enrollment.isActive { return "当前连接用于登记，Windows 确认前不会自动批准解锁。" }
+        switch state.connection {
+        case .unregistered: return "先在 Windows 托盘开启配对，再登记电脑。"
+        case .waitingComputer: return "等待电脑广播，尚未建立连接；不能据此判断电脑是否锁屏。"
+        case .connecting: return "发现了候选电脑，正在建立连接；尚未核对身份。"
+        case .discovering, .verifyingComputer, .subscribing, .recovering:
+            return "已进入连接准备流程，身份与双通知订阅完成前不会批准。"
+        case .ready: return "目标身份与双通知订阅已就绪，等待 Windows 发起请求。"
+        case .bluetoothUnavailable: return "请检查手机蓝牙权限和系统蓝牙开关。"
+        case .failed: return "没有无限重连；确认电脑广播与组件状态后可重试连接。"
         }
     }
 }
 
-private struct AppIntroSection: View {
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Windows 解锁 PoC")
-                .font(.title2)
-                .fontWeight(.semibold)
-            Text("先在 Windows 托盘开启配对，在手机登记并核对指纹。之后点击 Windows 的 iPhone 磁贴箭头，手机按 RSSI 自动批准。")
-                .foregroundStyle(.secondary)
-        }
-    }
-}
-
-private struct KeyStatusSection: View {
-    let state: UnlockSetupModel.State
-    let fingerprint: String?
-    let errorMessage: String?
-    let testResult: String?
+private struct EnrollmentView: View {
+    let model: UnlockSetupModel
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label(state.title, systemImage: state == .ready ? "checkmark.shield" : "exclamationmark.shield")
-                .font(.headline)
-
-            if let fingerprint {
-                Text("公钥指纹")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                Text(fingerprint)
-                    .font(.footnote.monospaced())
-                    .textSelection(.enabled)
+        NavigationStack {
+            Form {
+                Section {
+                    Text("在 Windows 托盘选择配对／替换手机，并完成本地确认。电脑应处于已解锁桌面。")
+                    Text("沿用现有手机密钥；失败或取消不会覆盖此前有效的目标电脑。")
+                    if let fingerprint = model.publicKeyFingerprint {
+                        Text("确认 Windows 上的指纹与此处一致")
+                        Text(fingerprint).font(.caption.monospaced()).textSelection(.enabled)
+                    }
+                    if let error = model.keyError {
+                        Text(error).foregroundStyle(.red)
+                    }
+                }
+                Section {
+                    Text(model.bluetooth.enrollment.title)
+                    if let candidate = model.bluetooth.connectedComputer, model.bluetooth.enrollment.isActive {
+                        Text("候选电脑：\(candidate.name)")
+                        Text("ComputerId：\(candidate.computerID.uuidString.lowercased())")
+                            .font(.caption.monospaced()).textSelection(.enabled)
+                    }
+                    if !model.bluetooth.enrollment.isActive {
+                        Button("开始登记", action: model.startEnrollment)
+                            .disabled(model.keyError != nil)
+                    }
+                }
             }
-
-            if let errorMessage {
-                Text(errorMessage)
-                    .foregroundStyle(.red)
-                    .textSelection(.enabled)
+            .navigationTitle("登记 Windows 电脑")
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(model.bluetooth.enrollment.isActive ? "取消登记" : "完成") {
+                        if model.bluetooth.enrollment.isActive { model.cancelEnrollment() }
+                        dismiss()
+                    }
+                }
             }
-
-            if let testResult {
-                Text(testResult)
-                    .foregroundStyle(.green)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding()
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
-    }
-}
-
-private struct ActionSection: View {
-    let prepareKey: () -> Void
-    let signTestChallenge: () -> Void
-    let copyPublicKey: () -> Void
-    let copyStatus: String?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Button("准备密钥", action: prepareKey)
-                .buttonStyle(.borderedProminent)
-            Button("执行本地签名测试", action: signTestChallenge)
-                .buttonStyle(.bordered)
-            Button("复制原始公钥（Windows 登记用）", action: copyPublicKey)
-                .buttonStyle(.bordered)
-            if let copyStatus {
-                Text(copyStatus)
-                    .font(.footnote)
-                    .foregroundStyle(.green)
-            }
-        }
-    }
-}
-
-private struct ScopeSection: View {
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("使用边界")
-                .font(.headline)
-            Text("只解锁 Windows 已有会话，重启后首次登录仍用原生方式。后台与手机锁屏响应尚待实机验收；强制退出 App 后需重新打开。RSSI 是信号强度，不代表固定距离。")
-                .foregroundStyle(.secondary)
-        }
-    }
-}
-
-private struct BluetoothSection: View {
-    let status: String
-    let errorMessage: String?
-    let start: () -> Void
-    let enroll: () -> Void
-    let stop: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("BLE 状态")
-                .font(.headline)
-            Text(status)
-                .foregroundStyle(.secondary)
-            if let errorMessage {
-                Text(errorMessage)
-                    .foregroundStyle(.red)
-                    .textSelection(.enabled)
-            }
-            HStack {
-                Button("连接目标电脑", action: start)
-                    .buttonStyle(.borderedProminent)
-                Button("登记到 Windows", action: enroll)
-                    .buttonStyle(.bordered)
-                Button("停止", action: stop)
-                    .buttonStyle(.bordered)
-            }
-        }
-    }
-}
-
-private struct AutomaticUnlockSection: View {
-    @Binding var enabled: Bool
-    @Binding var threshold: Double
-    let rssi: Int?
-    let targetIdentifier: String?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("手机自动批准")
-                .font(.headline)
-            Toggle("自动响应 Windows 请求", isOn: $enabled)
-                .disabled(targetIdentifier == nil)
-            if let targetIdentifier {
-                Text("目标设备：\(targetIdentifier)")
-                    .font(.footnote.monospaced())
-            } else {
-                Text("请先在 Windows 托盘开启配对，并点击手机的登记按钮。")
-                    .foregroundStyle(.secondary)
-            }
-            if let rssi {
-                Text("当前 RSSI：\(rssi) dBm")
-            } else {
-                Text("当前 RSSI：尚无有效读数")
-            }
-            Text("批准阈值：\(Int(threshold)) dBm")
-            Slider(value: $threshold, in: -100 ... -30, step: 1)
-            Text("每次挑战读取新 RSSI，达到阈值才签名；信号不足直接拒绝，靠近后需重新点击 Windows 箭头。")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+            .interactiveDismissDisabled(model.bluetooth.enrollment.isActive)
         }
     }
 }

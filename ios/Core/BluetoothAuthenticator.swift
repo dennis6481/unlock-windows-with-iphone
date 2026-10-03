@@ -2,37 +2,7 @@
 
 @preconcurrency import CoreBluetooth
 import Foundation
-import UIKit
 import OSLog
-
-enum BluetoothUnlockError: LocalizedError {
-    case bluetoothUnavailable(CBManagerState)
-    case serviceNotFound
-    case characteristicMissing(String)
-    case connectionFailed(String)
-    case receivedInvalidChallenge(String)
-    case transportEncodingFailed(String)
-    case writeFailed(String)
-
-    var errorDescription: String? {
-        switch self {
-        case let .bluetoothUnavailable(state):
-            return "CoreBluetooth 当前不可用，状态码：\(state.rawValue)。"
-        case .serviceNotFound:
-            return "已连接设备没有提供项目定义的认证 service。"
-        case let .characteristicMissing(name):
-            return "认证 service 缺少 characteristic：\(name)。"
-        case let .connectionFailed(message):
-            return "连接 Windows GATT host 失败：\(message)"
-        case let .receivedInvalidChallenge(message):
-            return "收到的 challenge 被拒绝：\(message)"
-        case let .transportEncodingFailed(message):
-            return "BLE 消息编码失败：\(message)"
-        case let .writeFailed(message):
-            return "BLE 写入失败：\(message)"
-        }
-    }
-}
 
 @MainActor
 final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDelegate, @preconcurrency CBPeripheralDelegate {
@@ -41,355 +11,537 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
     static let challengeCharacteristicUUID = CBUUID(string: "F1E2D3C4-B5A6-4789-8012-3456789ABCD2")
     static let assertionCharacteristicUUID = CBUUID(string: "F1E2D3C4-B5A6-4789-8012-3456789ABCD3")
     static let resultCharacteristicUUID = CBUUID(string: "F1E2D3C4-B5A6-4789-8012-3456789ABCD4")
+    static let computerIDCharacteristicUUID = CBUUID(string: "F1E2D3C4-B5A6-4789-8012-3456789ABCD5")
 
+    var onUpdate: ((BluetoothViewState) -> Void)?
+    var onDiagnostic: ((String) -> Void)?
+    private(set) var viewState = BluetoothViewState()
     private let keyStore: SecureEnclaveKeyStore
     private let defaults: UserDefaults
-    private(set) var automaticEnabled: Bool
-    private(set) var threshold: Int
-    private(set) var targetIdentifier: UUID?
-    var onError: ((String) -> Void)?
-    var onResult: ((String) -> Void)?
-    var onStatus: ((String) -> Void)?
-    var onRSSI: ((Int?) -> Void)?
-    var onTarget: ((UUID) -> Void)?
-    var onDiagnostic: ((String) -> Void)?
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "iPhoneUnlock", category: "BluetoothUnlock")
-    private var recovery = BluetoothAuthenticationState()
-    private lazy var centralManager = CBCentralManager(
-        delegate: self, queue: nil,
-        options: [CBCentralManagerOptionRestoreIdentifierKey: "com.example.unlock-windows-with-iphone.central"]
-    )
-    private var wantsConnection = false
+    private var policy = BluetoothAuthenticationState()
+    private lazy var centralManager = CBCentralManager(delegate: self, queue: nil,
+        options: [CBCentralManagerOptionRestoreIdentifierKey: "com.example.unlock-windows-with-iphone.central"])
+    private var peripheral: CBPeripheral?
+    private var serviceInDiscovery: CBService?
+    private var identityReadInDiscovery: CBCharacteristic?
+    private var requestCharacteristic: CBCharacteristic?
+    private var challengeCharacteristic: CBCharacteristic?
+    private var assertionCharacteristic: CBCharacteristic?
+    private var resultCharacteristic: CBCharacteristic?
     private var enrolling = false
     private var enrollmentSent = false
-    private var peripheral: CBPeripheral?
-    private var requestCharacteristic: CBCharacteristic?
-    private var assertionCharacteristic: CBCharacteristic?
-    private var challengeCharacteristic: CBCharacteristic?
-    private var resultCharacteristic: CBCharacteristic?
+    private var enrollmentSequence: UInt64 = 0
+    private enum WritePurpose { case enrollment(UInt64), assertion(UUID), rejection(UUID) }
+    private struct WriteContext {
+        let characteristic: CBCharacteristic
+        let generation: UInt64
+        let purpose: WritePurpose
+    }
+    private var writes: [ObjectIdentifier: [WriteContext]] = [:]
+    private var foreground = false
+    private var recoveryBlocked = false
+    private var candidates: [CBPeripheral] = []
+    private var seenCandidates: Set<UUID> = []
     private var pendingChallenge: UnlockChallenge?
     private var pendingDeadline = 0.0
     private var awaitingResultID: UUID?
     private var lastHandledRequest: UUID?
-    private var rssiReadInFlight = false
-    private var rssiRequestID: UUID?
-    private var requestTimeout: Task<Void, Never>?
-    private var displayTask: Task<Void, Never>?
-    private var foreground = false
+    private var initializationTimeout: Task<Void, Never>?
+    private var authenticationTimeout: Task<Void, Never>?
+    private var rssiTimeout: Task<Void, Never>?
+    private enum DisconnectAction: Equatable { case recover, search, resume, halt }
+    private var disconnectAction: DisconnectAction?
+
+    private var shouldConnect: Bool {
+        enrolling || (viewState.automaticEnabled && viewState.target != nil)
+    }
+    private var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
 
     init(keyStore: SecureEnclaveKeyStore = SecureEnclaveKeyStore(), defaults: UserDefaults = .standard) {
         self.keyStore = keyStore
         self.defaults = defaults
-        automaticEnabled = defaults.bool(forKey: "automaticUnlockEnabled")
-        threshold = defaults.object(forKey: "unlockRSSIThreshold") as? Int ?? -60
-        targetIdentifier = defaults.string(forKey: "unlockTargetPeripheral").flatMap(UUID.init(uuidString:))
         super.init()
+        viewState.automaticEnabled = BluetoothAuthenticationState.automaticPreference(defaults)
+        viewState.threshold = defaults.object(forKey: "unlockRSSIThreshold") as? Int ?? -60
+        if let data = defaults.data(forKey: "registeredWindowsComputer") {
+            do { viewState.target = try JSONDecoder().decode(RegisteredComputer.self, from: data) }
+            catch { viewState.issue = "保存的电脑信息无法读取，请明确重新登记电脑" }
+        } else if defaults.string(forKey: "unlockTargetPeripheral") != nil {
+            viewState.issue = "旧版只保存蓝牙 UUID，请重新登记一次以启用稳定电脑识别；手机密钥不变"
+        }
+        viewState.authentication = viewState.automaticEnabled ? .waiting : .paused
     }
 
-    func activate() {
-        wantsConnection = automaticEnabled && targetIdentifier != nil
-        _ = centralManager
-        if automaticEnabled && targetIdentifier == nil { onStatus?("请先登记目标 Windows 电脑") }
-    }
+    func activate() { publish(); _ = centralManager }
 
     func setAutomaticEnabled(_ enabled: Bool) {
-        automaticEnabled = enabled
+        viewState.automaticEnabled = enabled
         defaults.set(enabled, forKey: "automaticUnlockEnabled")
-        if enabled {
-            do { try start() } catch { record(error) }
+        if !enabled {
+            rejectPending(reason: 2, message: "自动响应已暂停")
+            viewState.authentication = .paused
+            if !enrolling { disconnect(action: .halt) }
         } else {
-            rejectPending(reason: 2)
-            if !enrolling { stop() }
+            viewState.authentication = .waiting
+            retryConnection()
         }
+        publish()
     }
 
     func setThreshold(_ value: Int) {
-        threshold = value
-        defaults.set(value, forKey: "unlockRSSIThreshold")
+        viewState.threshold = min(-30, max(-100, value))
+        defaults.set(viewState.threshold, forKey: "unlockRSSIThreshold")
+        publish()
     }
 
-    func start() throws {
-        guard targetIdentifier != nil else {
-            throw BluetoothUnlockError.connectionFailed("请先通过 Windows 托盘配对并在手机登记目标电脑。")
+    func retryConnection() {
+        guard !enrolling else { return }
+        guard disconnectAction == nil else {
+            viewState.issue = "正在结束当前连接，请等待断连完成"
+            publish()
+            return
         }
-        enrolling = false
-        enrollmentSent = false
-        wantsConnection = true
-        recovery.resetConnectionRetries()
-        connectTargetIfReady()
+        recoveryBlocked = false
+        policy.resetConnectionRetries()
+        seenCandidates.removeAll()
+        candidates.removeAll()
+        guard viewState.target != nil else {
+            viewState.connection = .unregistered
+            publish()
+            return
+        }
+        viewState.issue = nil
+        if let peripheral, peripheral.state == .connected, policy.phase == .ready { publish(); return }
+        if peripheral != nil { disconnect(action: .resume) }
+        else { beginSearch() }
     }
 
-    func startEnrollment() throws {
-        rejectPending(reason: 6)
+    func startEnrollment() {
+        guard !viewState.enrollment.isActive else { return }
+        guard disconnectAction == nil else {
+            viewState.issue = "正在结束当前连接，请稍后开始登记"
+            publish()
+            return
+        }
+        discardAuthentication(message: "登记开始，本次认证已取消")
         enrolling = true
         enrollmentSent = false
-        wantsConnection = true
+        enrollmentSequence &+= 1
+        recoveryBlocked = false
+        policy.resetConnectionRetries()
+        candidates.removeAll()
+        seenCandidates.removeAll()
+        viewState.enrollment = .searching
+        viewState.issue = nil
         if let peripheral, peripheral.state == .connected {
-            prepareConnection(peripheral)
-        } else if centralManager.state == .poweredOn {
-            onStatus?("正在扫描配对窗口，请在 Windows 托盘开启配对")
-            centralManager.scanForPeripherals(withServices: [Self.serviceUUID])
-        }
+            clearCharacteristics()
+            policy.connected(now: now)
+            startInitializationTimeout()
+            discoverServices(peripheral)
+        } else if peripheral != nil { disconnect(action: .resume) }
+        else { beginSearch() }
+        publish()
     }
 
-    func stop() {
-        wantsConnection = false
+    func cancelEnrollment() {
+        guard enrolling else { return }
         enrolling = false
-        centralManager.stopScan()
-        rejectPending(reason: 2)
-        if let peripheral { centralManager.cancelPeripheralConnection(peripheral) }
-        clearConnectionState()
-        onStatus?("已停止连接")
+        enrollmentSent = false
+        viewState.enrollment = .cancelled
+        disconnect(action: .resume)
+        publish()
     }
 
     func setForeground(_ active: Bool) {
-        diagnostic("lifecycle foreground=\(active)")
+        let becameActive = active && !foreground
         foreground = active
-        displayTask?.cancel()
-        displayTask = nil
-        guard active else { return }
-        recovery.resetConnectionRetries()
-        if wantsConnection && automaticEnabled && !enrolling { connectTargetIfReady() }
-        displayTask = Task { [weak self] in
-            while !Task.isCancelled {
-                self?.readDisplayRSSI()
-                do { try await Task.sleep(for: .seconds(1)) } catch { return }
-            }
-        }
+        diagnostic("lifecycle foreground=\(active)")
+        if becameActive && !enrolling && (recoveryBlocked || peripheral == nil) { retryConnection() }
     }
 
-    private func connectTargetIfReady() {
-        guard wantsConnection, centralManager.state == .poweredOn else { return }
-        if let peripheral, peripheral.state == .connected || peripheral.state == .connecting {
-            if peripheral.state == .connected { prepareConnection(peripheral) }
+    private func beginSearch() {
+        guard centralManager.state == .poweredOn else {
+            viewState.connection = .bluetoothUnavailable
+            publish()
             return
         }
-        guard let targetIdentifier else { return }
-        if let target = centralManager.retrievePeripherals(withIdentifiers: [targetIdentifier]).first {
-            peripheral = target
-            target.delegate = self
-            onStatus?("正在连接目标 Windows 电脑")
-            centralManager.connect(target)
-        } else {
-            onStatus?("正在扫描目标 Windows 电脑")
-            centralManager.scanForPeripherals(withServices: [Self.serviceUUID])
+        guard shouldConnect, !recoveryBlocked else {
+            viewState.connection = recoveryBlocked ? viewState.connection : .unregistered
+            publish()
+            return
         }
+        if policy.phase != .ready { centralManager.scanForPeripherals(withServices: [Self.serviceUUID]) }
+        if peripheral == nil { viewState.connection = .waitingComputer }
+        publish()
+        connectNextCandidate()
+    }
+
+    private func connectNextCandidate() {
+        guard peripheral == nil, shouldConnect, !recoveryBlocked, !candidates.isEmpty else { return }
+        let candidate = candidates.removeFirst()
+        peripheral = candidate
+        candidate.delegate = self
+        policy.connecting(now: now)
+        viewState.connection = .connecting
+        diagnostic("candidate connecting")
+        startInitializationTimeout()
+        centralManager.connect(candidate)
+        publish()
     }
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         diagnostic("central state=\(central.state.rawValue)")
         guard central.state == .poweredOn else {
-            if central.state != .unknown && central.state != .resetting {
-                record(BluetoothUnlockError.bluetoothUnavailable(central.state))
+            central.stopScan()
+            discardAuthentication(message: "蓝牙不可用，本次请求已失效")
+            if enrolling {
+                enrolling = false
+                enrollmentSent = false
+                viewState.enrollment = .failed("蓝牙不可用，登记未完成，原目标保留")
             }
-            clearConnectionState()
+            clearDisconnectedState()
+            viewState.connection = .bluetoothUnavailable
+            publish()
             return
         }
-        recovery.resetConnectionRetries()
-        if enrolling && wantsConnection { central.scanForPeripherals(withServices: [Self.serviceUUID]) }
-        else { connectTargetIfReady() }
+        recoveryBlocked = false
+        policy.resetConnectionRetries()
+        seenCandidates.removeAll()
+        beginSearch()
     }
 
     func centralManager(_ central: CBCentralManager, willRestoreState dict: [String: Any]) {
         diagnostic("restoration received")
-        wantsConnection = automaticEnabled && targetIdentifier != nil
         let restored = dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral] ?? []
         for item in restored {
-            guard automaticEnabled, item.identifier == targetIdentifier else {
+            guard shouldConnect, peripheral == nil, viewState.target != nil else {
                 central.cancelPeripheralConnection(item)
                 continue
             }
-            wantsConnection = true
             peripheral = item
             item.delegate = self
-            if item.state == .connected { prepareConnection(item) }
-            else if item.state == .disconnected { central.connect(item) }
+            if item.state == .connected {
+                policy.connected(now: now)
+                startInitializationTimeout()
+                discoverServices(item)
+            } else {
+                policy.connecting(now: now)
+                viewState.connection = .connecting
+                startInitializationTimeout()
+                if item.state == .disconnected { central.connect(item) }
+            }
         }
-        if peripheral == nil { connectTargetIfReady() }
+        if central.state == .poweredOn { beginSearch() }
     }
 
-    func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral,
+    func centralManager(_ central: CBCentralManager, didDiscover candidate: CBPeripheral,
                         advertisementData: [String: Any], rssi RSSI: NSNumber) {
-        guard wantsConnection, enrolling || peripheral.identifier == targetIdentifier else { return }
-        guard self.peripheral == nil || self.peripheral?.state == .disconnected else { return }
-        self.peripheral = peripheral
-        peripheral.delegate = self
-        central.stopScan()
-        central.connect(peripheral)
+        guard shouldConnect, !recoveryBlocked, policy.phase != .ready, candidate !== peripheral,
+              !seenCandidates.contains(candidate.identifier), seenCandidates.count < 64 else { return }
+        seenCandidates.insert(candidate.identifier)
+        guard candidates.count < 16 else { return }
+        if candidate.identifier == viewState.target?.peripheralID { candidates.insert(candidate, at: 0) }
+        else { candidates.append(candidate) }
+        connectNextCandidate()
     }
 
-    func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        guard self.peripheral === peripheral, wantsConnection else {
-            central.cancelPeripheralConnection(peripheral)
+    func centralManager(_ central: CBCentralManager, didConnect candidate: CBPeripheral) {
+        guard peripheral === candidate, shouldConnect, disconnectAction == nil else {
+            central.cancelPeripheralConnection(candidate)
             return
         }
-        recovery.resetConnectionRetries()
-        diagnostic("connected; preparing subscriptions")
-        prepareConnection(peripheral)
+        diagnostic("connected; discovery starting")
+        policy.connected(now: now)
+        clearCharacteristics()
+        startInitializationTimeout()
+        discoverServices(candidate)
     }
 
-    func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
-        guard self.peripheral === peripheral else { return }
-        clearConnectionState()
-        record(BluetoothUnlockError.connectionFailed(error?.localizedDescription ?? "系统没有提供详细错误。"))
-        if wantsConnection && automaticEnabled && !enrolling && recovery.takeConnectionRetry() {
-            diagnostic("connection failure; one reconnect attempt")
-            connectTargetIfReady()
-        } else { diagnostic("connection failure; waiting for user or Bluetooth state change") }
+    func centralManager(_ central: CBCentralManager, didFailToConnect candidate: CBPeripheral, error: Error?) {
+        guard peripheral === candidate else { return }
+        diagnostic("connection attempt failed")
+        let action = disconnectAction
+        disconnectAction = nil
+        clearDisconnectedState()
+        if let action { resumeAfterDisconnect(action); return }
+        failWithoutConnection("无法建立蓝牙连接")
     }
 
-    func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-        guard self.peripheral === peripheral else { return }
-        diagnostic("disconnected; pending approval discarded")
-        clearConnectionState()
-        if let error { record(BluetoothUnlockError.connectionFailed(error.localizedDescription)) }
-        else { onStatus?("连接已断开") }
-        if enrolling { enrolling = false; enrollmentSent = false }
-        if wantsConnection && automaticEnabled { connectTargetIfReady() }
+    func centralManager(_ central: CBCentralManager, didDisconnectPeripheral candidate: CBPeripheral, error: Error?) {
+        guard peripheral === candidate else { return }
+        diagnostic("disconnected; approval discarded")
+        let action = disconnectAction
+        disconnectAction = nil
+        discardAuthentication(message: "蓝牙已断开，本次认证已失效")
+        clearDisconnectedState()
+        if let action { resumeAfterDisconnect(action); return }
+        if enrolling && enrollmentSent {
+            enrolling = false
+            enrollmentSent = false
+            viewState.enrollment = .failed("登记连接中断，原目标保留")
+        }
+        failWithoutConnection("蓝牙连接已断开")
     }
 
-    private func prepareConnection(_ peripheral: CBPeripheral) {
-        peripheral.delegate = self
-        onStatus?("已连接，正在准备订阅")
-        if let service = peripheral.services?.first(where: { $0.uuid == Self.serviceUUID }) {
-            let uuids = [Self.requestCharacteristicUUID, Self.challengeCharacteristicUUID,
-                         Self.assertionCharacteristicUUID, Self.resultCharacteristicUUID]
-            if let characteristics = service.characteristics,
-               uuids.allSatisfy({ uuid in characteristics.contains(where: { $0.uuid == uuid }) }) {
-                prepareCharacteristics(characteristics, peripheral: peripheral)
-            } else { peripheral.discoverCharacteristics(uuids, for: service) }
-        } else { peripheral.discoverServices([Self.serviceUUID]) }
+    private func failWithoutConnection(_ message: String) {
+        if shouldConnect && policy.takeConnectionRetry() {
+            diagnostic("recovery retry remaining=\(policy.remainingConnectionRetries)")
+            beginSearch()
+        } else {
+            recoveryBlocked = true
+            centralManager.stopScan()
+            viewState.connection = .failed(message)
+            if enrolling {
+                enrolling = false
+                viewState.enrollment = .failed(message + "；原目标保留")
+            }
+            publish()
+        }
+    }
+
+    private func disconnect(action: DisconnectAction) {
+        centralManager.stopScan()
+        if action != .halt { viewState.connection = .recovering }
+        else if !recoveryBlocked { viewState.connection = viewState.target == nil ? .unregistered : .waitingComputer }
+        guard let peripheral else { resumeAfterDisconnect(action); return }
+        if action == .recover {
+            seenCandidates.remove(peripheral.identifier)
+            if !candidates.contains(where: { $0.identifier == peripheral.identifier }) {
+                candidates.append(peripheral)
+            }
+        }
+        if peripheral.state == .disconnected {
+            clearDisconnectedState()
+            resumeAfterDisconnect(action)
+            return
+        }
+        disconnectAction = action
+        initializationTimeout?.cancel()
+        initializationTimeout = nil
+        clearCharacteristics()
+        policy.failed()
+        centralManager.cancelPeripheralConnection(peripheral)
+    }
+
+    private func resumeAfterDisconnect(_ action: DisconnectAction) {
+        switch action {
+        case .recover, .search: beginSearch()
+        case .resume:
+            seenCandidates.removeAll()
+            candidates.removeAll()
+            beginSearch()
+        case .halt:
+            if shouldConnect && !recoveryBlocked { beginSearch(); return }
+            if !recoveryBlocked { viewState.connection = viewState.target == nil ? .unregistered : .waitingComputer }
+            publish()
+        }
+    }
+
+    private func failConnection(_ message: String) {
+        guard disconnectAction == nil else { return }
+        diagnostic("initialization or transport failed phase=\(String(describing: policy.phase))")
+        viewState.issue = message
+        discardAuthentication(message: message)
+        if enrolling && enrollmentSent {
+            enrolling = false
+            enrollmentSent = false
+            viewState.enrollment = .failed(message + "；登记未确认，原目标保留")
+        }
+        let retry = shouldConnect && policy.takeConnectionRetry()
+        if retry {
+            viewState.connection = .recovering
+            disconnect(action: .recover)
+        } else {
+            recoveryBlocked = true
+            viewState.connection = .failed(message)
+            if enrolling { enrolling = false; viewState.enrollment = .failed(message) }
+            disconnect(action: .halt)
+        }
+        publish()
+    }
+
+    private func rejectCandidate(_ message: String) {
+        viewState.issue = message
+        if enrolling {
+            enrolling = false
+            enrollmentSent = false
+            viewState.enrollment = .failed(message + "；原目标保留")
+            recoveryBlocked = true
+            viewState.connection = .failed(message)
+            disconnect(action: .halt)
+        } else { disconnect(action: .search) }
+        publish()
+    }
+
+    private func startInitializationTimeout() {
+        initializationTimeout?.cancel()
+        guard let deadline = policy.deadline, let current = peripheral else { return }
+        initializationTimeout = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(max(0, deadline - ProcessInfo.processInfo.systemUptime))) }
+            catch { return }
+            guard let self, self.peripheral === current, self.policy.deadline == deadline else { return }
+            self.failConnection("连接／服务初始化超过 10 秒，请确认电脑处于锁屏或已开启配对")
+        }
+    }
+
+    private func discoverServices(_ peripheral: CBPeripheral) {
+        viewState.connection = viewState.connection == .recovering ? .recovering : .discovering
+        diagnostic("service discovery")
+        peripheral.discoverServices([Self.serviceUUID])
+        publish()
+    }
+
+    private func advanceDiscovery(_ peripheral: CBPeripheral) -> Bool {
+        switch policy.completeDiscoveryStep(now: now) {
+        case .proceed: return true
+        case .rediscover:
+            serviceInDiscovery = nil
+            identityReadInDiscovery = nil
+            discoverServices(peripheral)
+            return false
+        case .expired:
+            failConnection("服务恢复超过 10 秒")
+            return false
+        }
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        guard self.peripheral === peripheral else { return }
-        if let error { record(error); return }
+        guard self.peripheral === peripheral, policy.phase == .services else { return }
+        guard advanceDiscovery(peripheral) else { return }
+        if let error { failConnection("发现服务失败：\(error.localizedDescription)"); return }
         guard let service = peripheral.services?.first(where: { $0.uuid == Self.serviceUUID }) else {
-            record(BluetoothUnlockError.serviceNotFound)
+            failConnection("电脑未提供解锁服务")
             return
         }
+        serviceInDiscovery = service
+        policy.discoveredServices()
         peripheral.discoverCharacteristics([Self.requestCharacteristicUUID, Self.challengeCharacteristicUUID,
-            Self.assertionCharacteristicUUID, Self.resultCharacteristicUUID], for: service)
+            Self.assertionCharacteristicUUID, Self.resultCharacteristicUUID, Self.computerIDCharacteristicUUID], for: service)
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
-        guard self.peripheral === peripheral else { return }
-        if let error { record(error); return }
-        guard let characteristics = service.characteristics else {
-            record(BluetoothUnlockError.characteristicMissing("全部 characteristic"))
+        guard self.peripheral === peripheral, service === serviceInDiscovery, policy.phase == .characteristics else { return }
+        guard advanceDiscovery(peripheral) else { return }
+        if let error { failConnection("发现特征失败：\(error.localizedDescription)"); return }
+        guard let chars = service.characteristics,
+              let request = chars.first(where: { $0.uuid == Self.requestCharacteristicUUID }),
+              let challenge = chars.first(where: { $0.uuid == Self.challengeCharacteristicUUID }),
+              let assertion = chars.first(where: { $0.uuid == Self.assertionCharacteristicUUID }),
+              let result = chars.first(where: { $0.uuid == Self.resultCharacteristicUUID }) else {
+            failConnection("Windows 解锁服务缺少必要特征")
             return
         }
-        prepareCharacteristics(characteristics, peripheral: peripheral)
-    }
-
-    private func prepareCharacteristics(_ characteristics: [CBCharacteristic], peripheral: CBPeripheral) {
-        requestCharacteristic = characteristics.first { $0.uuid == Self.requestCharacteristicUUID }
-        challengeCharacteristic = characteristics.first { $0.uuid == Self.challengeCharacteristicUUID }
-        assertionCharacteristic = characteristics.first { $0.uuid == Self.assertionCharacteristicUUID }
-        resultCharacteristic = characteristics.first { $0.uuid == Self.resultCharacteristicUUID }
-        guard requestCharacteristic != nil, assertionCharacteristic != nil,
-              let challengeCharacteristic, let resultCharacteristic else {
-            record(BluetoothUnlockError.characteristicMissing("request/challenge/assertion/result"))
+        guard let identity = chars.first(where: { $0.uuid == Self.computerIDCharacteristicUUID }),
+              identity.properties.contains(.read) else {
+            rejectCandidate("Windows 版本不支持稳定 ComputerId，请更新 Windows 组件")
             return
         }
-        if !challengeCharacteristic.isNotifying { peripheral.setNotifyValue(true, for: challengeCharacteristic) }
-        if !resultCharacteristic.isNotifying { peripheral.setNotifyValue(true, for: resultCharacteristic) }
-        connectionReady()
+        requestCharacteristic = request
+        challengeCharacteristic = challenge
+        assertionCharacteristic = assertion
+        resultCharacteristic = result
+        identityReadInDiscovery = identity
+        policy.discoveredCharacteristics()
+        viewState.connection = .verifyingComputer
+        peripheral.readValue(for: identity)
+        publish()
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
-        guard self.peripheral === peripheral else { return }
-        if let error { record(error); return }
-        guard characteristic.isNotifying else {
-            record(BluetoothUnlockError.connectionFailed("Windows 通知订阅失效。"))
-            return
-        }
-        connectionReady()
+        guard self.peripheral === peripheral,
+              characteristic === challengeCharacteristic || characteristic === resultCharacteristic else { return }
+        guard policy.phase == .subscriptions || policy.phase == .ready else { return }
+        if let error { failConnection("通知订阅失败：\(error.localizedDescription)"); return }
+        guard characteristic.isNotifying else { failConnection("Windows 通知订阅已失效"); return }
+        finishSubscriptions(peripheral)
     }
 
-    private func connectionReady() {
-        guard let peripheral, resultCharacteristic?.isNotifying == true,
-              challengeCharacteristic?.isNotifying == true else { return }
-        diagnostic("subscriptions ready challenge=true result=true")
-        if enrolling && !enrollmentSent {
-            do {
-                guard let requestCharacteristic else { throw BluetoothUnlockError.characteristicMissing("request") }
-                let key = try keyStore.publicKeyRawRepresentation()
-                guard key.count == 65 else { throw BluetoothUnlockError.transportEncodingFailed("公钥不是 65 字节。") }
-                var request = Data([0x02])
-                request.append(key)
-                peripheral.writeValue(request, for: requestCharacteristic, type: .withResponse)
-                enrollmentSent = true
-                onStatus?("公钥已发送，等待 Windows 指纹确认")
-            } catch { record(error) }
-        } else if !enrolling { onStatus?("已连接，等待 Windows 箭头发起认证") }
+    private func finishSubscriptions(_ peripheral: CBPeripheral) {
+        let challenge = challengeCharacteristic?.isNotifying == true
+        let result = resultCharacteristic?.isNotifying == true
+        diagnostic("subscriptions challenge=\(challenge) result=\(result)")
+        guard policy.subscriptions(challenge: challenge, result: result, now: now) else { return }
+        initializationTimeout?.cancel()
+        initializationTimeout = nil
+        centralManager.stopScan()
+        candidates.removeAll()
+        seenCandidates.removeAll()
+        viewState.connection = .ready
+        viewState.issue = nil
+        diagnostic("ready; computer identity verified")
+        if enrolling { sendEnrollment(peripheral) }
+        else if var target = viewState.target {
+            target.peripheralID = peripheral.identifier
+            saveTarget(target)
+        }
+        publish()
+    }
+
+    private func sendEnrollment(_ peripheral: CBPeripheral) {
+        guard !enrollmentSent, let requestCharacteristic, policy.verifiedComputerID != nil else { return }
+        do {
+            let key = try keyStore.publicKeyRawRepresentation()
+            guard key.count == 65 else { throw UnlockError.protocolEncodingFailed("公钥长度无效") }
+            var request = Data([0x02])
+            request.append(key)
+            enrollmentSent = true
+            viewState.enrollment = .waitingConfirmation
+            guard write(request, to: requestCharacteristic, purpose: .enrollment(enrollmentSequence)) else { return }
+            diagnostic("enrollment sent; waiting Windows confirmation")
+        } catch {
+            enrolling = false
+            viewState.enrollment = .failed("无法提交登记：\(error.localizedDescription)")
+        }
+    }
+
+    private func saveTarget(_ target: RegisteredComputer) {
+        do {
+            let data = try JSONEncoder().encode(target)
+            defaults.set(data, forKey: "registeredWindowsComputer")
+            defaults.removeObject(forKey: "unlockTargetPeripheral")
+            viewState.target = target
+        } catch {
+            viewState.issue = "无法保存目标电脑信息：\(error.localizedDescription)"
+            if enrolling { viewState.enrollment = .failed("目标电脑信息未保存，原目标保留") }
+        }
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         guard self.peripheral === peripheral else { return }
-        if let error { record(error); return }
-        guard let value = characteristic.value else {
-            record(BluetoothUnlockError.transportEncodingFailed("通知没有数据。"))
-            return
-        }
-        if characteristic.uuid == Self.resultCharacteristicUUID {
-            do {
-                let result = try JSONDecoder().decode(WindowsResult.self, from: value)
-                if enrolling && (result.status == "enrollment_saved" || result.status == "enrollment_already_registered") {
-                    targetIdentifier = peripheral.identifier
-                    defaults.set(peripheral.identifier.uuidString, forKey: "unlockTargetPeripheral")
-                    onTarget?(peripheral.identifier)
-                }
-                if result.status.hasPrefix("enrollment_") { enrolling = false; enrollmentSent = false }
-                if !result.status.hasPrefix("enrollment_") {
-                    guard let requestID = result.requestID else {
-                        throw BluetoothUnlockError.transportEncodingFailed("认证结果缺少 requestID。")
-                    }
-                    guard requestID == pendingChallenge?.requestID || requestID == awaitingResultID else { return }
-                    finishPending()
-                }
-                onResult?(result.status + (result.detail.map { "：" + $0 } ?? ""))
-                diagnostic("Windows result authenticated=\(result.authenticated) enrollment=\(result.status.hasPrefix("enrollment_"))")
-                if result.authenticated == false && !result.status.hasPrefix("enrollment_") {
-                    onStatus?("本次认证失败：" + result.status)
-                }
-            } catch { record(BluetoothUnlockError.transportEncodingFailed(error.localizedDescription)) }
-            return
-        }
-        guard characteristic.uuid == Self.challengeCharacteristicUUID else { return }
-        do {
-            let challenge = try UnlockProtocol.decodeChallenge(from: value)
-            guard challenge.requestID != lastHandledRequest else { return }
-            if pendingChallenge != nil { rejectPending(reason: 6) }
-            finishPending()
-            pendingChallenge = challenge
-            pendingDeadline = ProcessInfo.processInfo.systemUptime + BluetoothAuthenticationState.responseLifetime
-            lastHandledRequest = challenge.requestID
-            guard challenge.version == 1, challenge.audience == "windows-unlock", challenge.nonce.count == 32 else {
-                rejectPending(reason: 6)
-                throw BluetoothUnlockError.receivedInvalidChallenge("版本、audience 或 nonce 无效。")
-            }
-            guard automaticEnabled, !enrolling, peripheral.identifier == targetIdentifier else {
-                rejectPending(reason: 2)
+        if characteristic === identityReadInDiscovery && policy.phase == .identity {
+            guard advanceDiscovery(peripheral) else { return }
+            guard error == nil, let data = characteristic.value,
+                  let id = BluetoothAuthenticationState.computerID(from: data) else {
+                rejectCandidate("Windows ComputerId 缺失或格式无效")
                 return
             }
-            onStatus?("收到 Windows 请求，正在读取新 RSSI")
-            diagnostic("challenge received foreground=\(foreground); fresh RSSI required")
-            requestTimeout = Task { [weak self] in
-                do { try await Task.sleep(for: .seconds(BluetoothAuthenticationState.responseLifetime)) } catch { return }
-                guard self?.pendingChallenge?.requestID == challenge.requestID ||
-                    self?.awaitingResultID == challenge.requestID else { return }
-                if self?.pendingChallenge != nil { self?.rejectPending(reason: 3) }
-                else { self?.finishPending() }
-                self?.diagnostic("response deadline reached")
-                if let self, self.rssiReadInFlight, let peripheral = self.peripheral {
-                    self.diagnostic("RSSI callback missing; cancelling stale connection")
-                    self.centralManager.cancelPeripheralConnection(peripheral)
-                }
-                self?.record(BluetoothUnlockError.connectionFailed("读取 RSSI 或批准请求超时。"))
+            guard policy.verifyComputer(id, expected: viewState.target?.computerID, enrolling: enrolling) else {
+                diagnostic("candidate identity mismatch")
+                rejectCandidate("发现的电脑不是已登记目标，未发送签名")
+                return
             }
-            readChallengeRSSI()
-        } catch { record(error) }
+            let name = peripheral.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            viewState.connectedComputer = RegisteredComputer(computerID: id,
+                name: name.isEmpty ? "Windows 电脑" : name, peripheralID: peripheral.identifier)
+            identityReadInDiscovery = nil
+            viewState.connection = .subscribing
+            if let challengeCharacteristic, !challengeCharacteristic.isNotifying {
+                peripheral.setNotifyValue(true, for: challengeCharacteristic)
+            }
+            if let resultCharacteristic, !resultCharacteristic.isNotifying {
+                peripheral.setNotifyValue(true, for: resultCharacteristic)
+            }
+            finishSubscriptions(peripheral)
+            publish()
+            return
+        }
+        guard policy.phase == .ready,
+              characteristic === resultCharacteristic || characteristic === challengeCharacteristic else { return }
+        if let error { failConnection("蓝牙通知失败：\(error.localizedDescription)"); return }
+        guard let data = characteristic.value else { failConnection("Windows 通知没有数据"); return }
+        if characteristic === resultCharacteristic { handleWindowsResult(data, peripheral: peripheral) }
+        else { handleChallenge(data, peripheral: peripheral) }
     }
 
     private struct WindowsResult: Decodable {
@@ -399,142 +551,309 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
         let requestID: UUID?
     }
 
-    private func readDisplayRSSI() {
-        guard foreground, pendingChallenge == nil, !rssiReadInFlight,
-              let peripheral, peripheral.state == .connected else { return }
-        rssiReadInFlight = true
-        rssiRequestID = nil
-        peripheral.readRSSI()
+    private func handleWindowsResult(_ data: Data, peripheral: CBPeripheral) {
+        do {
+            let result = try JSONDecoder().decode(WindowsResult.self, from: data)
+            if let outcome = BluetoothAuthenticationState.enrollmentOutcome(code: result.status, detail: result.detail) {
+                guard enrolling, enrollmentSent, let id = policy.verifiedComputerID else { return }
+                diagnostic("Windows enrollment result=\(allowedResult(result.status)) reloadFailed=\(result.detail == "saved_reload_failed")")
+                let name = peripheral.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let candidate = RegisteredComputer(computerID: id,
+                    name: name.isEmpty ? "已登记 Windows 电脑" : name, peripheralID: peripheral.identifier)
+                if let target = viewState.completeEnrollment(outcome, candidate: candidate) { saveTarget(target) }
+                enrolling = false
+                enrollmentSent = false
+                if outcome != .succeeded { disconnect(action: .resume) }
+                else if !viewState.automaticEnabled { disconnect(action: .halt) }
+                publish()
+                return
+            }
+            if result.status.hasPrefix("enrollment_") {
+                if enrolling && enrollmentSent {
+                    enrolling = false
+                    enrollmentSent = false
+                    viewState.enrollment = .failed("Windows 返回未知登记结果，未修改原目标")
+                    disconnect(action: .resume)
+                    publish()
+                }
+                diagnostic("unknown or stale enrollment result ignored")
+                return
+            }
+            if result.requestID == nil && (pendingChallenge != nil || awaitingResultID != nil) {
+                finishPending()
+                viewState.authentication = .rejected("Windows 认证结果缺少 requestID，请重新发起")
+                diagnostic("authentication result missing request association")
+                publish()
+                return
+            }
+            guard BluetoothAuthenticationState.acceptsResult(requestID: result.requestID,
+                pending: pendingChallenge?.requestID, awaiting: awaitingResultID) else { return }
+            diagnostic("Windows authentication result=\(allowedResult(result.status)) authenticated=\(result.authenticated)")
+            finishPending()
+            if result.authenticated && result.status == "unlock_approved" {
+                viewState.authentication = .approved
+            } else {
+                viewState.authentication = .rejected(authenticationFailureText(result.status))
+            }
+            publish()
+        } catch {
+            viewState.issue = "Windows 返回结果格式无效"
+            diagnostic("Windows result decoding failed")
+            publish()
+        }
     }
 
-    private func readChallengeRSSI() {
-        guard !rssiReadInFlight, let pendingChallenge, let peripheral, peripheral.state == .connected else { return }
-        rssiReadInFlight = true
-        rssiRequestID = pendingChallenge.requestID
+    private func handleChallenge(_ data: Data, peripheral: CBPeripheral) {
+        do {
+            let challenge = try UnlockProtocol.decodeChallenge(from: data)
+            guard challenge.requestID != lastHandledRequest else { return }
+            if pendingChallenge != nil { rejectPending(reason: 6, message: "新请求替代了旧请求") }
+            finishPending()
+            pendingChallenge = challenge
+            pendingDeadline = now + BluetoothAuthenticationState.responseLifetime
+            lastHandledRequest = challenge.requestID
+            guard challenge.version == 1, challenge.audience == "windows-unlock", challenge.nonce.count == 32 else {
+                rejectPending(reason: 6, message: "Windows 请求格式无效")
+                return
+            }
+            guard policy.acceptsAuthentication(target: viewState.target?.computerID,
+                enabled: viewState.automaticEnabled, enrolling: enrolling) else {
+                rejectPending(reason: 2, message: "目标未登记、正在登记或自动响应已暂停")
+                return
+            }
+            viewState.authentication = .readingRSSI
+            diagnostic("challenge received foreground=\(foreground); fresh RSSI required")
+            let id = challenge.requestID
+            authenticationTimeout = Task { [weak self] in
+                do { try await Task.sleep(for: .seconds(BluetoothAuthenticationState.responseLifetime)) }
+                catch { return }
+                guard let self, self.pendingChallenge?.requestID == id else { return }
+                self.rejectPending(reason: 3, message: "本次新 RSSI／签名处理超过 3 秒")
+            }
+            readChallengeRSSI(peripheral)
+            publish()
+        } catch {
+            viewState.authentication = .rejected("Windows challenge 格式无效")
+            diagnostic("challenge decoding failed")
+            publish()
+        }
+    }
+
+    private func readChallengeRSSI(_ peripheral: CBPeripheral) {
+        guard let challenge = pendingChallenge else { return }
+        guard now < pendingDeadline else {
+            rejectPending(reason: 3, message: "本次 RSSI 响应已过期")
+            return
+        }
+        guard
+              let read = policy.beginRSSI(requestID: challenge.requestID, now: now) else { return }
+        rssiTimeout?.cancel()
+        rssiTimeout = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(BluetoothAuthenticationState.responseLifetime)) }
+            catch { return }
+            guard let self, self.peripheral === peripheral,
+                  self.policy.rssiRead?.sequence == read.sequence else { return }
+            self.diagnostic("RSSI callback missing; bounded connection recovery")
+            if self.pendingChallenge?.requestID == read.requestID {
+                self.rejectPending(reason: 3, message: "未收到本次 RSSI 回调")
+            }
+            self.failConnection("RSSI 回调超时，连接需要恢复")
+        }
         peripheral.readRSSI()
     }
 
     func peripheral(_ peripheral: CBPeripheral, didReadRSSI RSSI: NSNumber, error: Error?) {
-        guard self.peripheral === peripheral, rssiReadInFlight else { return }
-        let measuredRequest = rssiRequestID
-        rssiReadInFlight = false
-        rssiRequestID = nil
-        let value = RSSI.intValue
-        if let error {
-            onRSSI?(nil)
-            if measuredRequest == pendingChallenge?.requestID && measuredRequest != nil { rejectPending(reason: 3) }
-            record(error)
-        } else if value == 127 || value >= 0 || value < -127 {
-            onRSSI?(nil)
-            if measuredRequest == pendingChallenge?.requestID && measuredRequest != nil { rejectPending(reason: 3) }
-            record(BluetoothUnlockError.connectionFailed("RSSI 读数无效。"))
-        } else {
-            onRSSI?(value)
-            if let challenge = pendingChallenge, measuredRequest == challenge.requestID {
-                diagnostic("fresh RSSI=\(value) threshold=\(threshold) remainingMs=\(Int(max(0, pendingDeadline - ProcessInfo.processInfo.systemUptime) * 1000))")
-                let decision = BluetoothAuthenticationState.signalDecision(rssi: value, threshold: threshold,
-                    now: ProcessInfo.processInfo.systemUptime, deadline: pendingDeadline)
-                guard decision != .expired else {
-                    rejectPending(reason: 3)
-                    record(BluetoothUnlockError.connectionFailed("RSSI 响应已超时。"))
-                    return
-                }
-                guard automaticEnabled else { rejectPending(reason: 2); return }
-                guard decision == .approve else {
-                    rejectPending(reason: 1)
-                    onStatus?("信号不足：\(value) dBm，阈值 \(threshold) dBm")
-                    return
-                }
-                do {
-                    guard let assertionCharacteristic else { throw BluetoothUnlockError.characteristicMissing("assertion") }
-                    let assertion = try UnlockProtocol.sign(challenge: challenge, using: keyStore)
-                    let data = try UnlockProtocol.encode(assertion: assertion)
-                    guard ProcessInfo.processInfo.systemUptime < pendingDeadline else {
-                        rejectPending(reason: 6)
-                        throw BluetoothUnlockError.connectionFailed("签名完成时请求已超时。")
-                    }
-                    peripheral.writeValue(data, for: assertionCharacteristic, type: .withResponse)
-                    awaitingResultID = challenge.requestID
-                    pendingChallenge = nil
-                    requestTimeout?.cancel()
-                    requestTimeout = nil
-                    onStatus?("RSSI 达标，签名已发送，等待 Windows 结果")
-                    diagnostic("assertion sent; awaiting result")
-                } catch { rejectPending(reason: 6); record(error) }
-            }
+        guard self.peripheral === peripheral, policy.rssiRead != nil else { return }
+        let read = policy.finishRSSI(now: now, requestID: pendingChallenge?.requestID)
+        rssiTimeout?.cancel()
+        rssiTimeout = nil
+        guard let read, let challenge = pendingChallenge, read.requestID == challenge.requestID else {
+            diagnostic("stale RSSI callback discarded")
+            if pendingChallenge != nil { readChallengeRSSI(peripheral) }
+            return
         }
-        if pendingChallenge != nil { readChallengeRSSI() }
+        let value = RSSI.intValue
+        if error != nil {
+            rejectPending(reason: 3, message: "本次 RSSI 读取失败")
+            return
+        }
+        let decision = BluetoothAuthenticationState.signalDecision(rssi: value, threshold: viewState.threshold,
+            now: now, deadline: pendingDeadline)
+        guard decision != .invalid else { rejectPending(reason: 3, message: "本次 RSSI 读数无效"); return }
+        guard decision != .expired else { rejectPending(reason: 3, message: "本次 RSSI 响应已过期"); return }
+        viewState.rssi = value
+        viewState.rssiMeasuredAt = Date()
+        diagnostic("fresh RSSI=\(value) threshold=\(viewState.threshold)")
+        guard decision == .approve else {
+            rejectPending(reason: 1, message: "RSSI 不足：\(value) dBm，阈值 \(viewState.threshold) dBm")
+            return
+        }
+        guard policy.acceptsAuthentication(target: viewState.target?.computerID,
+            enabled: viewState.automaticEnabled, enrolling: enrolling), let assertionCharacteristic else {
+            rejectPending(reason: 2, message: "当前连接不具备批准资格")
+            return
+        }
+        do {
+            viewState.authentication = .signing
+            publish()
+            let assertion = try UnlockProtocol.sign(challenge: challenge, using: keyStore)
+            let data = try UnlockProtocol.encode(assertion: assertion)
+            guard now < pendingDeadline else {
+                rejectPending(reason: 6, message: "签名完成时本次请求已过期")
+                return
+            }
+            guard write(data, to: assertionCharacteristic, purpose: .assertion(challenge.requestID)) else { return }
+            awaitingResultID = challenge.requestID
+            pendingChallenge = nil
+            authenticationTimeout?.cancel()
+            authenticationTimeout = nil
+            viewState.authentication = .awaitingWindows
+            diagnostic("assertion sent; awaiting Windows result")
+            publish()
+        } catch { rejectPending(reason: 6, message: "本次签名失败：\(error.localizedDescription)") }
+    }
+
+    private func write(_ data: Data, to characteristic: CBCharacteristic, purpose: WritePurpose) -> Bool {
+        guard let peripheral, peripheral.state == .connected, policy.phase == .ready else { return false }
+        guard writes.values.reduce(0, { $0 + $1.count }) < 16 else {
+            failConnection("之前的蓝牙写入尚未确认，连接需要恢复")
+            return false
+        }
+        writes[ObjectIdentifier(characteristic), default: []].append(
+            WriteContext(characteristic: characteristic, generation: policy.generation, purpose: purpose))
+        peripheral.writeValue(data, for: characteristic, type: .withResponse)
+        return true
     }
 
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
         guard self.peripheral === peripheral else { return }
-        if let error {
-            if characteristic.uuid == Self.assertionCharacteristicUUID, let awaitingResultID,
-               let requestCharacteristic, peripheral.state == .connected {
-                var rejection = Data([0x03])
-                rejection.append(Data(awaitingResultID.uuidString.lowercased().utf8))
-                rejection.append(6)
-                peripheral.writeValue(rejection, for: requestCharacteristic, type: .withResponse)
+        let key = ObjectIdentifier(characteristic)
+        guard var queue = writes[key], !queue.isEmpty else { return }
+        let context = queue.removeFirst()
+        if queue.isEmpty { writes.removeValue(forKey: key) } else { writes[key] = queue }
+        guard error != nil, policy.phase == .ready, policy.isCurrentGeneration(context.generation) else { return }
+        switch context.purpose {
+        case let .assertion(id):
+            guard id == awaitingResultID, characteristic === assertionCharacteristic else { return }
+            if let requestCharacteristic {
+                var reject = Data([0x03])
+                reject.append(Data(id.uuidString.lowercased().utf8))
+                reject.append(6)
+                _ = write(reject, to: requestCharacteristic, purpose: .rejection(id))
             }
-            record(BluetoothUnlockError.writeFailed(error.localizedDescription))
+            finishPending()
+            viewState.authentication = .rejected("签名发送失败，请在 Windows 发起新请求")
+        case let .enrollment(sequence):
+            guard enrolling, enrollmentSent, sequence == enrollmentSequence else { return }
+            enrolling = false
+            enrollmentSent = false
+            viewState.enrollment = .failed("登记发送失败，原目标保留")
+            disconnect(action: .resume)
+        case let .rejection(id):
+            guard id == awaitingResultID else { return }
+            viewState.issue = "手机拒绝结果未能送达 Windows"
         }
+        diagnostic("BLE write failed for current operation")
+        publish()
     }
 
     func peripheral(_ peripheral: CBPeripheral, didModifyServices invalidatedServices: [CBService]) {
-        guard self.peripheral === peripheral,
+        guard self.peripheral === peripheral, peripheral.state == .connected,
+              disconnectAction == nil, policy.phase != .failed,
               invalidatedServices.contains(where: { $0.uuid == Self.serviceUUID }) else { return }
-        diagnostic("GATT service invalidated; reconnecting to discard stale RSSI and subscriptions")
-        rejectPending(reason: 4)
-        clearConnectionState()
-        self.peripheral = peripheral
-        centralManager.cancelPeripheralConnection(peripheral)
+        diagnostic("GATT service invalidated; rediscovering without forced disconnect")
+        discardAuthentication(message: "服务发生变化，本次认证已取消，请在 Windows 发起新请求")
+        if enrolling && enrollmentSent {
+            enrolling = false
+            enrollmentSent = false
+            viewState.enrollment = .failed("登记期间服务发生变化，结果未确认，原目标保留")
+        }
+        clearCharacteristics()
+        let discover = policy.invalidateServices(now: now)
+        viewState.connection = .recovering
+        startInitializationTimeout()
+        if discover { discoverServices(peripheral) }
+        else { diagnostic("service invalidation coalesced with current discovery") }
+        publish()
     }
 
-    private func rejectPending(reason: UInt8) {
+    private func rejectPending(reason: UInt8, message: String) {
         guard let challenge = pendingChallenge else { return }
-        diagnostic("approval rejected reason=\(reason)")
-        if let peripheral, peripheral.state == .connected, let requestCharacteristic {
+        if let peripheral, peripheral.state == .connected, policy.phase == .ready, let requestCharacteristic {
             var data = Data([0x03])
             data.append(Data(challenge.requestID.uuidString.lowercased().utf8))
             data.append(reason)
-            peripheral.writeValue(data, for: requestCharacteristic, type: .withResponse)
-        } else { record(BluetoothUnlockError.connectionFailed("无法发送手机拒绝结果：连接不可用。")) }
-        awaitingResultID = challenge.requestID
+            guard write(data, to: requestCharacteristic, purpose: .rejection(challenge.requestID)) else { return }
+            awaitingResultID = challenge.requestID
+        }
         pendingChallenge = nil
+        authenticationTimeout?.cancel()
+        authenticationTimeout = nil
+        viewState.authentication = .rejected(message)
+        diagnostic("approval rejected reason=\(reason)")
+        publish()
     }
 
     private func finishPending() {
         pendingChallenge = nil
         awaitingResultID = nil
-        requestTimeout?.cancel()
-        requestTimeout = nil
+        authenticationTimeout?.cancel()
+        authenticationTimeout = nil
     }
 
+    private func discardAuthentication(message: String) {
+        if !viewState.automaticEnabled { viewState.authentication = .paused }
+        else if pendingChallenge != nil || awaitingResultID != nil { viewState.authentication = .rejected(message) }
+        finishPending()
+    }
+
+    private func clearCharacteristics() {
+        viewState.connectedComputer = nil
+        requestCharacteristic = nil
+        challengeCharacteristic = nil
+        assertionCharacteristic = nil
+        resultCharacteristic = nil
+    }
+
+    private func clearDisconnectedState() {
+        writes.removeAll()
+        initializationTimeout?.cancel()
+        initializationTimeout = nil
+        rssiTimeout?.cancel()
+        rssiTimeout = nil
+        clearCharacteristics()
+        serviceInDiscovery = nil
+        identityReadInDiscovery = nil
+        policy.disconnected()
+        peripheral = nil
+    }
+
+    private func publish() { onUpdate?(viewState) }
+
     private func diagnostic(_ event: String) {
-        let text = "\(Int(ProcessInfo.processInfo.systemUptime))s \(event)"
+        let text = "\(Int(now))s \(event)"
         logger.info("\(text, privacy: .public)")
         onDiagnostic?(text)
     }
 
-    private func record(_ error: Error) {
-        diagnostic("Bluetooth operation failed")
-        onError?(error.localizedDescription)
+    private func allowedResult(_ code: String) -> String {
+        let allowed = ["enrollment_saved", "enrollment_already_registered", "enrollment_cancelled",
+            "enrollment_rejected", "enrollment_busy", "enrollment_expired", "enrollment_error", "enrollment_removed",
+            "unlock_approved", "challenge_expired", "session_changed", "phone_rejected", "not_ready",
+            "malformed_json", "unsupported_version", "invalid_request_id", "request_mismatch", "challenge_replayed",
+            "key_not_enrolled", "invalid_key_id", "invalid_public_key", "key_id_mismatch", "invalid_signature_encoding",
+            "invalid_signature", "unlock_cooldown", "cryptographic_api_failure", "service_error", "service_unavailable"]
+        return allowed.contains(code) ? code : "unknown_result"
     }
 
-    private func clearCharacteristics() {
-        finishPending()
-        requestCharacteristic = nil
-        assertionCharacteristic = nil
-        challengeCharacteristic = nil
-        resultCharacteristic = nil
-        enrollmentSent = false
-        onRSSI?(nil)
-    }
-
-    private func clearConnectionState() {
-        clearCharacteristics()
-        rssiReadInFlight = false
-        rssiRequestID = nil
-        peripheral = nil
+    private func authenticationFailureText(_ code: String) -> String {
+        switch code {
+        case "challenge_expired": "Windows 本次认证已超时，请重新按 Enter"
+        case "session_changed": "Windows 控制台或锁屏会话已改变，请重新发起"
+        case "phone_rejected": viewState.authentication.title
+        case "service_error", "service_unavailable": "Windows 认证服务不可用"
+        case "not_ready": "Windows 当前不具备解锁条件"
+        default: "Windows 拒绝本次认证：\(allowedResult(code))"
+        }
     }
 }

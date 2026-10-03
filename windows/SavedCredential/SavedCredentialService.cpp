@@ -308,7 +308,7 @@ public:
                 if (!stored || !sameIdentity(*stored, identity)) return response;
                 if (phoneChallenge_ || (grant_ && GetTickCount64() < grant_->expiresAt &&
                     grant_->consoleGeneration == gConsoleGeneration.load())) {
-                    setText(response.payload, "Authentication already pending or approved.");
+                    setText(response.payload, "An iPhone request is already in progress or approved. Wait for it to finish.");
                     return response;
                 }
                 grant_.reset();

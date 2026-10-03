@@ -5,6 +5,7 @@
 #include "../PairingTool/EnrollmentSession.h"
 #include "../PairingTool/EnrollmentChannel.h"
 #include "../Resources/resource.h"
+#include "../Resources/DesktopUi.h"
 
 #include <Windows.h>
 #include <WtsApi32.h>
@@ -172,6 +173,15 @@ public:
 
     std::function<void(const std::vector<std::uint8_t>&, const GattSession&, ULONGLONG)> enrollmentRequest;
     bool pairingActive = false;
+
+    std::wstring connectionSummary() const {
+        if (!initialized_) return L"iPhone connection: unavailable.";
+        for (const auto& client : challengeCharacteristic_.SubscribedClients())
+            if (subscriber(client.Session())) return L"iPhone connection: unlock channel ready.";
+        if (challengeCharacteristic_.SubscribedClients().Size() || resultCharacteristic_.SubscribedClients().Size())
+            return L"iPhone connection: preparing unlock channel.";
+        return L"iPhone connection: waiting for your iPhone.";
+    }
 
     GattSubscribedClient subscriber(const GattSession& session) const {
         if (!session || session.SessionStatus() != GattSessionStatus::Active) return nullptr;
@@ -612,7 +622,7 @@ public:
         windowClass.lpszClassName = L"UnlockWindowsWithIPhoneGattHost";
         windowClass.lpfnWndProc = windowProcedure;
         requireWin32(RegisterClassW(&windowClass), L"RegisterClassW");
-        window_ = CreateWindowExW(0, windowClass.lpszClassName, L"Unlock Windows with iPhone",
+        window_ = CreateWindowExW(0, windowClass.lpszClassName, L"Unlock Windows with iPhone\u00ae",
             0, 0, 0, 0, 0, nullptr, nullptr, instance, this);
         if (!window_) requireWin32(FALSE, L"CreateWindowExW");
         state_->window = window_;
@@ -647,7 +657,6 @@ private:
     struct Pairing final {
         unlock_windows::enrollment::Console target;
         ULONGLONG deadline = 0;
-        bool replace = false;
         bool remove = false;
         bool helperReady = false;
         DWORD helperPid = 0;
@@ -659,7 +668,7 @@ private:
         event_token sessionToken{};
     };
 
-    void startPairing(bool replace, bool remove = false) {
+    void startPairing(bool remove = false) {
         try {
             if (pairing_ || launchOutstanding_) throw std::runtime_error("Previous pairing is still active; cancel or wait for its window to close");
             if (!host_.initialized()) throw std::runtime_error("GATT initialization failed; restart the EXE");
@@ -679,7 +688,6 @@ private:
             auto job = std::make_shared<Pairing>();
             job->target = target;
             job->deadline = GetTickCount64() + unlock_windows::enrollment::kPairingLifetime;
-            job->replace = replace;
             job->remove = remove;
             std::array<std::uint8_t, 16> random{};
             if (BCryptGenRandom(nullptr, random.data(), static_cast<ULONG>(random.size()), BCRYPT_USE_SYSTEM_PREFERRED_RNG) < 0)
@@ -709,12 +717,12 @@ private:
             state_->record(L"Pairing opened by local user; fixed 120-second lifetime", false);
             reconcile(true);
             if (pairing_ == job) launchHelper(job, L"--bluetooth " + (remove ? std::wstring(L"clear remove ") :
-                job->channelName + (replace ? L" replace " : L" first ")) + lifetimeArguments(job));
+                job->channelName + L" pair ") + lifetimeArguments(job));
         } catch (...) {
             const auto error = exceptionText();
             state_->record(L"Pairing start: " + error, true);
             finishPairing("enrollment_error");
-            MessageBoxW(window_, error.c_str(), L"无法开启手机配对", MB_OK | MB_ICONERROR);
+            MessageBoxW(window_, error.c_str(), L"Could not start iPhone pairing", MB_OK | MB_ICONERROR);
         }
     }
 
@@ -729,7 +737,7 @@ private:
         pairing_.reset();
         host_.pairingActive = false;
         pairingOutcome_ = std::wstring(to_hstring(result));
-        if (savedReloadFailed) pairingOutcome_ += job->remove ? L"：登记已移除，服务重新加载失败" : L"：公钥已保存，服务重新加载失败";
+        if (savedReloadFailed) pairingOutcome_ += job->remove ? L": registration removed, service reload failed" : L": registration saved, service reload failed";
         state_->record(L"Pairing finished: " + pairingOutcome_, savedReloadFailed || std::string_view(result) == "enrollment_error");
         if (job->session) {
             try { host_.enrollmentResult(job->session, result, savedReloadFailed); }
@@ -809,8 +817,8 @@ private:
                     if (!error.empty()) state->record(L"PairingTool launch: " + error, true);
                     if (pairing_ != job) {
                         if (code == static_cast<DWORD>(unlock_windows::enrollment::ExitCode::savedReloadFailed)) {
-                            pairingOutcome_ = job->remove ? L"登记已移除，服务加载失败；操作窗口随后结束" :
-                                L"公钥已保存，服务加载失败；配对窗口随后结束";
+                            pairingOutcome_ = job->remove ? L"Registration removed, service reload failed; operation window closed afterward" :
+                                L"Registration saved, service reload failed; pairing window closed afterward";
                             state->record(pairingOutcome_, true);
                             try { if (job->session) host_.enrollmentResult(job->session, "enrollment_error", true); }
                             catch (...) { state->record(L"Late enrollment failure notification: " + exceptionText(), true); }
@@ -876,7 +884,7 @@ private:
         const DWORD console = WTSGetActiveConsoleSessionId();
         if (console == 0xffffffff) throw hresult_error(E_FAIL, L"No physical console session can be confirmed");
         if (console != session_) {
-            condition_ = L"非当前物理控制台会话，广播停止";
+            condition_ = L"Phone unlock is unavailable outside this PC's active local session.";
             return false;
         }
         LPWSTR raw = nullptr;
@@ -896,7 +904,7 @@ private:
         if (WTSGetActiveConsoleSessionId() != session_)
             throw hresult_error(E_FAIL, L"Physical console changed during lock-state query");
         const bool locked = level.SessionFlags == WTS_SESSIONSTATE_LOCK;
-        condition_ = locked ? L"锁屏" : L"已解锁，广播停止";
+        condition_ = locked ? L"This PC is locked." : L"This PC is unlocked. Bluetooth discovery is paused.";
         return locked;
     }
 
@@ -907,7 +915,7 @@ private:
         std::wstring currentError;
         try {
             if (!sessionRegistered_) {
-                if (!recheck) throw hresult_error(E_FAIL, L"WTS notifications are not registered; use 重新检查");
+                if (!recheck) throw hresult_error(E_FAIL, L"WTS notifications are not registered; open Status and choose Refresh");
                 requireWin32(WTSRegisterSessionNotification(window_, NOTIFY_FOR_ALL_SESSIONS),
                     L"WTSRegisterSessionNotification");
                 sessionRegistered_ = true;
@@ -916,20 +924,20 @@ private:
             checkPairing();
             if (suspended_ || endingSession_) {
                 locked = false;
-                condition_ = L"会话结束或睡眠，广播停止";
+                condition_ = L"Bluetooth discovery paused while this PC sleeps or signs out.";
             }
         } catch (...) {
             currentError = exceptionText();
             locked = false;
             finishPairing("enrollment_cancelled");
-            condition_ = L"会话状态无法确认，广播停止";
+            condition_ = L"Bluetooth discovery paused: Windows session could not be verified.";
         }
         try {
             if (host_.initialized()) {
                 const bool advertising = locked || (pairing_ && !pairing_->remove && pairing_->helperReady);
-                if (pairing_) condition_ = pairing_->remove ? L"移除登记中，等待本地确认" :
-                    !pairing_->helperReady ? L"配对中，等待 UAC／工具就绪" :
-                    pairing_->session ? L"配对中，等待指纹确认" : L"配对中，等待手机登记（两分钟）";
+                if (pairing_) condition_ = pairing_->remove ? L"Waiting for confirmation to remove paired iPhone." :
+                    !pairing_->helperReady ? L"Pairing: waiting for Windows permission." :
+                    pairing_->session ? L"Pairing: compare the fingerprints." : L"Pairing: waiting for your iPhone.";
                 if (recheck && advertising && host_.status() != GattServiceProviderAdvertisementStatus::Started &&
                     host_.status() != GattServiceProviderAdvertisementStatus::StartedWithoutAllAdvertisementData)
                     host_.retryAdvertising();
@@ -942,16 +950,16 @@ private:
                         status == GattServiceProviderAdvertisementStatus::Created);
                 if (advertising) {
                     if (status == GattServiceProviderAdvertisementStatus::Started) {
-                        if (!pairing_) condition_ = L"锁屏，正在广播";
+                        if (!pairing_) condition_ = L"This PC is locked and discoverable by your iPhone.";
                     }
                     else if (status == GattServiceProviderAdvertisementStatus::Aborted)
-                        throw hresult_error(E_FAIL, L"GATT advertising aborted; use 重新检查");
+                        throw hresult_error(E_FAIL, L"GATT advertising aborted; open Status and choose Refresh");
                     else if (status == GattServiceProviderAdvertisementStatus::StartedWithoutAllAdvertisementData)
                         throw hresult_error(E_FAIL, L"GATT started without all advertisement data");
-                    else condition_ = L"广播启动中";
+                    else condition_ = L"Starting Bluetooth discovery...";
                 } else if (status == GattServiceProviderAdvertisementStatus::Started ||
                     status == GattServiceProviderAdvertisementStatus::StartedWithoutAllAdvertisementData)
-                    condition_ += L"（广播停止待确认）";
+                    condition_ += L" Bluetooth discovery is stopping.";
             } else currentError += L" GATT initialization failed; restart the EXE: " + initializationError_;
         } catch (...) {
             if (!currentError.empty()) currentError += L"; ";
@@ -971,7 +979,7 @@ private:
         data.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
         data.uCallbackMessage = kTray;
         data.hIcon = trayIcon_;
-        const auto text = !lastError_.empty() ? L"错误；" + condition_ : condition_;
+        const auto text = !lastError_.empty() ? L"Needs attention: " + condition_ : condition_;
         wcsncpy_s(data.szTip, text.c_str(), _TRUNCATE);
         return data;
     }
@@ -999,42 +1007,117 @@ private:
         }
     }
 
+    std::wstring statusSummary() {
+        std::wstring result = condition_ + L"\r\n\r\n" + host_.connectionSummary();
+        try {
+            const auto registration = unlock_windows::phone_approval::EnrollmentStore{}.load();
+            result += registration ? L"\r\nPaired iPhone: one registered." : L"\r\nPaired iPhone: none.";
+        } catch (...) {
+            const auto error = exceptionText();
+            result += L"\r\nPaired iPhone: registration could not be checked.";
+            state_->record(L"Registration status: " + error, true);
+        }
+        if (!lastError_.empty()) result += L"\r\n\r\nPhone connectivity needs attention. See Technical details.";
+        return result;
+    }
+
+    std::wstring technicalDetails() {
+        std::wstring details = L"Process session: " + std::to_wstring(session_) +
+            L"\r\nConsole session: " + std::to_wstring(WTSGetActiveConsoleSessionId()) +
+            L"\r\nCurrent lifecycle error: " + (lastError_.empty() ? L"none" : lastError_) +
+            L"\r\nLast registration result: " + (pairingOutcome_.empty() ? L"none" : pairingOutcome_);
+        std::lock_guard lock(state_->mutex);
+        return details + L"\r\nLast communication error (history): " + state_->transportError +
+            L"\r\n\r\nDiagnostic history:\r\n" + state_->diagnostics;
+    }
+
+    static HRESULT CALLBACK statusCallback(HWND dialog, UINT notification, WPARAM command, LPARAM, LONG_PTR data) {
+        if (notification != TDN_BUTTON_CLICKED || command != IDC_UI_REFRESH) return S_OK;
+        auto* self = reinterpret_cast<TrayHost*>(data);
+        try {
+            self->reconcile(true);
+            const auto summary = self->statusSummary();
+            const auto details = self->technicalDetails();
+            SendMessageW(dialog, TDM_SET_ELEMENT_TEXT, TDE_CONTENT, reinterpret_cast<LPARAM>(summary.c_str()));
+            SendMessageW(dialog, TDM_SET_ELEMENT_TEXT, TDE_EXPANDED_INFORMATION, reinterpret_cast<LPARAM>(details.c_str()));
+        } catch (...) {
+            const auto error = exceptionText();
+            self->state_->record(L"Status refresh: " + error, true);
+            SendMessageW(dialog, TDM_SET_ELEMENT_TEXT, TDE_CONTENT,
+                reinterpret_cast<LPARAM>(L"Status could not be refreshed. See Technical details."));
+            SendMessageW(dialog, TDM_SET_ELEMENT_TEXT, TDE_EXPANDED_INFORMATION, reinterpret_cast<LPARAM>(error.c_str()));
+        }
+        return S_FALSE;
+    }
+
     void showDetails() {
-        std::wstring details = condition_ + L"\r\nProcess session=" + std::to_wstring(session_) +
-            L"\r\nConsole session=" + std::to_wstring(WTSGetActiveConsoleSessionId()) +
-            L"\r\n当前生命周期错误：" + lastError_ + L"\r\n";
-        details += L"最近登记结果：" + pairingOutcome_ + L"\r\n";
-        { std::lock_guard lock(state_->mutex); details += L"最近通信／回调错误（历史记录）：" +
-            state_->transportError + L"\r\n历史诊断：\r\n" + state_->diagnostics; }
-        MessageBoxW(window_, details.c_str(), L"GATT 状态详情", MB_OK | MB_ICONINFORMATION);
+        const auto summary = statusSummary();
+        const auto details = technicalDetails();
+        const TASKDIALOG_BUTTON buttons[]{{IDC_UI_REFRESH, L"Refresh"}, {IDCANCEL, L"Close"}};
+        TASKDIALOGCONFIG config{sizeof(config)};
+        config.hwndParent = window_;
+        config.hInstance = GetModuleHandleW(nullptr);
+        config.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_EXPAND_FOOTER_AREA;
+        config.pszWindowTitle = L"Unlock Windows with iPhone\u00ae";
+        config.pszMainInstruction = L"iPhone unlock status";
+        config.pszContent = summary.c_str();
+        config.pszExpandedInformation = details.c_str();
+        config.pszExpandedControlText = L"Hide technical details";
+        config.pszCollapsedControlText = L"Technical details";
+        config.cButtons = static_cast<UINT>(std::size(buttons));
+        config.pButtons = buttons;
+        config.nDefaultButton = IDC_UI_REFRESH;
+        config.pfCallback = statusCallback;
+        config.lpCallbackData = reinterpret_cast<LONG_PTR>(this);
+        config.cxWidth = 340;
+        check_hresult(TaskDialogIndirect(&config, nullptr, nullptr, nullptr));
+    }
+
+    void manageSavedPassword() {
+        try {
+            std::wstring executable(32768, L'\0');
+            const auto size = GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
+            if (!size || size >= executable.size()) throw std::runtime_error("Could not locate installed tools");
+            executable.resize(size);
+            const auto tool = std::filesystem::path(executable).parent_path() / L"unlock_saved_credential_manager.exe";
+            SHELLEXECUTEINFOW request{sizeof(request)};
+            request.lpVerb = L"runas";
+            request.lpFile = tool.c_str();
+            request.nShow = SW_SHOWNORMAL;
+            if (!ShellExecuteExW(&request)) {
+                const auto error = GetLastError();
+                if (error == ERROR_CANCELLED) return;
+                SetLastError(error);
+                requireWin32(FALSE, L"ShellExecuteExW(saved password manager)");
+            }
+        } catch (...) {
+            const auto error = exceptionText();
+            state_->record(L"Saved password manager: " + error, true);
+            MessageBoxW(window_, error.c_str(), L"Could not open saved password manager", MB_OK | MB_ICONERROR);
+        }
     }
 
     void menu() {
         HMENU popup = CreatePopupMenu();
         if (!popup) requireWin32(FALSE, L"CreatePopupMenu");
         struct MenuHandle final { HMENU value; ~MenuHandle() { DestroyMenu(value); } } handle{popup};
-        requireWin32(AppendMenuW(popup, MF_STRING, 1, L"状态详情"), L"AppendMenuW");
-        requireWin32(AppendMenuW(popup, MF_STRING, 2, L"重新检查"), L"AppendMenuW");
+        requireWin32(AppendMenuW(popup, MF_STRING, 1, L"Status\u2026"), L"AppendMenuW");
         const UINT available = pairing_ || launchOutstanding_ ? MF_GRAYED : 0;
-        requireWin32(AppendMenuW(popup, MF_STRING | available, 4, L"配对手机"), L"AppendMenuW");
-        requireWin32(AppendMenuW(popup, MF_STRING | available, 5, L"更换手机"), L"AppendMenuW");
-        requireWin32(AppendMenuW(popup, MF_STRING | available, 7, L"移除手机登记…"), L"AppendMenuW");
-        if (pairing_) requireWin32(AppendMenuW(popup, MF_STRING, 6, pairing_->remove ? L"取消移除" : L"取消配对"), L"AppendMenuW");
+        requireWin32(AppendMenuW(popup, MF_STRING | available, 4, L"Pair iPhone\u2026"), L"AppendMenuW");
+        requireWin32(AppendMenuW(popup, MF_STRING | available, 5, L"Manage saved password\u2026"), L"AppendMenuW");
+        requireWin32(AppendMenuW(popup, MF_STRING | available, 7, L"Remove paired iPhone\u2026"), L"AppendMenuW");
         requireWin32(AppendMenuW(popup, MF_SEPARATOR, 0, nullptr), L"AppendMenuW");
-        requireWin32(AppendMenuW(popup, MF_STRING, 3, L"退出"), L"AppendMenuW");
+        requireWin32(AppendMenuW(popup, MF_STRING, 3, L"Quit"), L"AppendMenuW");
         POINT point{};
         requireWin32(GetCursorPos(&point), L"GetCursorPos");
         SetForegroundWindow(window_);
         const auto command = TrackPopupMenu(popup, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
             point.x, point.y, 0, window_, nullptr);
         if (command == 1) showDetails();
-        if (command == 2) {
-            reconcile(true);
-        }
         if (command == 3) requireWin32(PostMessageW(window_, WM_CLOSE, 0, 0), L"PostMessageW(WM_CLOSE)");
-        if (command == 4 || command == 5) startPairing(command == 5);
-        if (command == 6) { finishPairing("enrollment_cancelled"); reconcile(false); }
-        if (command == 7) startPairing(false, true);
+        if (command == 4) startPairing();
+        if (command == 5) manageSavedPassword();
+        if (command == 7) startPairing(true);
         requireWin32(PostMessageW(window_, WM_NULL, 0, 0), L"PostMessageW(WM_NULL)");
     }
 
@@ -1115,7 +1198,7 @@ private:
             self->lastError_ = exceptionText();
             self->state_->record(self->lastError_, true);
             self->close();
-            MessageBoxW(nullptr, self->lastError_.c_str(), L"GATT 错误，进程已停止", MB_OK | MB_ICONERROR);
+            MessageBoxW(nullptr, self->lastError_.c_str(), L"Phone connectivity stopped", MB_OK | MB_ICONERROR);
             return message == WM_QUERYENDSESSION ? TRUE : 0;
         }
         return DefWindowProcW(window, message, wparam, lparam);
@@ -1134,7 +1217,7 @@ private:
     bool closing_ = false;
     bool suspended_ = false;
     bool endingSession_ = false;
-    std::wstring condition_ = L"广播停止";
+    std::wstring condition_ = L"Bluetooth discovery is stopped.";
     std::wstring lastError_;
     std::wstring initializationError_;
     std::shared_ptr<Pairing> pairing_;
@@ -1147,13 +1230,14 @@ private:
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     try {
+        unlock_windows::desktop_ui::initialize();
         init_apartment(apartment_type::multi_threaded);
         struct Apartment final { ~Apartment() { uninit_apartment(); } } apartment;
         TrayHost app;
         return app.run(instance);
     } catch (...) {
         const auto error = exceptionText();
-        MessageBoxW(nullptr, error.c_str(), L"GATT host 启动失败", MB_OK | MB_ICONERROR);
+        MessageBoxW(nullptr, error.c_str(), L"Could not start phone connectivity", MB_OK | MB_ICONERROR);
         return 1;
     }
 }

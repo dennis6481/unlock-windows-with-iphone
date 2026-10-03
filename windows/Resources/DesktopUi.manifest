@@ -1,7 +1,6 @@
-<!-- Created by Rui MA on 28 Sep 2026 -->
+<!-- Created by Rui MA on 03 Oct 2026 -->
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <assemblyIdentity type="win32" name="UnlockWindowsWithIPhone.ComponentsWizard" version="1.0.0.0" processorArchitecture="*"/>
-  <description>Unlock Windows with iPhone® Setup</description>
+  <assemblyIdentity type="win32" name="UnlockWindowsWithIPhone.Desktop" version="1.0.0.0" processorArchitecture="*"/>
   <dependency>
     <dependentAssembly>
       <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0" processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="*"/>

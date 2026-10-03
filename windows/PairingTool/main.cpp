@@ -4,6 +4,7 @@
 #include "EnrollmentSession.h"
 #include "EnrollmentChannel.h"
 #include "../Resources/resource.h"
+#include "../Resources/DesktopUi.h"
 #include "SavedCredentialIpc.h"
 
 #include <Windows.h>
@@ -124,6 +125,10 @@ public:
     HANDLE cancel = nullptr;
     HANDLE parent = nullptr;
     std::wstring text;
+    std::wstring fingerprint;
+    std::wstring notice;
+    const wchar_t* actionLabel = L"Pair iPhone";
+    bool replacement = false;
     bool remove = false;
     EnrollmentChannel* channel = nullptr;
     std::function<void(std::vector<std::uint8_t>)> candidate;
@@ -147,33 +152,16 @@ public:
     }
     ExitCode run() {
         if (const auto code = check(); code != ExitCode::saved) return code;
-        WNDCLASSW windowClass{};
-        windowClass.hInstance = GetModuleHandleW(nullptr);
-        windowClass.hIcon = LoadIconW(windowClass.hInstance, MAKEINTRESOURCEW(IDI_UNLOCK_APP));
-        require(windowClass.hIcon != nullptr, "LoadIconW(enrollment window)");
-        windowClass.lpszClassName = L"UnlockWindowsEnrollmentConfirmation";
-        windowClass.lpfnWndProc = procedure;
-        windowClass.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
-        require(RegisterClassW(&windowClass), "RegisterClassW(enrollment confirmation)");
-        window_ = CreateWindowExW(WS_EX_TOPMOST, windowClass.lpszClassName,
-            remove ? L"Remove phone enrollment" : L"Confirm phone enrollment",
-            WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 660, 360,
-            nullptr, nullptr, windowClass.hInstance, this);
-        require(window_ != nullptr, "CreateWindowExW(enrollment confirmation)");
+        unlock_windows::desktop_ui::initialize();
+        window_ = CreateDialogParamW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDD_PHONE_PAIRING),
+            nullptr, procedure, reinterpret_cast<LPARAM>(this));
+        require(window_ != nullptr, "CreateDialogParamW(phone pairing)");
         try {
-            textWindow_ = CreateWindowExW(0, L"STATIC", text.c_str(), WS_CHILD | WS_VISIBLE | SS_NOPREFIX,
-                20, 20, 610, 230, window_, nullptr, windowClass.hInstance, nullptr);
-            require(textWindow_ != nullptr, "CreateWindowExW(enrollment text)");
-            confirmButton_ = CreateWindowExW(0, L"BUTTON", remove ? L"Remove enrollment" : L"Fingerprints match - confirm",
-                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON | (channel ? WS_DISABLED : 0),
-                20, 265, 350, 32, window_, reinterpret_cast<HMENU>(1), windowClass.hInstance, nullptr);
-            require(confirmButton_ != nullptr, "CreateWindowExW(enrollment confirm)");
-            require(CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-                410, 265, 180, 32, window_, reinterpret_cast<HMENU>(2), windowClass.hInstance, nullptr) != nullptr,
-                "CreateWindowExW(enrollment cancel)");
+            if (!error_.empty()) throw std::runtime_error(error_);
             require(WTSRegisterSessionNotification(window_, NOTIFY_FOR_ALL_SESSIONS), "WTSRegisterSessionNotification");
             registered_ = true;
             if (!SetTimer(window_, 1, 250, nullptr)) require(FALSE, "SetTimer(enrollment confirmation)");
+            unlock_windows::desktop_ui::centerOnActiveMonitor(window_);
             ShowWindow(window_, SW_SHOW);
             SetForegroundWindow(window_);
             if (channel) { requireValid(); channel->announceReady(); }
@@ -192,6 +180,13 @@ public:
         } catch (...) { cleanup(); throw; }
     }
 private:
+    void update() {
+        require(SetDlgItemTextW(window_, IDC_UI_MESSAGE, text.c_str()), "SetDlgItemTextW(pairing instructions)");
+        require(SetDlgItemTextW(window_, IDC_UI_FINGERPRINT, fingerprint.c_str()), "SetDlgItemTextW(fingerprint)");
+        require(SetDlgItemTextW(window_, IDC_UI_NOTICE, notice.c_str()), "SetDlgItemTextW(pairing notice)");
+        require(SetDlgItemTextW(window_, IDOK, actionLabel), "SetDlgItemTextW(pairing action)");
+        EnableWindow(GetDlgItem(window_, IDOK), !channel || candidateReceived_);
+    }
     void pollCandidate() {
         if (!channel || candidateReceived_) return;
         std::vector<std::uint8_t> key;
@@ -200,8 +195,8 @@ private:
         candidate(std::move(key));
         requireValid();
         candidateReceived_ = true;
-        require(SetWindowTextW(textWindow_, text.c_str()), "SetWindowTextW(enrollment fingerprint)");
-        EnableWindow(confirmButton_, TRUE);
+        update();
+        unlock_windows::desktop_ui::defaultButton(window_, replacement ? IDCANCEL : IDOK);
         SetForegroundWindow(window_);
     }
     ExitCode invalidate(ExitCode code) { invalidated_ = true; result_ = code; return code; }
@@ -214,23 +209,44 @@ private:
         if (window_) { DestroyWindow(window_); window_ = nullptr; }
     }
     void finish(ExitCode code) { result_ = code; PostQuitMessage(0); }
-    static LRESULT CALLBACK procedure(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
-        auto* self = reinterpret_cast<Confirmation*>(GetWindowLongPtrW(window, GWLP_USERDATA));
-        if (message == WM_NCCREATE) {
-            self = static_cast<Confirmation*>(reinterpret_cast<CREATESTRUCTW*>(lparam)->lpCreateParams);
-            SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+    static INT_PTR CALLBACK procedure(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
+        auto* self = reinterpret_cast<Confirmation*>(GetWindowLongPtrW(window, DWLP_USER));
+        if (message == WM_INITDIALOG) {
+            self = reinterpret_cast<Confirmation*>(lparam);
+            self->window_ = window;
+            SetWindowLongPtrW(window, DWLP_USER, reinterpret_cast<LONG_PTR>(self));
         }
-        if (!self) return DefWindowProcW(window, message, wparam, lparam);
+        if (!self) return FALSE;
         try {
             switch (message) {
+            case WM_INITDIALOG:
+                self->appearance_.apply(window, IDC_UI_TITLE);
+                SetWindowTextW(window, self->remove ? L"Remove paired iPhone" : L"Pair iPhone");
+                SetDlgItemTextW(window, IDC_UI_TITLE, self->remove ? L"Remove paired iPhone" : L"Pair your iPhone");
+                SetDlgItemTextW(window, IDC_UI_ACCOUNT, (L"Windows account: " + self->target.account).c_str());
+                self->update();
+                unlock_windows::desktop_ui::defaultButton(window,
+                    self->remove || self->replacement || self->channel ? IDCANCEL : IDOK);
+                return FALSE;
+            case WM_DPICHANGED:
+                unlock_windows::desktop_ui::scheduleDpiAppearance(window, HIWORD(wparam));
+                return FALSE;
+            case unlock_windows::desktop_ui::kApplyDpiAppearance:
+                self->appearance_.apply(window, IDC_UI_TITLE, static_cast<UINT>(wparam));
+                return TRUE;
+            case WM_CTLCOLORSTATIC:
+                if (reinterpret_cast<HWND>(lparam) == GetDlgItem(window, IDC_UI_FINGERPRINT) ||
+                    reinterpret_cast<HWND>(lparam) == GetDlgItem(window, IDC_UI_ACCOUNT))
+                    return unlock_windows::desktop_ui::readOnlyBackground(wparam);
+                return FALSE;
             case WM_COMMAND:
-                if (LOWORD(wparam) == 1 && (!self->channel || self->candidateReceived_)) self->finish(self->check());
-                else if (LOWORD(wparam) == 2) self->finish(self->invalidate(ExitCode::cancelled));
-                return 0;
+                if (LOWORD(wparam) == IDOK && (!self->channel || self->candidateReceived_)) self->finish(self->check());
+                else if (LOWORD(wparam) == IDCANCEL) self->finish(self->invalidate(ExitCode::cancelled));
+                return TRUE;
             case WM_TIMER:
                 if (self->check() != ExitCode::saved) self->finish(self->result_);
                 else self->pollCandidate();
-                return 0;
+                return TRUE;
             case WM_WTSSESSION_CHANGE:
                 if ((static_cast<DWORD>(lparam) == self->target.session &&
                         (wparam == WTS_SESSION_LOCK || wparam == WTS_SESSION_LOGOFF ||
@@ -238,26 +254,25 @@ private:
                     WTSGetActiveConsoleSessionId() != self->target.session)
                     self->finish(self->invalidate(ExitCode::invalidated));
                 else if (self->check() != ExitCode::saved) self->finish(self->result_);
-                return 0;
+                return TRUE;
             case WM_POWERBROADCAST:
                 if (wparam == PBT_APMSUSPEND) self->finish(self->invalidate(ExitCode::invalidated));
                 return TRUE;
             case WM_QUERYENDSESSION: self->finish(self->invalidate(ExitCode::invalidated)); return TRUE;
-            case WM_CLOSE: self->finish(self->invalidate(ExitCode::cancelled)); return 0;
+            case WM_CLOSE: self->finish(self->invalidate(ExitCode::cancelled)); return TRUE;
             }
         } catch (const EnrollmentAborted& aborted) {
             self->finish(self->invalidate(aborted.code));
-            return 0;
+            return TRUE;
         } catch (const std::exception& error) {
             self->error_ = error.what();
             self->finish(self->invalidate(ExitCode::error));
-            return 0;
+            return TRUE;
         }
-        return DefWindowProcW(window, message, wparam, lparam);
+        return FALSE;
     }
     HWND window_ = nullptr;
-    HWND textWindow_ = nullptr;
-    HWND confirmButton_ = nullptr;
+    unlock_windows::desktop_ui::DialogAppearance appearance_;
     bool candidateReceived_ = false;
     bool registered_ = false;
     bool invalidated_ = false;
@@ -290,8 +305,7 @@ ExitCode enroll(int argc, wchar_t* argv[], bool bluetooth) {
             if (std::wstring_view(argv[2]) != L"clear") throw std::invalid_argument("Invalid removal arguments");
         }
         const std::wstring_view mode(argv[3]);
-        if (mode != L"first" && mode != L"replace" && mode != L"remove") throw std::invalid_argument("Invalid enrollment mode");
-        replace = mode == L"replace";
+        if (mode != L"pair" && mode != L"remove") throw std::invalid_argument("Invalid enrollment mode");
         if (number(argv[4]) != confirmation.target.session || std::wstring_view(argv[5]) != confirmation.target.sid)
             return ExitCode::invalidated;
         confirmation.deadline = number(argv[6]);
@@ -347,21 +361,22 @@ ExitCode enroll(int argc, wchar_t* argv[], bool bluetooth) {
         return ExitCode::rejected;
     }
     confirmation.remove = clear;
-    const auto accountText = L"Target Windows account: " + confirmation.target.account + L"\r\n\r\n";
-    confirmation.text = accountText;
     auto prepareCandidate = [&] {
         EnrollmentStore::validatePublicKey(publicKey);
-        alreadyRegistered = original && original->accountSid == confirmation.target.sid && original->publicKey == publicKey;
-        if (!alreadyRegistered && ((original && !replace) || (!original && replace))) {
-            MessageBoxW(nullptr, original ? L"A phone is already registered. Select Replace phone on Windows."
-                : L"No phone is registered. Select Pair phone on Windows.", L"Phone enrollment", MB_OK | MB_ICONWARNING);
+        const auto action = classifyCandidate(original, publicKey, confirmation.target.sid);
+        alreadyRegistered = action == CandidateAction::alreadyRegistered;
+        if (!bluetooth && !alreadyRegistered && ((original && !replace) || (!original && replace))) {
+            MessageBoxW(nullptr, original ? L"A different iPhone is registered. Use --replace to replace it explicitly."
+                : L"No iPhone is registered. Omit --replace for first pairing.", L"Pair iPhone", MB_OK | MB_ICONWARNING);
             throw EnrollmentAborted(ExitCode::rejected);
         }
-        confirmation.text = accountText + L"Compare every group with the fingerprint on your iPhone:\r\n\r\n" +
-            groupedFingerprint(EnrollmentStore::fingerprint(publicKey)) + L"\r\n\r\n" +
-            (alreadyRegistered ? L"This phone is already registered. The enrollment file will not be rewritten.\r\n" :
-                replace ? L"REPLACE: the previously registered phone will no longer be accepted.\r\n" : L"First phone enrollment.\r\n") +
-            L"Only confirm if the complete fingerprints match.";
+        confirmation.replacement = action == CandidateAction::replace;
+        confirmation.actionLabel = alreadyRegistered ? L"Confirm" : L"Pair iPhone";
+        confirmation.text = L"Compare all eight fingerprint groups below with your iPhone.\r\nOnly continue if every group matches.";
+        confirmation.fingerprint = groupedFingerprint(EnrollmentStore::fingerprint(publicKey));
+        confirmation.notice = alreadyRegistered ? L"This iPhone is already paired. Your registration will not change." :
+            confirmation.replacement ? L"Pairing this iPhone will replace the current registration. The previously paired iPhone will no longer unlock this PC." :
+            L"This iPhone will be the only phone allowed to approve unlocking this PC.";
     };
     if (clear) {
         if (!bluetooth) {
@@ -370,11 +385,13 @@ ExitCode enroll(int argc, wchar_t* argv[], bool bluetooth) {
             std::getline(std::cin, word);
             if (word != "REMOVE") return ExitCode::cancelled;
         }
-        confirmation.text += L"Remove the registered phone key? Phone approval will stop working.";
+        confirmation.actionLabel = L"Remove";
+        confirmation.text = L"Remove this PC's paired iPhone registration? You will need to pair an iPhone again to use phone unlock.";
+        confirmation.notice = L"This iPhone will no longer unlock this PC. Your saved Windows password will not be removed.";
     } else if (channel) {
-        confirmation.text += L"Waiting for your iPhone.\r\n\r\nSelect Register to Windows in the iPhone app.\r\n"
-            L"The complete fingerprint will appear here when the public key arrives.\r\n\r\n"
-            L"This pairing expires two minutes after clicking Pair phone on Windows.";
+        confirmation.text = L"Open the iPhone app and choose its Windows registration action. Keep your iPhone nearby.";
+        confirmation.fingerprint = L"Waiting for your iPhone...";
+        confirmation.notice = L"Pairing expires two minutes after choosing Pair iPhone on this PC. You can cancel without changing the current registration.";
         confirmation.candidate = [&](std::vector<std::uint8_t> key) {
             publicKey = std::move(key);
             prepareCandidate();

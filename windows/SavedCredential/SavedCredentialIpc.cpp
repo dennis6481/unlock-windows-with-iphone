@@ -457,23 +457,23 @@ bool decodeAutoSubmitOffer(const std::uint8_t* data, const std::size_t size, Aut
 
 const wchar_t* authenticationStatusText(const AuthenticationStatus& status) noexcept {
     switch (status.failure) {
-    case AuthenticationFailure::rssiTooLow: return L"iPhone signal is below the configured RSSI threshold.";
-    case AuthenticationFailure::automaticDisabled: return L"Automatic approval is disabled on iPhone.";
-    case AuthenticationFailure::rssiUnavailable: return L"iPhone could not read a fresh RSSI value. Press Enter to retry.";
-    case AuthenticationFailure::subscriptionLost: return L"iPhone notification subscriptions are not ready. Press Enter to retry.";
-    case AuthenticationFailure::deliveryFailed: return L"Bluetooth challenge delivery failed. Press Enter to retry.";
-    case AuthenticationFailure::signingFailed: return L"iPhone could not sign the challenge. Press Enter to retry.";
-    case AuthenticationFailure::expired: return L"Phone authentication timed out. Press Enter to retry.";
-    case AuthenticationFailure::sessionChanged: return L"The console user, session or lock state changed. Select the tile again.";
-    case AuthenticationFailure::invalidAssertion: return L"The phone assertion was rejected. Press Enter to retry.";
+    case AuthenticationFailure::rssiTooLow: return L"Move your iPhone closer and try again.";
+    case AuthenticationFailure::automaticDisabled: return L"Enable automatic approval in the iPhone app.";
+    case AuthenticationFailure::rssiUnavailable: return L"Couldn't check your iPhone's proximity. Try again.";
+    case AuthenticationFailure::subscriptionLost: return L"Connection to your iPhone was interrupted. Try again.";
+    case AuthenticationFailure::deliveryFailed: return L"Couldn't send the request to your iPhone. Try again.";
+    case AuthenticationFailure::signingFailed: return L"Couldn't verify approval from your iPhone. Try again.";
+    case AuthenticationFailure::expired: return L"Your iPhone didn't respond in time. Try again.";
+    case AuthenticationFailure::sessionChanged: return L"Your Windows session changed. Start again.";
+    case AuthenticationFailure::invalidAssertion: return L"Couldn't verify approval from your iPhone. Try again.";
     case AuthenticationFailure::none: break;
     }
     switch (status.stage) {
-    case AuthenticationStage::waitingPhone: return L"Waiting for iPhone connection and notification subscriptions...";
-    case AuthenticationStage::awaitingAssertion: return L"Waiting for fresh iPhone RSSI and signed approval...";
-    case AuthenticationStage::approved: return L"Phone approved. Submitting Windows credential...";
-    case AuthenticationStage::consumed: return L"This phone approval has already been consumed. Press Enter for a new request.";
-    default: return L"Unlock with iPhone";
+    case AuthenticationStage::waitingPhone: return L"Waiting for your iPhone\u2026";
+    case AuthenticationStage::awaitingAssertion: return L"Waiting for approval from your iPhone\u2026";
+    case AuthenticationStage::approved: return L"Approved by your iPhone. Unlocking this PC\u2026";
+    case AuthenticationStage::consumed: return L"This approval has already been used. Start again for a new approval.";
+    default: return L"Unlock with iPhone\u00ae";
     }
 }
 

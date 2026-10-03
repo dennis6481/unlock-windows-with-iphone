@@ -18,7 +18,7 @@ $clsidPath = "HKLM:\SOFTWARE\Classes\CLSID\$credentialProviderClsid"
 $taskName = 'UnlockWindowsWithIPhone-CompleteOperation'
 $savedCredentialServiceName = 'UnlockWindowsSavedCredentialService'
 $files = @(
-    (Join-Path $BuildDirectory 'unlock_windows_components_wizard.exe'),
+    (Join-Path $BuildDirectory 'setup.exe'),
     (Join-Path $BuildDirectory 'unlock_credential_provider.dll'),
     (Join-Path $BuildDirectory 'unlock_saved_credential_service.exe'),
     (Join-Path $BuildDirectory 'unlock_saved_credential_manager.exe'),
@@ -56,7 +56,7 @@ if ($state -and $state.TargetSid) {
     }
 }
 
-Write-Host 'Unlock Windows with iPhone Components diagnostics' -ForegroundColor Cyan
+Write-Host ('Unlock Windows with iPhone' + [char]0x00AE + ' Components diagnostics') -ForegroundColor Cyan
 [PSCustomObject]@{
     Elevated = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
     NativeWindowsArchitecture = Get-NativeWindowsArchitecture

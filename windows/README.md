@@ -9,7 +9,7 @@ Windows 主线只有一条：iPhone 签名经普通用户托盘 GATT host 转交
 - `Protocol`：固定签名载荷和 CNG P-256 验签。
 - `PhoneApproval`：`PhoneApprovalCore` 与 `EnrollmentStore`，由保存凭据服务直接使用。
 - `SavedCredential`：LocalSystem 服务、两条受限 named pipe、DPAPI vault 和临时密码管理 GUI。
-- `GattHost`：普通用户托盘 BLE transport；`0x01` 认证请求、主动两分钟配对窗口接受 `0x02 + 公钥`。安装后由目标用户 Run 自启；项注册已确认，重新登录自启待验收。原广播、提示修正和 Windows 交互已获确认，完整蓝牙登记暂缓。
+- `GattHost`：普通用户托盘 BLE transport；磁贴发起认证，主动两分钟配对窗口接受 `0x02 + 公钥`，不接受旧 `0x01`。安装后由目标用户 Run 自启；项注册已确认，重新登录自启待验收。原广播、提示修正和 Windows 交互已获确认，完整蓝牙登记暂缓。
 - `CredentialProvider`：LogonUI 磁贴，只领取有效手机授权对应的保存凭据。
 - `PairingTool`：管理员确认并登记 iPhone 公钥。
 - `ComponentsWizard`：唯一安装、更新、卸载和事务恢复入口。
@@ -36,7 +36,7 @@ make build-release
 
 提前在开发机编译，把以下六个产物放在同一目录；目标电脑不需要编译环境：
 
-- `unlock_windows_components_wizard.exe`
+- `setup.exe`
 - `unlock_saved_credential_service.exe`
 - `unlock_credential_provider.dll`
 - `unlock_gatt_host.exe`
@@ -46,15 +46,15 @@ make build-release
 从仓库根目录启动：
 
 ```powershell
-& '.\windows\build\unlock_windows_components_wizard.exe'
+& '.\windows\build\setup.exe'
 ```
 
-维护入口自行请求 UAC；普通结果提示模式不提权。安装将程序统一放到 System32，开始菜单提供 **Saved Windows credential** 和 **Install or maintain**。GATT 与配对工具保持同目录，图标不需要单独文件。
+维护入口自行请求 UAC；普通结果提示模式不提权。对外安装器产物为 **setup.exe**；CMake 目标名与 System32／受保护暂存目录内的维护文件名仍保留 `unlock_windows_components_wizard.exe`，沿用既有安装记录、快捷方式和重启续办，不新增别名或第二套维护入口。安装将程序统一放到 System32，开始菜单提供 **Saved Windows credential** 和 **Install or maintain**。GATT 与配对工具保持同目录，图标不需要单独文件。
 
 | 页面 | 操作 |
 |---|---|
 | 未安装 | Install / Cancel |
-| 已安装 | Update / Uninstall / Cancel，显示目标 SID 和托盘运行状态 |
+| 已安装 | Update / Uninstall / Cancel，显示目标账户和托盘运行状态；SID 在 Technical details |
 | 更新确认 | Back / Update / Cancel，保留密码、公钥与自启目标 |
 | 卸载确认 | Back / Uninstall / Cancel，删除密码副本，保留公钥登记 |
 | 进度 | 追加真实复制、替换、任务和删除日志；执行中不能关闭或取消 |
@@ -83,15 +83,32 @@ GATT 持续自启仅使用安装目标 SID 对应用户的 Run 项，值名 `Unl
 
 ## 当前使用顺序
 
-1. Components Wizard 安装六个程序并重启，目标用户正常登录后由任务启动托盘（新路径待验收）。
-2. 从开始菜单打开 Saved Windows credential，在已解锁控制台设置或更新密码。
-3. `unlock_pairing_tool` 确认并登记 iPhone 公钥。
-4. 确认托盘已启动，锁定 Windows，在 iPhone 发起认证。
-5. 显示锁屏登录选项，收到 `unlock_approved` 后 Windows 自动解锁，无需点击 Credential Provider 的 **Unlock**；手动按钮仍保留。
+1. Components Wizard 安装六个程序并重启，目标用户用原生 PIN／密码正常登录，由目标用户 Run 启动托盘。
+2. 锁屏并用原生方式返回桌面捕获新鲜身份；托盘选择 **Manage saved password…**，核对账户后保存或更新实际 MSA 密码的加密副本。
+3. 托盘选择 **Pair iPhone…**，一次 UAC 后在 iPhone 发起登记，核对目标账户及完整指纹后确认。不同手机会明确提示替换，同一手机及账户不重写登记。
+4. 确认托盘已启动，锁定 Windows；在现有 **Unlock with iPhone®** 磁贴发起认证，iPhone 自动响应开关开启。
+5. 收到 `unlock_approved` 后沿用 CP 自动提交解锁。手机的批准结果不单独证明 Windows 已解锁；检查返回的实际桌面。
 
-Manager GUI 在正式设置 UI 出现前必须保留；它的 Refresh、Set、Update 和 Clear 是当前唯一凭据维护入口。
+密码管理 GUI 必须保留；Refresh、Save password…、Update saved password…、Remove saved password… 是当前凭据维护入口，管理本机副本而非修改在线密码。
 
-新增蓝牙登记路径：在同一目录放置本次构建的 host 和 PairingTool，以普通用户启动 host，在已解锁控制台从托盘选择配对／更换，再在前台 iPhone 发送公钥，允许 UAC 后核对完整指纹。PairingTool 绑定实际控制台 SID，使用另一管理员提权也不改目标账户；保存并成功重新加载才报成功。[步骤及待验收项](GattHost/README.md#蓝牙公钥登记代码已接入产品待验收)。此路径目前仅完成代码与静态检查，原有正常 Update 的通过记录不覆盖它，新 Wizard 已接入这些 EXE 的部署，尚未执行安装验收。
+蓝牙登记操作见 [步骤及待验收项](GattHost/README.md#蓝牙公钥登记代码已接入产品待验收)。PairingTool 绑定实际控制台 SID，使用另一管理员提权也不改目标账户；保存并成功重新加载才报成功。2026-10-03 统一登记入口与新 UI 只完成静态检查，历史正常 Update／解锁记录不代替它们的专项验收。
+
+## Windows UI 验收（2026-10-03）
+
+本轮保留 Win32，统一英文文案及紧凑主题控件，不改 iOS。配对／密码／托盘进程新增 common-controls v6 与 PerMonitorV2 manifest，原生对话框负责正文及布局缩放，共享标题／图标处理在 DPI 更新后重新应用；安装器沿用已有 manifest。CP 与服务没有桌面 DPI 设置。文案映射、完整指纹与登记决策测试只新增源码，没有执行。功能基线按历史用户反馈保留，新 UI 尚未验收；圆点动画及 Enter 初始焦点不在本轮范围。
+
+以下操作仅在另行授权构建、安装及实机验证后进行，命令以仓库根目录为准：
+
+1. 使用同一新构建的六个产物，从 `& '.\windows\build\setup.exe'` 进入现有 Update，正常重启续办；不要直接覆盖 LogonUI 已加载的 DLL。记录版本与更新结果，不重新清除密码。
+2. 在 4K 屏幕分别切换 100%、150%、200%、250% 缩放，打开 Status、Pair iPhone、密码管理和安装器，再跨不同 DPI 屏幕移动。核对字体清晰、按钮紧凑、长账户可滚动阅读、完整八组指纹未截断，展开／折叠详情反复缩放无累计位移；高对比度也需检查。
+3. 核对托盘五个菜单及底部分隔线：Status 中 Refresh 不关闭窗口，当前状态与历史错误分开；配对时冲突操作禁用，Cancel 在配对窗口内。Tab／Shift+Tab／Enter／Esc 正常，删除与替换默认 Cancel，待重启默认 Later。
+4. 首次登记、相同手机重复登记、另一手机替换分别核对窗口提示及完整指纹。重复登记前后比较登记文件哈希；取消替换、超时及保存失败仍保留旧登记；确认替换后旧手机不可解锁。保留服务重新加载失败专项，不假报成功。
+5. Remove paired iPhone 明确只删除公钥，确认后核对保存密码、ComputerId 和系统蓝牙配对仍在；需要重新登记才可手机解锁。取消删除不改变登记。
+6. Manage saved password 正常 UAC，显示实际控制台账户；用另一管理员提升时也不能改目标。身份快照过期应显示锁屏／原生解锁／Refresh 的操作提示。分别核对 Save、Update、Remove、Close，只操作本机副本。
+7. 安装器各页面执行 Back／Cancel／Later／Finish；只有执行页持续追加日志，错误页保留具体错误，执行中关闭／取消无效。Update 保留密码和登记，卸载仍须确认密码清除。部署专项与旧记录分开。
+8. 新构建回归首次登录无手机磁贴、已有会话手机批准自动解锁、原生 PIN／密码及一次性批准不重放。检查用户提示不暴露 RSSI／nonce 等技术术语，低读数提示靠近，连接／读数失败不能伪装成会话变化。必要的故障注入另行授权，不反复尝试错误密码。
+
+每项记录观察结果与未验证条件。完整配对、跨管理员、后台整夜和旧负面专项不能因本轮 UI 源码完成而标绿。
 
 2026-10-02 用户实体机确认上述自动解锁和三项回归通过，现冻结这一旧前台 host 原型里程碑。用户还确认重启后首次登录不显示自定义磁贴，使用原生密码登录，符合仅解锁已有会话的目标；首次登录明确不支持手机登录，不是待实现功能。随后用户反馈托盘 host 测试动作均符合预期，但实际解锁、广播停止后仍显示“错误”；提示逻辑修正后，2026-10-02 用户确认回归成功；原始历史错误的具体来源仍未提供。此前托盘 GATT 实测为手动启动，新登录任务尚未验收，iPhone App 保持前台；五轮验收步骤与当前记录见 [GATT host](GattHost/README.md#实体机验收记录与待验证项)。完整负面路径继续待验收，CP 回归步骤见 [Credential Provider](CredentialProvider/README.md)。按用户要求已跳过独立验证并接入安装器代码，不新增 LocalSystem 蓝牙服务。
 

@@ -2,11 +2,13 @@
 
 #pragma once
 
+#include "EnrollmentStore.h"
 #include <Windows.h>
 #include <sddl.h>
 #include <wtsapi32.h>
 
 #include <stdexcept>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -26,6 +28,15 @@ enum class ExitCode : DWORD {
     savedReloadFailed = 8,
     busy = 9,
 };
+
+enum class CandidateAction { first, alreadyRegistered, replace };
+
+inline CandidateAction classifyCandidate(const std::optional<phone_approval::EnrollmentRecord>& existing,
+    const std::vector<std::uint8_t>& publicKey, const std::wstring& sid) {
+    if (!existing) return CandidateAction::first;
+    return existing->accountSid == sid && existing->publicKey == publicKey
+        ? CandidateAction::alreadyRegistered : CandidateAction::replace;
+}
 
 struct Handle final {
     HANDLE value = nullptr;
@@ -130,7 +141,8 @@ inline Console queryConsole() {
 inline std::wstring groupedFingerprint(const std::string& fingerprint) {
     std::wstring result;
     for (std::size_t index = 0; index < fingerprint.size(); ++index) {
-        if (index != 0 && index % 8 == 0) result += L' ';
+        if (index != 0 && index % 32 == 0) result += L"\r\n";
+        else if (index != 0 && index % 8 == 0) result += L' ';
         result += static_cast<wchar_t>(fingerprint[index]);
     }
     return result;

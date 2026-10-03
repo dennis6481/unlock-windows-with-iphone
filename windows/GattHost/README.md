@@ -14,7 +14,9 @@
 
 隐藏的普通顶层窗口接收所有会话的 WTS 通知和睡眠恢复通知。启动、会话变化、广播状态事件及每秒状态核对都重新查询当前物理控制台和实际锁定状态；不把通知顺序或旧广播事件当作当前状态。睡眠及会话结束期间禁止启动广播。WinRT 回调把写请求、订阅变化和广播状态事件交回同一控制线程；广播启停和 IPC 转发串行执行。
 
-托盘提示包括“已解锁，广播停止”“锁屏，正在广播”“广播启动中”、配对等待状态和“错误”。右键菜单提供 **状态详情**、**重新检查**、**配对手机**、**更换手机**、配对期间的 **取消配对** 和 **退出**。状态详情保留最近登记结果、广播事件数值、BluetoothError、HRESULT、IPC 阶段和 Win32 错误，同时输出到调试器；不记录 challenge、assertion、密码或批准内容。托盘错误前缀表示尚未恢复的生命周期错误；实际会话查询成功且广播状态符合当前模式后自动清除。历史通信／回调错误保留在详情中，重新检查不删除历史记录。启动广播失败不在每秒核对中反复重试；广播中止后需重新检查，仍须满足正常锁屏或有效配对条件。GATT 初始化失败需退出并重新启动同一 EXE。
+托盘提示及窗口文案全部为英文。右键菜单固定为 **Status… / Pair iPhone… / Manage saved password… / Remove paired iPhone… / Quit**，Quit 前有分隔线。Status 窗口首先显示当前连接、广播和登记情况，**Refresh** 在此窗口内；历史错误、会话编号和错误码放入可展开的 **Technical details**，不覆盖当前状态。配对期间禁用冲突操作，取消由配对窗口的 **Cancel** 完成。状态详情仍保留广播事件数值、BluetoothError、HRESULT、IPC 阶段和 Win32 错误，同时输出到调试器；不记录 challenge、assertion、密码或批准内容。实际会话查询成功且广播状态符合当前模式后清除当前生命周期错误；Refresh 不删除历史记录。启动广播失败不在每秒核对中反复重试，须 Refresh 并满足锁屏或配对条件；GATT 初始化失败需退出并重新启动同一 EXE。
+
+**Manage saved password…** 从 host 所在安装目录请求一次 UAC 启动密码管理工具，只管理本机加密副本，不修改 Windows 或 Microsoft Account 密码。**Remove paired iPhone…** 只删除当前公钥登记并重新加载服务，不删除保存密码、ComputerId 或 Windows 蓝牙系统配对。删除确认默认选中 Cancel。
 
 退出时先拒绝新回调入队，停止广播、撤销事件，等待已进入的异步写请求完成 deferral 清理，再丢弃尚未处理的请求并移除托盘和窗口。撤销失败记录具体错误，不静默忽略。
 
@@ -63,14 +65,14 @@ Start-Process -FilePath '.\windows\build\unlock_gatt_host.exe'
 操作流程（使用包含本次变更的构建；产品构建与运行须获得当前任务授权）：
 
 1. 将 `unlock_gatt_host.exe` 和 `unlock_pairing_tool.exe` 放在同一目录，以普通权限在已解锁物理控制台启动 host。
-2. 从托盘选择 **配对手机** 或 **更换手机**，立即处理一次 UAC。窗口先显示目标账户及等待手机，工具确认就绪后才开启配对广播。
+2. 从托盘选择 **Pair iPhone…**，立即处理一次 UAC。窗口先显示目标账户及等待手机，工具确认就绪后才开启配对广播。
 3. 在两分钟内于前台 iPhone 点击 **登记到 Windows**。候选公钥冻结后，不允许其他请求覆盖它或反复启动 UAC。
-4. 收到手机候选公钥后，同一 PairingTool 窗口显示指纹并启用确认按钮，无第二次 UAC（同一公钥重复登记也须核对）。在窗口核对目标 Windows 账户及与 iPhone 相同的完整 SHA-256 指纹（每八字符分组）。更换窗口明确告知原手机登记将失效。匹配才确认。
-5. 等待手机显示登记成功；Windows 托盘状态详情记录结果，不再弹出登记结果气泡通知；成功要求公钥已保存并且服务已重新加载。之后锁屏，手机前台发起认证。
+4. 收到手机候选公钥后，同一窗口显示完整 SHA-256 指纹（八组、两行）并启用确认按钮，无第二次 UAC。同一手机及账户明确显示已登记，核对后不重写记录；不同手机显示原手机将失去解锁权限，默认 Cancel，确认才替换。只在账户与每组指纹均一致时继续。
+5. 等待手机显示登记成功；Windows Status 的 Technical details 记录具体结果，不弹出登记结果气泡。成功要求登记与服务重新加载完成。之后锁屏，使用现有 Windows 磁贴发起认证，手机自动响应。
 
 配对 deadline 固定，不因候选到达或 UAC 延长。取消、超时、发起连接断开／取消结果订阅、锁屏、会话变化、睡眠或退出均终止配对，恢复后须重新主动开启。提权工具通过只读取消事件和父进程存活检查拒绝迟到确认；上一提权调用未结束前，不开启新的配对。结束配对恢复正常广播规则，不主动断开 BLE。
 
-普通登记不覆盖已有公钥；更换模式没有旧记录时拒绝。相同公钥和账户返回已登记，不重写文件。所有 PairingTool 修改入口共用全局写入互斥；保存前后及原子替换前核对目标控制台、取消信号、deadline 和旧记录。CLI 仍保留显式手工登记、替换及清除操作，保存 SID 同样来自实际控制台，不来自 UAC 管理员。
+托盘只有一个登记入口，工具根据真实记录选择首次、已登记或替换提示，不由托盘猜测模式。取消、超时及提交前失败不改旧记录；文件提交后服务重新加载失败仍明确报告已保存但加载失败，不假装撤回提交。所有修改入口共用全局写入互斥，保存前后及原子替换前仍核对目标控制台、取消信号、deadline 和旧记录。CLI 保留显式手工登记、`--replace` 和清除；保存 SID 来自实际控制台，不来自 UAC 管理员。
 
 登记结果均使用 `authenticated:false`：`enrollment_saved`、`enrollment_already_registered`、`enrollment_cancelled`、`enrollment_expired`、`enrollment_busy`、`enrollment_rejected`、`enrollment_error`。保存后服务加载失败时返回 `enrollment_error` 和 `detail:"saved_reload_failed"`，Windows 明确显示公钥已保存，不自动回滚，也不报成功。通信失败保留具体诊断，不能把写入应答或手机仍连接当作完成。
 
@@ -83,6 +85,8 @@ Start-Process -FilePath '.\windows\build\unlock_gatt_host.exe'
 待验收安装后的普通用户结果页启动、Run 登录自启与任务管理器禁用/启用、Update 替换前移除入口及完成后恢复、卸载移除入口和文件；密码与公钥遵循现有更新／卸载语义。仍只有同一 EXE，直接启动仅用于诊断。首次登录不显示自定义磁贴，正常登录后锁屏可手机解锁的边界必须再次回归。没有无限崩溃重启或自动回滚。
 
 ## 参考资料
+
+本次 UI 手动验收统一见 [Windows UI 检查](../README.md#windows-ui-验收2026-10-03)。本轮只改展示与登记入口选择，未构建或执行测试；历史解锁成功不等于新 UI 已验收。
 
 - [Microsoft GATT foreground sample](https://github.com/microsoft/Windows-universal-samples/blob/main/Samples/BluetoothLE/cppwinrt/Scenario3_ServerForeground.cpp)
 - [Microsoft: WTSRegisterSessionNotification](https://learn.microsoft.com/en-us/windows/win32/api/wtsapi32/nf-wtsapi32-wtsregistersessionnotification)

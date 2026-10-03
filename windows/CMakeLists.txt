@@ -68,9 +68,9 @@ add_executable(unlock_saved_credential_manager WIN32
     SavedCredential/SavedCredentialManager.cpp
 )
 target_compile_features(unlock_saved_credential_manager PRIVATE cxx_std_20)
-target_compile_definitions(unlock_saved_credential_manager PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_definitions(unlock_saved_credential_manager PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNLOCK_UI_SAVED_PASSWORD)
 target_link_libraries(unlock_saved_credential_manager PRIVATE
-    unlock_saved_credential_ipc advapi32 credui ole32 user32
+    unlock_saved_credential_ipc advapi32 credui ole32 user32 comctl32 gdi32
 )
 
 if(BUILD_TESTING)
@@ -153,7 +153,7 @@ add_executable(unlock_gatt_host WIN32
 
 target_compile_features(unlock_gatt_host PRIVATE cxx_std_20)
 target_compile_definitions(unlock_gatt_host PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_libraries(unlock_gatt_host PRIVATE unlock_saved_credential_ipc unlock_enrollment_store windowsapp user32 shell32 wtsapi32 ole32 advapi32)
+target_link_libraries(unlock_gatt_host PRIVATE unlock_saved_credential_ipc unlock_enrollment_store windowsapp user32 shell32 wtsapi32 ole32 advapi32 comctl32 gdi32)
 
 if(MSVC)
     target_compile_options(unlock_gatt_host PRIVATE /utf-8)
@@ -175,6 +175,7 @@ target_include_directories(unlock_windows_components_wizard
 )
 
 target_compile_features(unlock_windows_components_wizard PRIVATE cxx_std_20)
+set_target_properties(unlock_windows_components_wizard PROPERTIES OUTPUT_NAME setup)
 target_compile_definitions(unlock_windows_components_wizard PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(
     unlock_windows_components_wizard
@@ -218,8 +219,8 @@ add_executable(unlock_pairing_tool
 )
 
 target_compile_features(unlock_pairing_tool PRIVATE cxx_std_20)
-target_compile_definitions(unlock_pairing_tool PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_libraries(unlock_pairing_tool PRIVATE unlock_enrollment_store unlock_saved_credential_ipc user32 wtsapi32)
+target_compile_definitions(unlock_pairing_tool PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNLOCK_UI_PAIRING)
+target_link_libraries(unlock_pairing_tool PRIVATE unlock_enrollment_store unlock_saved_credential_ipc user32 wtsapi32 comctl32 gdi32)
 
 add_library(unlock_credential_provider SHARED
     CredentialProvider/UnlockCredentialProvider.cpp
@@ -277,6 +278,13 @@ if(NOT EXISTS "${UNLOCK_APP_ICON_SOURCE}")
     message(FATAL_ERROR "Standard iOS AppIcon source is missing")
 endif()
 configure_file(Resources/AppIcon.rc.in AppIcon.rc @ONLY)
+configure_file(Resources/DesktopUi.rc.in DesktopUi.rc @ONLY)
+foreach(unlock_desktop_target IN ITEMS unlock_gatt_host unlock_pairing_tool unlock_saved_credential_manager)
+    target_sources(${unlock_desktop_target} PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/DesktopUi.rc)
+    if(MSVC)
+        target_link_options(${unlock_desktop_target} PRIVATE /MANIFEST:NO)
+    endif()
+endforeach()
 target_sources(unlock_credential_provider PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/AppIcon.rc)
 get_property(unlock_windows_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
 foreach(unlock_windows_target IN LISTS unlock_windows_targets)

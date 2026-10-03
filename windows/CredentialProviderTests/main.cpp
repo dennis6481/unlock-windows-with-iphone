@@ -337,6 +337,9 @@ void run() {
     descriptor = nullptr;
     require(provider->GetFieldDescriptorAt(1, &descriptor) == S_OK &&
         descriptor->cpft == CPFT_LARGE_TEXT, "title field missing");
+    require(descriptor->pszLabel != nullptr &&
+        std::wcscmp(descriptor->pszLabel, L"Unlock with iPhone\u00ae") == 0,
+        "provider title must use the user-facing iPhone name and registered symbol");
     CoTaskMemFree(descriptor->pszLabel);
     CoTaskMemFree(descriptor);
     provider->Release();

@@ -25,20 +25,25 @@
 
 `beginPhoneAuthentication`（操作 9）仅接受锁屏控制台的合格 LogonUI，以完整 Identity 发起；与保存身份/登记一致才签发，回复结构化 AuthenticationStatus（requestID、阶段、失败原因、服务单调时钟 deadline）。同一时刻只保留一个请求，整次认证期限 30 秒。phone-only 的 `takePhoneChallenge`（13）请求为空，回复结构化 PhoneChallengePayload（AuthenticationStatus 与可为空的 challenge JSON）；仅有可投递请求时 JSON 非空，服务在回复前标记已领取，不重复投递。`reportPhoneFailure`（14）载荷为 `36 字节 requestID + 1 字节原因`：1 信号不足、2 自动批准关闭、3 新 RSSI 不可用、4 没有有效连接、5 通知失败、6 手机拒绝/签名失败。有效拒绝结束本次请求，迟到请求 ID 不影响下一次认证。
 
-`phoneAuthenticationStatus`（15）仅允许 LogonUI 提交完整 Identity，回复为空或 `36 字节 requestID + ASCII 失败说明`。CP 将说明关联到当前请求；成功批准沿用 `takeAutoSubmitOffer` 和 `claimCredential`。超时、解锁、重新锁屏、会话变化和服务重启均不能继续旧请求；未领取的旧授权不能用于新锁屏周期。无构建或运行验证。
+`phoneAuthenticationStatus`（15）仅允许 LogonUI 提交完整 Identity，回复 IPC v2 的结构化 AuthenticationStatus；CP 将状态关联到当前请求，再映射为用户提示。成功批准沿用 `takeAutoSubmitOffer` 和 `claimCredential`。超时、解锁、重新锁屏、会话变化和服务重启均不能继续旧请求；未领取的旧授权不能用于新锁屏周期。
 
 ## Manager GUI
 
-`unlock_saved_credential_manager.exe` 是正式设置界面完成前必须保留的临时管理工具。它只在提升权限、已解锁的物理控制台使用，并保留四个功能：
+`unlock_saved_credential_manager.exe` 是当前凭据副本管理界面。通过托盘 **Manage saved password…** 或现有开始菜单入口启动，请求 UAC；仅在提升权限、已解锁的物理控制台使用。主区域显示目标账户及真实保存状态，按钮为：
 
 - **Refresh**：读取最新 LogonUI 身份快照和保存状态；
-- **Set credential**：首次保存当前身份的实际 Microsoft Account 密码；
-- **Update stored**：替换已有保存密码；
-- **Clear stored**：删除保存记录。
+- **Save password…**：首次保存当前身份的实际 Microsoft Account 密码；
+- **Update saved password…**：替换已有保存密码；
+- **Remove saved password…**：确认后删除保存记录，确认默认取消；
+- **Close**：关闭窗口。
+
+此工具不修改 Windows／Microsoft Account 密码。SID、QualifiedUserName、ProviderID 及 IPC 错误在 **Technical details** 展开查看，目标身份核验没有放宽；另一管理员完成 UAC 时，目标仍是实际控制台用户。快照失效会提示先锁屏、用原生 PIN／密码返回桌面，然后 Refresh，不把历史快照当作有效身份。
 
 Manager 不再创建解锁授权。唯一授权来源是通过 iPhone 验证的 assertion。
 
-典型设置顺序：先锁定并用原生 PIN/密码解锁一次，让服务获得当前 LogonUI 身份快照；然后运行 Manager，Refresh 后设置或更新密码。正式设置 UI 完成前不要删除该 GUI。
+典型设置顺序：先锁定并用原生 PIN/密码解锁一次，让服务获得当前 LogonUI 身份快照；从托盘打开管理窗口，Refresh 后核对账户，Save 或 Update。此 GUI 是现有维护入口，不应删除。
+
+2026-10-03：改为原生主题对话框及 PerMonitorV2，技术详情默认折叠，正文约 10 pt、标题约 14 pt，支持对话框键盘导航。只静态检查，未构建或执行；DPI、跨管理员、移除及解锁回归见 [Windows UI 验收](../README.md#windows-ui-验收2026-10-03)。DPAPI 范围、保存格式、领取授权及清零策略不变。
 
 ## 删除语义
 

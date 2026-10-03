@@ -134,8 +134,8 @@ void testAuthenticationState() {
     status.stage = AuthenticationStage::failed;
     status.failure = AuthenticationFailure::rssiTooLow;
     require(encodeAuthenticationStatus(status, bytes), "RSSI failure should encode");
-    require(std::wstring(authenticationStatusText(status)).find(L"RSSI") != std::wstring::npos,
-        "RSSI rejection must not be labelled as a session change");
+    require(std::wstring(authenticationStatusText(status)) == L"Move your iPhone closer and try again.",
+        "distance rejection must use an actionable message without RSSI jargon");
     status.failure = AuthenticationFailure::none;
     require(!encodeAuthenticationStatus(status, bytes), "failed stage requires an explicit reason");
     status.stage = AuthenticationStage::awaitingAssertion;
@@ -166,6 +166,46 @@ void testAuthenticationState() {
     require(CloseHandle(reader) && CloseHandle(writer), "legacy packet pipe handles must close");
 }
 
+void testAuthenticationMessages() {
+    struct Message { AuthenticationFailure failure; const wchar_t* text; };
+    const Message failures[]{
+        {AuthenticationFailure::rssiTooLow, L"Move your iPhone closer and try again."},
+        {AuthenticationFailure::automaticDisabled, L"Enable automatic approval in the iPhone app."},
+        {AuthenticationFailure::rssiUnavailable, L"Couldn't check your iPhone's proximity. Try again."},
+        {AuthenticationFailure::subscriptionLost, L"Connection to your iPhone was interrupted. Try again."},
+        {AuthenticationFailure::deliveryFailed, L"Couldn't send the request to your iPhone. Try again."},
+        {AuthenticationFailure::signingFailed, L"Couldn't verify approval from your iPhone. Try again."},
+        {AuthenticationFailure::expired, L"Your iPhone didn't respond in time. Try again."},
+        {AuthenticationFailure::sessionChanged, L"Your Windows session changed. Start again."},
+        {AuthenticationFailure::invalidAssertion, L"Couldn't verify approval from your iPhone. Try again."},
+    };
+    for (const auto& item : failures) {
+        AuthenticationStatus status{"01234567-89ab-cdef-0123-456789abcdef",
+            AuthenticationStage::failed, item.failure, 30'000};
+        const auto before = status;
+        const std::wstring text(authenticationStatusText(status));
+        require(text == item.text, "authentication failure lost its user-facing message");
+        require(text.find(L"RSSI") == std::wstring::npos && text.find(L"assertion") == std::wstring::npos &&
+            text.find(L"subscription") == std::wstring::npos, "technical protocol terms leaked into the lock screen");
+        require(status.stage == before.stage && status.failure == before.failure &&
+            status.deadline == before.deadline && status.requestId == before.requestId,
+            "presentation must not change the authentication state");
+    }
+    AuthenticationStatus status{};
+    require(std::wstring(authenticationStatusText(status)) == L"Unlock with iPhone\u00ae", "idle title lost the registered mark");
+    status.stage = AuthenticationStage::waitingPhone;
+    require(std::wstring(authenticationStatusText(status)) == L"Waiting for your iPhone\u2026", "connection waiting message changed");
+    status.stage = AuthenticationStage::awaitingAssertion;
+    require(std::wstring(authenticationStatusText(status)) == L"Waiting for approval from your iPhone\u2026", "approval waiting message changed");
+    status.stage = AuthenticationStage::approved;
+    require(std::wstring(authenticationStatusText(status)).find(L"Unlocking") != std::wstring::npos &&
+        std::wstring(authenticationStatusText(status)).find(L"unlocked") == std::wstring::npos,
+        "phone approval must not claim that Windows is already unlocked");
+    status.stage = AuthenticationStage::consumed;
+    require(std::wstring(authenticationStatusText(status)).find(L"already been used") != std::wstring::npos,
+        "consumed approval must ask for a new request");
+}
+
 } // namespace
 
 int main() {
@@ -175,6 +215,7 @@ int main() {
     testAutoSubmitOffer();
     testAuthenticationOperationPackets();
     testAuthenticationState();
+    testAuthenticationMessages();
     std::cout << "Saved credential protocol tests passed.\n";
     return EXIT_SUCCESS;
 }

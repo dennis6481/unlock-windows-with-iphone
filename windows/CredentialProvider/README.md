@@ -2,7 +2,9 @@
 
 # Credential Provider
 
-`unlock_credential_provider.dll` 为 Windows 10+ 的 `CPUS_LOGON` 和 `CPUS_UNLOCK_WORKSTATION` 提供一个 **Unlock with iPhone** 磁贴。
+`unlock_credential_provider.dll` 为 Windows 10+ 的 `CPUS_LOGON` 和 `CPUS_UNLOCK_WORKSTATION` 提供一个 **Unlock with iPhone®** 磁贴。名称使用 Unicode 注册符号，字号由 LogonUI 决定；不替换用户头像。
+
+2026-10-03 UI 整理只修改展示映射：等待连接／批准、手机太远、新鲜距离检查失败、连接中断、自动批准关闭、认证超时、批准校验失败、真实会话变化和服务不可用分别使用英文用户提示。批准仅表示正在解锁，不提前宣称 Windows 已解锁；底层结构化阶段和错误码不变。圆点动画与 Enter 初始焦点单列，不属于此次修改。文案用例已补、未执行；现有认证流程冻结，新 UI 待回归。
 
 当前磁贴只有图标、标题和 **Unlock** 按钮。它不接受手输密码，也没有“使用保存凭据”复选框或绕过手机批准的测试模式。
 
@@ -16,7 +18,7 @@
 
 如果授权不存在、已消费、已过期，账户或 session 不匹配，或服务拒绝调用，Provider 不返回凭据，并显示错误。Windows 随后的密码校验失败不会恢复已经领取的授权。
 
-安装、更新和卸载只由 `unlock_windows_components_wizard.exe` 负责。不要手工注册 DLL，也不要恢复已经删除的 PowerShell 安装脚本。
+安装、更新和卸载只由安装器 **setup.exe** 负责；系统内维护文件名仍为 `unlock_windows_components_wizard.exe`，功能只有一个入口。不要手工注册 DLL，也不要恢复已经删除的 PowerShell 安装脚本。
 
 该实现先完成了物理 Windows 机器已有 Microsoft Account 会话的手动解锁。2026-10-02 用户确认“手机批准 + 不点击 Windows 磁贴 + 自动解锁”通过，并确认无新批准时保持锁定、重新批准后再次自动解锁、原生 PIN/密码可用。2026-10-03 手动箭头已改为发起认证，新入口及完整负面路径尚未验收。
 

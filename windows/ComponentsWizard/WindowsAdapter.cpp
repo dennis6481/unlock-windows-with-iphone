@@ -24,7 +24,7 @@
 namespace unlock::components {
 namespace {
 
-constexpr wchar_t kCredentialProviderName[] = L"Unlock Windows with iPhone";
+constexpr wchar_t kCredentialProviderName[] = L"Unlock Windows with iPhone\u00ae";
 constexpr wchar_t kCredentialProviderRegistryPath[] =
     L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Authentication\\Credential Providers\\"
     L"{2F7A2DF4-75B4-4D8E-8A3B-0DA46C6E9112}";

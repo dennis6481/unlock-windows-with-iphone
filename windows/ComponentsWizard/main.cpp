@@ -5,10 +5,12 @@
 #include "ComponentTransaction.h"
 #include "resource.h"
 #include "../Resources/resource.h"
+#include "../Resources/DesktopUi.h"
 #include <Windows.h>
 #include <commctrl.h>
 #include <shellapi.h>
 #include <sddl.h>
+#include <algorithm>
 #include <memory>
 #include <thread>
 #include <vector>
@@ -28,6 +30,26 @@ std::filesystem::path modulePath() {
     DWORD n = GetModuleFileNameW(nullptr, text.data(), static_cast<DWORD>(text.size()));
     if (!n || n >= text.size()) throw ComponentError(L"Cannot determine installer path.");
     return std::wstring(text.data(), n);
+}
+std::wstring startupAccountLabel(const std::wstring& sid, std::wstring& details) {
+    if (sid.empty()) return L"Will be confirmed during update";
+    details = L"Startup account SID: " + sid;
+    PSID binary = nullptr;
+    if (!ConvertStringSidToSidW(sid.c_str(), &binary))
+        throw ComponentError(L"Recorded startup account SID is invalid (Win32=" + std::to_wstring(GetLastError()) + L").");
+    struct SidMemory { PSID value; ~SidMemory() { LocalFree(value); } } memory{binary};
+    DWORD nameSize = 0, domainSize = 0;
+    SID_NAME_USE use{};
+    LookupAccountSidW(nullptr, binary, nullptr, &nameSize, nullptr, &domainSize, &use);
+    DWORD error = GetLastError();
+    if (error == ERROR_INSUFFICIENT_BUFFER) {
+        std::vector<wchar_t> name(nameSize), domain(domainSize);
+        if (LookupAccountSidW(nullptr, binary, name.data(), &nameSize, domain.data(), &domainSize, &use))
+            return (domain.empty() || domain[0] == L'\0' ? std::wstring{} : std::wstring(domain.data()) + L"\\") + name.data();
+        error = GetLastError();
+    }
+    details += L"\r\nAccount name lookup failed (Win32=" + std::to_wstring(error) + L").";
+    return L"Name unavailable; see Technical details";
 }
 struct OperationLock {
     HANDLE value = nullptr;
@@ -105,6 +127,7 @@ struct Window {
     std::thread worker;
     std::wstring log, resultId;
     bool resultMode = false, busy = false, installed = false, pending = false;
+    unlock_windows::desktop_ui::DialogAppearance appearance;
     explicit Window(std::filesystem::path path) : adapter(std::move(path)) {}
     ~Window() { if (worker.joinable()) worker.join(); }
     void text(int id, const std::wstring& value) { SetDlgItemTextW(hwnd, id, value.c_str()); }
@@ -116,15 +139,55 @@ struct Window {
         if (primary) SendMessageW(hwnd, DM_SETDEFID, id, 0);
     }
     void buttons(const wchar_t* left, const wchar_t* action, const wchar_t* cancel) {
+        const bool preferCancel = page == Page::uninstall || page == Page::restart || page == Page::failure || action == nullptr;
         button(IDC_BACK, left);
-        button(IDC_ACTION, action, true, cancel == nullptr);
-        button(IDC_CANCEL_ACTION, cancel, true, cancel != nullptr);
-        if (cancel) SetFocus(GetDlgItem(hwnd, IDC_CANCEL_ACTION));
-        else if (action) SetFocus(GetDlgItem(hwnd, IDC_ACTION));
+        button(IDC_ACTION, action);
+        button(IDC_CANCEL_ACTION, cancel);
+        if (cancel && preferCancel) unlock_windows::desktop_ui::defaultButton(hwnd, IDC_CANCEL_ACTION);
+        else if (action) unlock_windows::desktop_ui::defaultButton(hwnd, IDC_ACTION);
+        else if (cancel) unlock_windows::desktop_ui::defaultButton(hwnd, IDC_CANCEL_ACTION);
+    }
+    void layout() {
+        const bool progress = page == Page::progress;
+        const bool expanded = !progress && !log.empty() && IsDlgButtonChecked(hwnd, IDC_LOG_TOGGLE) == BST_CHECKED;
+        const LONG height = progress ? 218 : expanded ? 242 : 172;
+        const auto place = [&](int id, RECT area) {
+            if (!MapDialogRect(hwnd, &area) || !SetWindowPos(GetDlgItem(hwnd, id), nullptr,
+                area.left, area.top, area.right - area.left, area.bottom - area.top, SWP_NOZORDER | SWP_NOACTIVATE))
+                throw ComponentError(L"Could not lay out installer controls.");
+        };
+        place(IDC_DETAILS, {14, progress ? 42 : 134, 306, progress ? 160 : 198});
+        place(IDC_PROGRESS, {14, 170, 306, 177});
+        place(IDC_BACK, {124, height - 28, 182, height - 12});
+        place(IDC_ACTION, {190, height - 28, 252, height - 12});
+        place(IDC_CANCEL_ACTION, {260, height - 28, 306, height - 12});
+        ShowWindow(GetDlgItem(hwnd, IDC_DETAILS), progress || expanded ? SW_SHOW : SW_HIDE);
+        RECT size{0, 0, 320, height}, previous{};
+        if (!MapDialogRect(hwnd, &size) || !AdjustWindowRectExForDpi(&size,
+            static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_STYLE)), FALSE,
+            static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_EXSTYLE)), GetDpiForWindow(hwnd)) ||
+            !GetWindowRect(hwnd, &previous)) throw ComponentError(L"Could not measure installer window.");
+        const LONG width = size.right - size.left, outerHeight = size.bottom - size.top;
+        MONITORINFO monitor{sizeof(monitor)};
+        if (!GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &monitor))
+            throw ComponentError(L"Could not find installer display bounds.");
+        const LONG x = std::max(monitor.rcWork.left, std::min(
+            previous.left + ((previous.right - previous.left) - width) / 2, monitor.rcWork.right - width));
+        const LONG y = std::max(monitor.rcWork.top, std::min(
+            previous.top + ((previous.bottom - previous.top) - outerHeight) / 2, monitor.rcWork.bottom - outerHeight));
+        if (!SetWindowPos(hwnd, nullptr, x, y, width, outerHeight, SWP_NOZORDER | SWP_NOACTIVATE))
+            throw ComponentError(L"Could not resize installer window.");
     }
     void setPage(Page next, const std::wstring& title, const std::wstring& details) {
-        page = next; text(IDC_MAIN_INSTRUCTION, title); text(IDC_DETAILS, details);
+        page = next; text(IDC_MAIN_INSTRUCTION, title); text(IDC_PAGE_DESCRIPTION, details);
+        if (!SetWindowTextW(hwnd, next == Page::home && installed ? title.c_str() : L"Unlock Windows with iPhone\u00ae Setup"))
+            throw ComponentError(L"Could not set installer window title.");
+        text(IDC_DETAILS, next == Page::progress ? details : log);
+        ShowWindow(GetDlgItem(hwnd, IDC_PAGE_DESCRIPTION), next == Page::progress ? SW_HIDE : SW_SHOW);
+        ShowWindow(GetDlgItem(hwnd, IDC_LOG_TOGGLE), next != Page::progress && !log.empty() ? SW_SHOW : SW_HIDE);
+        CheckDlgButton(hwnd, IDC_LOG_TOGGLE, next == Page::failure ? BST_CHECKED : BST_UNCHECKED);
         ShowWindow(GetDlgItem(hwnd, IDC_PROGRESS), next == Page::progress ? SW_SHOW : SW_HIDE);
+        layout();
     }
     void home() {
         const auto status = adapter.inspect();
@@ -154,17 +217,20 @@ struct Window {
         if (state && !installed) throw ComponentError(L"An interrupted transaction is preserved for diagnosis. No automatic removal or rollback will be performed.\r\n" + state->lastError);
         if (installed) {
             if (!status.isCompleteInstallation()) throw ComponentError(L"Core installation verification failed. No destructive recovery will run automatically.");
-            setPage(Page::home, L"Installed", L"Unlock Windows with iPhone is installed.\r\n\r\nStartup account SID: " +
-                (state->targetSid.empty() ? L"Will be captured from the physical console during update" : state->targetSid) +
+            log.clear();
+            const auto account = startupAccountLabel(state->targetSid, log);
+            setPage(Page::home, L"Unlock Windows with iPhone\u00ae installed", L"Startup account: " + account +
                 L"\r\nBluetooth tray: " + (status.trayRunning ? L"running" : L"not running") +
-                L"\r\n\r\nUpdate keeps your saved credential and phone registration. Uninstall removes the saved credential.");
+                L"\r\n\r\nUpdate keeps your saved password and paired iPhone. Uninstall removes the saved password copy.");
+            text(IDC_LOG_TOGGLE, L"Technical details");
             buttons(L"Uninstall", L"Update", L"Cancel");
         } else {
             if (status.hasAnyArtifacts()) throw ComponentError(L"Unregistered component artifacts exist. Installation has not started.");
-            setPage(Page::home, L"Install Unlock Windows with iPhone",
-                L"Install phone connectivity, lock-screen unlock and saved Windows credential management.\r\n\r\n"
-                L"Phone connectivity will start automatically, without elevation, when the target console user signs in. "
-                L"Use your normal PIN or password for the first sign-in. A restart is required.");
+            log.clear();
+            setPage(Page::home, L"Install Unlock Windows with iPhone\u00ae",
+                L"Use your iPhone to unlock this PC after signing in normally.\r\n\r\n"
+                L"Setup installs phone connectivity, lock-screen unlock and saved password management. "
+                L"Phone connectivity starts automatically when you sign in. Use your usual PIN or password after restarting Windows.");
             buttons(nullptr, L"Install", L"Cancel");
         }
     }
@@ -177,6 +243,7 @@ struct Window {
     }
     void start(WizardAction action, bool continuation = false) {
         busy = true; log.clear();
+        text(IDC_LOG_TOGGLE, L"Operation details");
         setPage(Page::progress, L"Working — please wait", L"");
         button(IDC_BACK, nullptr); button(IDC_ACTION, nullptr); button(IDC_CANCEL_ACTION, L"Cancel", false);
         EnableMenuItem(GetSystemMenu(hwnd, FALSE), SC_CLOSE, MF_BYCOMMAND | MF_GRAYED);
@@ -220,13 +287,13 @@ struct Window {
         busy = false;
         EnableMenuItem(GetSystemMenu(hwnd, FALSE), SC_CLOSE, MF_BYCOMMAND | MF_ENABLED);
         if (!result.success) {
-            setPage(Page::failure, L"Operation failed", result.message + L"\r\n\r\n" + log);
+            setPage(Page::failure, L"Operation failed", result.message);
             buttons(nullptr, nullptr, L"Close");
         } else if (result.rebootRequired) {
-            setPage(Page::restart, L"Restart required", result.message + L"\r\n\r\n" + log);
+            setPage(Page::restart, L"Restart required", result.message);
             buttons(nullptr, L"Restart now", L"Later");
         } else {
-            setPage(Page::result, L"Operation verified", result.message + L"\r\n\r\n" + log);
+            setPage(Page::result, L"Operation verified", result.message);
             buttons(nullptr, L"Finish", nullptr);
         }
     }
@@ -240,15 +307,20 @@ struct Window {
             setPage(Page::progress, L"Completing operation after restart", record->message + L"\r\n" + record->log);
             buttons(nullptr, nullptr, nullptr); return;
         }
+        log = record->log;
         KillTimer(hwnd, 1);
         if (record->success) adapter.startTrayForCompletedOperation(resultId);
         setPage(record->success ? Page::result : Page::failure,
             record->success ? L"Operation completed and verified" : L"Operation failed",
-            record->message + L"\r\n\r\n" + record->log);
+            record->message);
         buttons(nullptr, L"Finish", nullptr);
     }
     void command(int id) {
         if (busy) return;
+        if (id == IDC_LOG_TOGGLE) {
+            layout();
+            return;
+        }
         if (id == IDC_CANCEL_ACTION) { DestroyWindow(hwnd); return; }
         if (id == IDCANCEL) {
             if (resultMode && (page == Page::result || page == Page::failure)) adapter.acknowledgeCompletion(resultId);
@@ -256,7 +328,7 @@ struct Window {
         }
         if (id == IDC_BACK) {
             if (page == Page::home && installed) {
-                setPage(Page::uninstall, L"Uninstall Unlock Windows with iPhone",
+                setPage(Page::uninstall, L"Uninstall Unlock Windows with iPhone\u00ae",
                     L"Remove phone connectivity, login startup, lock-screen unlock, credential manager and maintenance shortcuts.\r\n\r\n"
                     L"The saved Windows password copy will be cleared before removal. Phone public-key registration will be retained. A restart is required.");
                 buttons(L"Back", L"Uninstall", L"Cancel");
@@ -268,7 +340,7 @@ struct Window {
         if (page == Page::home) {
             if (!installed) start(WizardAction::install);
             else {
-                setPage(Page::update, L"Update Unlock Windows with iPhone",
+                setPage(Page::update, L"Update Unlock Windows with iPhone\u00ae",
                     L"Replace installed program files with the precompiled files supplied beside this installer. "
                     L"Your saved password, phone registration and startup target account will be preserved.\r\n\r\nA restart is required.");
                 buttons(L"Back", L"Update", L"Cancel");
@@ -294,24 +366,15 @@ INT_PTR CALLBACK procedure(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
         switch (message) {
             case WM_INITDIALOG:
                 {
-                    const auto instance = reinterpret_cast<HINSTANCE>(GetWindowLongPtrW(hwnd, GWLP_HINSTANCE));
-                    const auto largeIcon = LoadIconW(instance, MAKEINTRESOURCEW(IDI_UNLOCK_APP));
-                    const auto smallIcon = static_cast<HICON>(LoadImageW(instance, MAKEINTRESOURCEW(IDI_UNLOCK_APP),
-                        IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_SHARED));
-                    if (!largeIcon || !smallIcon) throw ComponentError(L"Cannot load the application icon.");
-                    SendMessageW(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(largeIcon));
-                    SendMessageW(hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(smallIcon));
+                    window->appearance.apply(hwnd, IDC_MAIN_INSTRUCTION);
                 }
                 if (window->resultMode) { SetTimer(hwnd, 1, 500, nullptr); window->pollResult(); }
                 else window->home();
                 return FALSE;
             case WM_CTLCOLORSTATIC:
-                if (reinterpret_cast<HWND>(lParam) == GetDlgItem(hwnd, IDC_DETAILS)) {
-                    HDC dc = reinterpret_cast<HDC>(wParam);
-                    SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT));
-                    SetBkColor(dc, GetSysColor(COLOR_WINDOW));
-                    return reinterpret_cast<INT_PTR>(GetSysColorBrush(COLOR_WINDOW));
-                }
+                if (reinterpret_cast<HWND>(lParam) == GetDlgItem(hwnd, IDC_DETAILS) ||
+                    reinterpret_cast<HWND>(lParam) == GetDlgItem(hwnd, IDC_PAGE_DESCRIPTION))
+                    return unlock_windows::desktop_ui::readOnlyBackground(wParam);
                 return FALSE;
             case WM_COMMAND: window->command(LOWORD(wParam)); return TRUE;
             case WM_TIMER: window->pollResult(); return TRUE;
@@ -330,7 +393,13 @@ INT_PTR CALLBACK procedure(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
                     DestroyWindow(hwnd);
                 }
                 return TRUE;
-            case WM_DPICHANGED: return FALSE;
+            case WM_DPICHANGED:
+                unlock_windows::desktop_ui::scheduleDpiAppearance(hwnd, HIWORD(wParam));
+                return FALSE;
+            case unlock_windows::desktop_ui::kApplyDpiAppearance:
+                window->appearance.apply(hwnd, IDC_MAIN_INSTRUCTION, static_cast<UINT>(wParam));
+                window->layout();
+                return TRUE;
             case WM_DESTROY: PostQuitMessage(0); return TRUE;
         }
     } catch (const std::exception& error) {
@@ -374,12 +443,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
         HWND hwnd = CreateDialogParamW(instance, MAKEINTRESOURCEW(IDD_WIZARD_PAGE), nullptr,
             procedure, reinterpret_cast<LPARAM>(&window));
         if (!hwnd) throw ComponentError(L"Could not create installer window (Win32=" + std::to_wstring(GetLastError()) + L").");
+        unlock_windows::desktop_ui::centerOnActiveMonitor(hwnd);
         ShowWindow(hwnd, show); MSG message{};
         while (GetMessageW(&message, nullptr, 0, 0) > 0)
             if (!IsDialogMessageW(hwnd, &message)) { TranslateMessage(&message); DispatchMessageW(&message); }
         return 0;
     } catch (const std::exception& error) {
-        if (!headless) MessageBoxW(nullptr, errorText(error).c_str(), L"Unlock Windows with iPhone", MB_OK | MB_ICONERROR);
+        if (!headless) MessageBoxW(nullptr, errorText(error).c_str(), L"Unlock Windows with iPhone\u00ae", MB_OK | MB_ICONERROR);
         else OutputDebugStringW(errorText(error).c_str());
         return ERROR_INSTALL_FAILURE;
     }

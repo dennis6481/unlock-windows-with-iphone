@@ -1,11 +1,13 @@
 // Created by Rui MA on 26 Sep 2026
 
 #include "EnrollmentStore.h"
+#include "../PairingTool/EnrollmentSession.h"
 
 #include <Windows.h>
 #include <bcrypt.h>
 
 #include <cstdint>
+#include <algorithm>
 #include <iostream>
 #include <iterator>
 #include <stdexcept>
@@ -78,9 +80,28 @@ int main() {
             "enrollment store returned a different account SID"
         );
         const auto originalBytes = encryptedBytes(store.path());
+        using unlock_windows::enrollment::CandidateAction;
+        using unlock_windows::enrollment::classifyCandidate;
+        require(classifyCandidate(std::nullopt, expected, expectedRecord.accountSid) == CandidateAction::first,
+            "the unified Pair iPhone entry must accept first pairing");
+        require(classifyCandidate(loaded, expected, expectedRecord.accountSid) == CandidateAction::alreadyRegistered,
+            "the same phone and console account must not request replacement");
+        require(encryptedBytes(store.path()) == originalBytes, "checking the same phone rewrote enrollment");
+        require(classifyCandidate(loaded, expected, L"S-1-5-21-1-2-3-999") == CandidateAction::replace,
+            "the same key on a different account must require replacement confirmation");
+        const auto displayedFingerprint = unlock_windows::enrollment::groupedFingerprint(
+            unlock_windows::phone_approval::EnrollmentStore::fingerprint(expected));
+        auto compactFingerprint = displayedFingerprint;
+        compactFingerprint.erase(std::remove_if(compactFingerprint.begin(), compactFingerprint.end(),
+            [](wchar_t value) { return value == L' ' || value == L'\r' || value == L'\n'; }), compactFingerprint.end());
+        const auto fingerprint = unlock_windows::phone_approval::EnrollmentStore::fingerprint(expected);
+        require(compactFingerprint == std::wstring(fingerprint.begin(), fingerprint.end()),
+            "the UI must preserve the complete fingerprint across lines");
         const unlock_windows::phone_approval::EnrollmentRecord replacement{
             generatePublicKey(), expectedRecord.accountSid
         };
+        require(classifyCandidate(loaded, replacement.publicKey, replacement.accountSid) == CandidateAction::replace,
+            "a different phone must show explicit replacement confirmation");
         bool rejected = false;
         try { store.save(replacement, [] { throw std::runtime_error("cancelled before commit"); }); }
         catch (const std::exception&) { rejected = true; }

@@ -3,6 +3,7 @@
 #include <initguid.h>
 #include "UnlockCredentialProvider.h"
 #include "SavedCredentialIpc.h"
+#include "../Resources/resource.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -72,7 +73,7 @@ struct ApprovalWatch final {
     std::mutex mutex;
     std::optional<unlock_windows::saved_credential::AutoSubmitOffer> offer;
     std::wstring failure;
-    std::string failureRequestId;
+    std::optional<unlock_windows::saved_credential::AuthenticationStatus> authenticationStatus;
     std::thread worker;
 
     ~ApprovalWatch() {
@@ -121,7 +122,7 @@ struct ApprovalWatch final {
                 SensitiveBytes statusRequest;
                 Packet statusReply;
                 std::wstring latest;
-                std::string latestRequestId;
+                std::optional<AuthenticationStatus> latestStatus;
                 if (!encodeIdentity(identity, statusRequest)) {
                     latest = L"Could not encode the phone authentication status request.";
                     logAutoSubmitError(L"phone status identity encoding", E_INVALIDARG);
@@ -129,21 +130,18 @@ struct ApprovalWatch final {
                     latest = L"Phone authentication service communication failed. Click the arrow again.";
                     logAutoSubmitError(L"phone authentication status", HRESULT_FROM_WIN32(diagnostics.win32Error));
                 } else if (statusReply.result == Result::success) {
-                    const std::string text(statusReply.payload.value.begin(), statusReply.payload.value.end());
-                    if (!text.empty() && text.size() < 36) {
+                    AuthenticationStatus received;
+                    if (!decodeAuthenticationStatus(statusReply.payload.value.data(), statusReply.payload.value.size(), received)) {
                         latest = L"Invalid phone authentication status response.";
                         logAutoSubmitError(L"phone status framing", HRESULT_FROM_WIN32(ERROR_INVALID_DATA));
-                    } else if (text.size() >= 36) {
-                        latestRequestId = text.substr(0, 36);
-                        latest.assign(text.begin() + 36, text.end());
-                    }
+                    } else latestStatus = std::move(received);
                 } else {
                     latest = L"Phone authentication status was rejected by the service.";
                 }
                 {
                     std::lock_guard lock(mutex);
                     failure = latest;
-                    failureRequestId = latestRequestId;
+                    authenticationStatus = std::move(latestStatus);
                 }
                 if (!PostMessageW(window, kApprovalMessage, generation, 0)) {
                     logAutoSubmitError(L"phone status PostMessage", HRESULT_FROM_WIN32(GetLastError()));
@@ -410,54 +408,11 @@ HRESULT copyFieldDescriptor(
 }
 
 HBITMAP createProviderLogo() noexcept {
-    BITMAPINFO bitmapInfo{};
-    bitmapInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bitmapInfo.bmiHeader.biWidth = 72;
-    bitmapInfo.bmiHeader.biHeight = -72;
-    bitmapInfo.bmiHeader.biPlanes = 1;
-    bitmapInfo.bmiHeader.biBitCount = 32;
-    bitmapInfo.bmiHeader.biCompression = BI_RGB;
-
-    void* pixels = nullptr;
-    const auto bitmap = CreateDIBSection(
-        nullptr,
-        &bitmapInfo,
-        DIB_RGB_COLORS,
-        &pixels,
-        nullptr,
-        0
-    );
-    if (bitmap == nullptr || pixels == nullptr) {
-        if (bitmap != nullptr) {
-            DeleteObject(bitmap);
-        }
-        return nullptr;
-    }
-
-    auto* const pixelBuffer = static_cast<std::uint32_t*>(pixels);
-    for (int y = 0; y < 72; ++y) {
-        for (int x = 0; x < 72; ++x) {
-            pixelBuffer[y * 72 + x] = 0x00c2410c;
-        }
-    }
-
-    for (int y = 12; y < 60; ++y) {
-        for (int x = 24; x < 48; ++x) {
-            pixelBuffer[y * 72 + x] = 0x00ffffff;
-        }
-    }
-    for (int y = 18; y < 54; ++y) {
-        for (int x = 28; x < 44; ++x) {
-            pixelBuffer[y * 72 + x] = 0x00c2410c;
-        }
-    }
-    for (int y = 55; y < 58; ++y) {
-        for (int x = 33; x < 39; ++x) {
-            pixelBuffer[y * 72 + x] = 0x00c2410c;
-        }
-    }
-
-    return bitmap;
+    HMODULE module = nullptr;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCWSTR>(&createProviderLogo), &module)) return nullptr;
+    return static_cast<HBITMAP>(LoadImageW(module, MAKEINTRESOURCEW(IDB_UNLOCK_TILE),
+        IMAGE_BITMAP, 0, 0, LR_CREATEDIBSECTION));
 }
 
 class UnlockCredential final : public ICredentialProviderCredential2 {
@@ -673,14 +628,20 @@ public:
         }
     }
 
-    void updateAuthenticationFailure(const std::string& requestId, const std::wstring& failure) {
+    void updateAuthenticationStatus(const std::optional<unlock_windows::saved_credential::AuthenticationStatus>& status,
+                                    const std::wstring& failure) {
         if (!authenticationPending_) return;
-        if (!failure.empty() && (requestId.empty() || requestId == authenticationRequestId_)) {
+        if (!failure.empty()) {
             authenticationPending_ = false;
             showAuthenticationStatus(failure);
-        } else if (GetTickCount64() >= authenticationDeadline_) {
+        } else if (status && status->requestId == authenticationRequestId_) {
+            if (status->stage == unlock_windows::saved_credential::AuthenticationStage::failed ||
+                status->stage == unlock_windows::saved_credential::AuthenticationStage::consumed)
+                authenticationPending_ = false;
+            showAuthenticationStatus(unlock_windows::saved_credential::authenticationStatusText(*status));
+        } else if (status && status->stage == unlock_windows::saved_credential::AuthenticationStage::idle) {
             authenticationPending_ = false;
-            showAuthenticationStatus(L"Phone authentication timed out. Click the arrow again.");
+            showAuthenticationStatus(L"The authentication service has no active request. Press Enter to retry.");
         }
     }
 
@@ -730,6 +691,10 @@ public:
         }
 
         if (!automaticApproval) {
+            if (authenticationPending_) {
+                *optionalStatusIcon = CPSI_NONE;
+                return S_OK;
+            }
             try {
                 using namespace unlock_windows::saved_credential;
                 SensitiveBytes request;
@@ -750,14 +715,15 @@ public:
                     return copyString(message.empty() ? L"Phone authentication is unavailable for this account." :
                         message.c_str(), optionalStatusText);
                 }
-                if (reply.payload.value.size() != 36) {
+                AuthenticationStatus started;
+                if (!decodeAuthenticationStatus(reply.payload.value.data(), reply.payload.value.size(), started) ||
+                    started.stage != AuthenticationStage::waitingPhone) {
                     logAutoSubmitError(L"phone request framing", HRESULT_FROM_WIN32(ERROR_INVALID_DATA));
                     return copyString(L"Invalid phone authentication request response.", optionalStatusText);
                 }
-                authenticationRequestId_.assign(reply.payload.value.begin(), reply.payload.value.end());
+                authenticationRequestId_ = started.requestId;
                 authenticationPending_ = true;
-                authenticationDeadline_ = GetTickCount64() + 5000;
-                showAuthenticationStatus(L"Waiting for iPhone RSSI approval...");
+                showAuthenticationStatus(authenticationStatusText(started));
                 *optionalStatusIcon = CPSI_NONE;
                 return S_OK;
             } catch (const std::bad_alloc&) {
@@ -930,7 +896,6 @@ public:
 private:
     std::atomic<ULONG> refCount_{1};
     bool authenticationPending_ = false;
-    ULONGLONG authenticationDeadline_ = 0;
     std::string authenticationRequestId_;
     ICredentialProviderCredentialEvents* events_ = nullptr;
     std::wstring userSid_;
@@ -1065,7 +1030,12 @@ public:
             return E_POINTER;
         }
 
+        const auto previousIdentity = std::move(identity_);
+        const auto previousSession = consoleSessionId_;
+        const auto previousOffer = pendingAutomaticOffer_;
         hasUserSid_ = false;
+        identity_ = {};
+        consoleSessionId_ = 0xffffffff;
         if (credential_ == nullptr) {
             return E_UNEXPECTED;
         }
@@ -1077,12 +1047,17 @@ public:
             return result;
         }
         if (userCount == 0) {
-            return S_FALSE;
+            stopWatching();
+            return S_OK;
         }
 
         std::wstring consoleSid;
         DWORD consoleSessionId = 0xffffffff;
         const auto consoleStatus = activeConsoleUserSid(consoleSid, &consoleSessionId);
+        if (FAILED(consoleStatus)) {
+            stopWatching();
+            return S_OK;
+        }
         ICredentialProviderUser* user = nullptr;
         for (DWORD index = 0; index < userCount; ++index) {
             ICredentialProviderUser* candidate = nullptr;
@@ -1102,14 +1077,15 @@ public:
                 return E_OUTOFMEMORY;
             }
             CoTaskMemFree(candidateSid);
-            if (matches || (userCount == 1 && index == 0)) {
+            if (matches) {
                 user = candidate;
                 break;
             }
             candidate->Release();
         }
         if (user == nullptr) {
-            return E_UNEXPECTED;
+            stopWatching();
+            return S_OK;
         }
         LPWSTR rawSid = nullptr;
         result = user->GetSid(&rawSid);
@@ -1144,6 +1120,17 @@ public:
         }
         if (sidValue != primarySid) {
             return E_UNEXPECTED;
+        }
+        {
+            using namespace unlock_windows::saved_credential;
+            SensitiveBytes request;
+            Packet reply;
+            if (!encodeIdentity({sidValue, qualifiedName, providerId}, request)) return E_UNEXPECTED;
+            if (!call(Operation::unlockEligibility, std::move(request), reply, 250) ||
+                reply.result != Result::success) {
+                stopWatching();
+                return S_OK;
+            }
         }
         if (SUCCEEDED(consoleStatus) && consoleSid == sidValue) {
             unlock_windows::saved_credential::Identity identity{
@@ -1182,6 +1169,11 @@ public:
             consoleSessionId_ = SUCCEEDED(consoleStatus) && consoleSid == sidValue
                 ? consoleSessionId : 0xffffffff;
             result = startWatching();
+            if (SUCCEEDED(result) && previousOffer && previousSession == consoleSessionId_ &&
+                previousIdentity.sid == identity_.sid &&
+                previousIdentity.qualifiedUserName == identity_.qualifiedUserName &&
+                IsEqualGUID(previousIdentity.providerId, identity_.providerId) &&
+                GetTickCount64() < previousOffer->expiresAt) pendingAutomaticOffer_ = previousOffer;
         }
         return result;
     }
@@ -1219,11 +1211,21 @@ public:
             autoLogonWithDefault == nullptr) {
             return E_POINTER;
         }
-        if (!usageScenarioSet_ || !ready() || !hasUserSid_) {
+        *count = 0;
+        *defaultIndex = CREDENTIAL_PROVIDER_NO_DEFAULT;
+        *autoLogonWithDefault = FALSE;
+        if (!usageScenarioSet_ || !ready()) {
             return E_UNEXPECTED;
         }
+        if (!hasUserSid_) return S_OK;
+        unlock_windows::saved_credential::SensitiveBytes eligibility;
+        unlock_windows::saved_credential::Packet eligibilityReply;
+        if (!unlock_windows::saved_credential::encodeIdentity(identity_, eligibility) ||
+            !unlock_windows::saved_credential::call(unlock_windows::saved_credential::Operation::unlockEligibility,
+                std::move(eligibility), eligibilityReply, 250) ||
+            eligibilityReply.result != unlock_windows::saved_credential::Result::success) return S_OK;
         *count = 1;
-        *defaultIndex = CREDENTIAL_PROVIDER_NO_DEFAULT;
+        *defaultIndex = 0;
         *autoLogonWithDefault = FALSE;
         if (pendingAutomaticOffer_) {
             const auto offer = std::exchange(pendingAutomaticOffer_, std::nullopt);
@@ -1246,7 +1248,7 @@ public:
             return E_POINTER;
         }
         *credential = nullptr;
-        if (index != 0 || !usageScenarioSet_ || !ready()) {
+        if (index != 0 || !usageScenarioSet_ || !ready() || !hasUserSid_) {
             return E_INVALIDARG;
         }
         *credential = credential_;
@@ -1342,14 +1344,14 @@ private:
         if (!watch_ || generation != watchGeneration_ || !hasUserSid_ || events_ == nullptr) return;
         std::optional<unlock_windows::saved_credential::AutoSubmitOffer> offer;
         std::wstring failure;
-        std::string failureRequestId;
+        std::optional<unlock_windows::saved_credential::AuthenticationStatus> authenticationStatus;
         {
             std::lock_guard lock(watch_->mutex);
             offer = std::exchange(watch_->offer, std::nullopt);
             failure = watch_->failure;
-            failureRequestId = watch_->failureRequestId;
+            authenticationStatus = watch_->authenticationStatus;
         }
-        credential_->updateAuthenticationFailure(failureRequestId, failure);
+        credential_->updateAuthenticationStatus(authenticationStatus, failure);
         if (!offer || GetTickCount64() >= offer->expiresAt ||
             WTSGetActiveConsoleSessionId() != consoleSessionId_) return;
         pendingAutomaticOffer_ = offer;

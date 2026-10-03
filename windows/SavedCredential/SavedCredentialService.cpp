@@ -34,6 +34,7 @@ constexpr ACCESS_MASK kClientPipeRights = 0x0012019B;
 
 std::atomic_bool gStopping{false};
 std::atomic<ULONGLONG> gConsoleGeneration{0};
+std::atomic<DWORD> gObservedConsoleSession{0xffffffff};
 std::atomic_bool gPipeFailed{false};
 SERVICE_STATUS_HANDLE gStatusHandle = nullptr;
 SERVICE_STATUS gStatus{};
@@ -177,22 +178,6 @@ Client inspectClient(const HANDLE pipe) {
     return client;
 }
 
-std::wstring wtsString(const DWORD session, const WTS_INFO_CLASS field) {
-    LPWSTR raw = nullptr;
-    DWORD bytes = 0;
-    if (!WTSQuerySessionInformationW(WTS_CURRENT_SERVER_HANDLE, session, field, &raw, &bytes)) {
-        fail("saved credential console account query failed");
-    }
-    if (raw == nullptr || bytes < sizeof(wchar_t) || bytes % sizeof(wchar_t) != 0 ||
-        raw[0] == L'\0' || raw[bytes / sizeof(wchar_t) - 1] != L'\0') {
-        if (raw != nullptr) WTSFreeMemory(raw);
-        fail("saved credential console account query malformed");
-    }
-    const std::wstring value(raw);
-    WTSFreeMemory(raw);
-    return value;
-}
-
 struct Console final {
     DWORD session = 0xffffffff;
     std::wstring sid;
@@ -203,24 +188,10 @@ Console currentConsole() {
     Console result;
     result.session = WTSGetActiveConsoleSessionId();
     if (result.session == 0xffffffff) fail("saved credential physical console unavailable");
-    const auto user = wtsString(result.session, WTSUserName);
-    const auto domain = wtsString(result.session, WTSDomainName);
-    const auto account = domain + L"\\" + user;
-    DWORD sidBytes = 0;
-    DWORD domainChars = 0;
-    SID_NAME_USE use{};
-    const BOOL sized = LookupAccountNameW(nullptr, account.c_str(), nullptr, &sidBytes,
-        nullptr, &domainChars, &use);
-    if (sized || GetLastError() != ERROR_INSUFFICIENT_BUFFER || sidBytes == 0) {
-        fail("saved credential console SID size query failed");
-    }
-    std::vector<std::uint8_t> sid(sidBytes);
-    std::vector<wchar_t> referencedDomain(domainChars == 0 ? 1 : domainChars);
-    if (!LookupAccountNameW(nullptr, account.c_str(), sid.data(), &sidBytes,
-            referencedDomain.data(), &domainChars, &use) || use != SidTypeUser) {
-        fail("saved credential console SID lookup failed");
-    }
-    result.sid = sidText(sid.data());
+    Handle userToken;
+    if (!WTSQueryUserToken(result.session, &userToken.value)) fail("existing console user token unavailable");
+    if (tokenSession(userToken.value) != result.session) fail("console user token session differs");
+    result.sid = tokenSid(userToken.value);
     LPWSTR raw = nullptr;
     DWORD bytes = 0;
     if (!WTSQuerySessionInformationW(WTS_CURRENT_SERVER_HANDLE, result.session,
@@ -239,6 +210,7 @@ Console currentConsole() {
     }
     result.locked = info->Data.WTSInfoExLevel1.SessionFlags == WTS_SESSIONSTATE_LOCK;
     WTSFreeMemory(raw);
+    if (WTSGetActiveConsoleSessionId() != result.session) fail("physical console changed during token validation");
     return result;
 }
 
@@ -302,9 +274,10 @@ public:
         try {
             const auto client = inspectClient(pipe);
             const auto console = currentConsole();
+            gObservedConsoleSession = console.session;
+            expirePhoneRequest(console);
             if (client.session != console.session) return response;
             if (removing_ && request.operation != Operation::clearForRemoval) return response;
-            expirePhoneRequest(console);
             if (endpoint == Endpoint::phone) {
                 if (client.logonUi || client.userSid != console.sid || !console.locked) return response;
                 if (request.operation != Operation::takePhoneChallenge &&
@@ -316,11 +289,21 @@ public:
             if (request.operation == Operation::takePhoneChallenge ||
                 request.operation == Operation::reportPhoneFailure ||
                 request.operation == Operation::submitPhoneAssertion) return response;
+            if (request.operation == Operation::unlockEligibility) {
+                Identity identity;
+                if (!client.logonUi || !console.locked ||
+                    !decodeIdentity(request.payload.value.data(), request.payload.value.size(), identity) ||
+                    identity.sid != console.sid || (!enrolledSid_.empty() && identity.sid != enrolledSid_)) return response;
+                const auto stored = vault_.storedIdentity();
+                if (stored && stored->sid != console.sid) return response;
+                response.result = Result::success;
+                return response;
+            }
             if (request.operation == Operation::beginPhoneAuthentication) {
                 if (!client.logonUi || !console.locked) return response;
                 Identity identity;
                 if (!decodeIdentity(request.payload.value.data(), request.payload.value.size(), identity) ||
-                    identity.sid != console.sid || !enrollmentMatches()) return response;
+                    identity.sid != console.sid || identity.sid != enrolledSid_ || !enrollmentMatches()) return response;
                 const auto stored = vault_.storedIdentity();
                 if (!stored || !sameIdentity(*stored, identity)) return response;
                 if (phoneChallenge_ || (grant_ && GetTickCount64() < grant_->expiresAt &&
@@ -333,11 +316,12 @@ public:
                 const auto issued = phoneCore_.issueChallenge(nowMilliseconds());
                 if (generation != gConsoleGeneration.load()) return response;
                 authenticationIdentity_ = identity;
-                authenticationFailure_.clear();
                 phoneChallenge_ = PhoneChallenge{identity, console.session, generation,
-                    GetTickCount64() + 5000, phoneCore_.requestIdString(issued.challenge), issued.json, false};
-                setText(response.payload, phoneChallenge_->requestId);
-                authenticationRequestId_ = phoneChallenge_->requestId;
+                    GetTickCount64() + kPhoneAuthenticationLifetimeMs, phoneCore_.requestIdString(issued.challenge), issued.json, false};
+                authenticationStatus_ = {phoneChallenge_->requestId, AuthenticationStage::waitingPhone,
+                    AuthenticationFailure::none, phoneChallenge_->deadline};
+                logAuthentication();
+                if (!encodeAuthenticationStatus(authenticationStatus_, response.payload)) fail("authentication status encoding failed");
                 response.result = Result::success;
                 return response;
             }
@@ -346,8 +330,9 @@ public:
                 Identity identity;
                 if (!decodeIdentity(request.payload.value.data(), request.payload.value.size(), identity) ||
                     identity.sid != console.sid) return response;
-                if (authenticationIdentity_ && sameIdentity(identity, *authenticationIdentity_))
-                    setText(response.payload, authenticationRequestId_ + authenticationFailure_);
+                if (authenticationIdentity_ && sameIdentity(identity, *authenticationIdentity_)) {
+                    if (!encodeAuthenticationStatus(authenticationStatus_, response.payload)) fail("authentication status encoding failed");
+                } else if (!encodeAuthenticationStatus({}, response.payload)) fail("idle status encoding failed");
                 response.result = Result::success;
                 return response;
             }
@@ -454,6 +439,11 @@ public:
                     grant_->consoleGeneration != gConsoleGeneration.load() ||
                     (grant_->phone && !enrollmentMatches())) return response;
                 grant_.reset();
+                if (!authenticationStatus_.requestId.empty()) {
+                    authenticationStatus_.stage = AuthenticationStage::consumed;
+                    authenticationStatus_.failure = AuthenticationFailure::none;
+                    logAuthentication();
+                }
                 response.payload = vault_.release(identity);
             } else {
                 response.result = Result::invalidRequest;
@@ -469,6 +459,22 @@ public:
     }
 
 private:
+    void logAuthentication() const {
+        const auto now = GetTickCount64();
+        const auto remaining = authenticationStatus_.deadline > now ? authenticationStatus_.deadline - now : 0;
+        const std::wstring text = L"[SavedCredential] authentication stage=" +
+            std::to_wstring(static_cast<unsigned>(authenticationStatus_.stage)) + L" reason=" +
+            std::to_wstring(static_cast<unsigned>(authenticationStatus_.failure)) + L" remainingMs=" +
+            std::to_wstring(remaining) + L" consoleSession=" + std::to_wstring(gObservedConsoleSession.load()) + L"\n";
+        OutputDebugStringW(text.c_str());
+    }
+
+    void rejectAuthentication(AuthenticationFailure reason) {
+        authenticationStatus_.stage = AuthenticationStage::failed;
+        authenticationStatus_.failure = reason;
+        logAuthentication();
+        phoneChallenge_.reset();
+    }
     void reloadEnrollment() {
         phoneCore_.clearEnrolledPublicKey();
         enrolledSid_.clear();
@@ -499,7 +505,11 @@ private:
             if (!request.payload.value.empty()) return;
             if (phoneChallenge_ && !phoneChallenge_->delivered) {
                 phoneChallenge_->delivered = true;
-                setText(response.payload, phoneChallenge_->requestId + phoneChallenge_->json);
+                authenticationStatus_.stage = AuthenticationStage::awaitingAssertion;
+                logAuthentication();
+                if (!encodePhoneChallenge({authenticationStatus_, phoneChallenge_->json}, response.payload)) fail("phone challenge encoding failed");
+            } else {
+                if (!encodePhoneChallenge({authenticationStatus_, {}}, response.payload)) fail("phone status encoding failed");
             }
             response.result = Result::success;
             return;
@@ -508,15 +518,8 @@ private:
             if (!phoneChallenge_ || !phoneChallenge_->delivered || request.payload.value.size() != 37 ||
                 std::memcmp(request.payload.value.data(), phoneChallenge_->requestId.data(), 36) != 0) return;
             const auto reason = request.payload.value[36];
-            const char* text = reason == 1 ? "iPhone signal is below the configured RSSI threshold." :
-                reason == 2 ? "Automatic approval is disabled on iPhone." :
-                reason == 3 ? "iPhone could not read a fresh RSSI value." :
-                reason == 4 ? "iPhone is not connected with both notifications subscribed." :
-                reason == 5 ? "Bluetooth challenge delivery failed." :
-                reason == 6 ? "iPhone rejected or could not sign the challenge." : nullptr;
-            if (!text) return;
-            authenticationFailure_ = text;
-            phoneChallenge_.reset();
+            if (reason < 1 || reason > 6) return;
+            rejectAuthentication(static_cast<AuthenticationFailure>(reason));
             setText(response.payload, phoneResult("phone_rejected"));
             response.result = Result::success;
             return;
@@ -536,23 +539,24 @@ private:
                 response.result = Result::success;
                 return;
             }
-            authenticationFailure_ = unlock_windows::phone_approval::assertionCodeName(result.code);
-            phoneChallenge_.reset();
+            rejectAuthentication(AuthenticationFailure::invalidAssertion);
             setText(response.payload, phoneResult(unlock_windows::phone_approval::assertionCodeName(result.code)));
             response.result = Result::success;
             return;
         }
         if (GetTickCount64() >= phoneChallenge_->deadline || generation != gConsoleGeneration.load()) {
-            authenticationFailure_ = "Phone authentication expired or the console session changed.";
-            phoneChallenge_.reset();
-            setText(response.payload, phoneResult("challenge_expired"));
+            const auto reason = authenticationExpiry(GetTickCount64(), phoneChallenge_->deadline,
+                generation == gConsoleGeneration.load(), console.locked);
+            rejectAuthentication(reason);
+            setText(response.payload, phoneResult(reason == AuthenticationFailure::sessionChanged ? "session_changed" : "challenge_expired"));
             response.result = Result::success;
             return;
         }
         const auto approved = phoneCore_.consumeUnlockApproval(nowMilliseconds());
         if (!approved || std::wstring(approved->accountSid.begin(), approved->accountSid.end()) !=
                 phoneChallenge_->identity.sid || generation != gConsoleGeneration.load()) {
-            phoneChallenge_.reset();
+            rejectAuthentication(generation != gConsoleGeneration.load()
+                ? AuthenticationFailure::sessionChanged : AuthenticationFailure::invalidAssertion);
             return;
         }
         std::array<std::uint8_t, kNonceSize> nonce{};
@@ -562,17 +566,29 @@ private:
         }
         grant_ = Grant{*stored, console.session, GetTickCount64() + kGrantLifetimeMs,
             nonce, generation, true};
+        authenticationStatus_.stage = AuthenticationStage::approved;
+        authenticationStatus_.deadline = grant_->expiresAt;
+        logAuthentication();
         phoneChallenge_.reset();
         setText(response.payload, phoneResult("unlock_approved", true));
         response.result = Result::success;
     }
 
     void expirePhoneRequest(const Console& console) {
-        if (phoneChallenge_ && (GetTickCount64() >= phoneChallenge_->deadline || !console.locked ||
-            console.session != phoneChallenge_->session || console.sid != phoneChallenge_->identity.sid ||
-            gConsoleGeneration.load() != phoneChallenge_->consoleGeneration)) {
-            authenticationFailure_ = "Phone authentication expired or the console session changed. Click the arrow again.";
-            phoneChallenge_.reset();
+        if (phoneChallenge_) {
+            const auto reason = authenticationExpiry(GetTickCount64(), phoneChallenge_->deadline,
+                console.session == phoneChallenge_->session && console.sid == phoneChallenge_->identity.sid &&
+                gConsoleGeneration.load() == phoneChallenge_->consoleGeneration, console.locked);
+            if (reason != AuthenticationFailure::none) rejectAuthentication(reason);
+        }
+        if (grant_) {
+            const auto reason = authenticationExpiry(GetTickCount64(), grant_->expiresAt,
+                console.session == grant_->session && console.sid == grant_->identity.sid &&
+                gConsoleGeneration.load() == grant_->consoleGeneration, console.locked);
+            if (reason != AuthenticationFailure::none) {
+                if (grant_->phone) rejectAuthentication(reason);
+                grant_.reset();
+            }
         }
     }
 
@@ -590,8 +606,7 @@ private:
     std::optional<Grant> grant_;
     std::optional<PhoneChallenge> phoneChallenge_;
     std::optional<Identity> authenticationIdentity_;
-    std::string authenticationFailure_;
-    std::string authenticationRequestId_;
+    AuthenticationStatus authenticationStatus_;
     std::mutex mutex_;
     bool removing_ = false;
 };
@@ -612,7 +627,7 @@ void wakePipe(const wchar_t* const name) {
     if (wake != INVALID_HANDLE_VALUE) CloseHandle(wake);
 }
 
-DWORD WINAPI serviceControl(const DWORD control, const DWORD eventType, void*, void*) {
+DWORD WINAPI serviceControl(const DWORD control, const DWORD eventType, void* eventData, void*) {
     if (control == SERVICE_CONTROL_STOP) {
         gStopping = true;
         reportServiceState(SERVICE_STOP_PENDING);
@@ -621,8 +636,10 @@ DWORD WINAPI serviceControl(const DWORD control, const DWORD eventType, void*, v
         return NO_ERROR;
     }
     if (control == SERVICE_CONTROL_SESSIONCHANGE) {
-        if (eventType == WTS_SESSION_LOCK || eventType == WTS_SESSION_UNLOCK || eventType == WTS_SESSION_LOGOFF ||
-            eventType == WTS_CONSOLE_DISCONNECT || eventType == WTS_REMOTE_DISCONNECT) {
+        const auto* notification = static_cast<const WTSSESSION_NOTIFICATION*>(eventData);
+        if (notification != nullptr && isObservedConsoleEvent(notification->dwSessionId, gObservedConsoleSession.load()) &&
+            (eventType == WTS_SESSION_UNLOCK || eventType == WTS_SESSION_LOGOFF ||
+            eventType == WTS_CONSOLE_DISCONNECT || eventType == WTS_REMOTE_DISCONNECT)) {
             ++gConsoleGeneration;
         }
         return NO_ERROR;

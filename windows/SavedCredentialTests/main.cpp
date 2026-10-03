@@ -78,7 +78,7 @@ void testAuthenticationOperationPackets() {
         const bool accepted = readPacket(reader, inbound);
         const DWORD error = GetLastError();
         require(CloseHandle(writer) && CloseHandle(reader), "test pipe handles must close");
-        const bool known = operation == 9 || (operation >= 12 && operation <= 15);
+        const bool known = operation == 9 || (operation >= 12 && operation <= 16);
         require(isKnownOperation(operation) == known, "operation whitelist rejected new operation or accepted unknown operation");
         require(accepted == known, "packet parser must accept authentication operations and reject unknown operations");
         if (accepted) {
@@ -110,6 +110,62 @@ void testAutoSubmitOffer() {
     require(!encodeAutoSubmitOffer(offer, bytes), "an offer must have an expiration");
 }
 
+void testAuthenticationState() {
+    AuthenticationStatus status{"01234567-89ab-cdef-0123-456789abcdef",
+        AuthenticationStage::waitingPhone, AuthenticationFailure::none, 30'000};
+    SensitiveBytes bytes;
+    AuthenticationStatus decoded;
+    require(encodeAuthenticationStatus(status, bytes) &&
+        decodeAuthenticationStatus(bytes.value.data(), bytes.value.size(), decoded) &&
+        decoded.requestId == status.requestId && decoded.deadline == status.deadline &&
+        decoded.stage == status.stage, "structured authentication status round trip failed");
+    require(authenticationExpiry(29'999, 30'000, true, true) == AuthenticationFailure::none,
+        "request expired before the service deadline");
+    require(authenticationExpiry(30'000, 30'000, true, true) == AuthenticationFailure::expired,
+        "deadline boundary must expire without reporting a session change");
+    require(authenticationExpiry(1, 30'000, false, true) == AuthenticationFailure::sessionChanged &&
+        authenticationExpiry(1, 30'000, true, false) == AuthenticationFailure::sessionChanged,
+        "real console or lock state change must invalidate authentication");
+    require(!isObservedConsoleEvent(2, 1) && !isObservedConsoleEvent(1, 0xffffffff) &&
+        isObservedConsoleEvent(1, 1), "unrelated session notifications must not invalidate console requests");
+    bytes.value[1] = 255;
+    require(!decodeAuthenticationStatus(bytes.value.data(), bytes.value.size(), decoded),
+        "unknown authentication stage must be rejected");
+    status.stage = AuthenticationStage::failed;
+    status.failure = AuthenticationFailure::rssiTooLow;
+    require(encodeAuthenticationStatus(status, bytes), "RSSI failure should encode");
+    require(std::wstring(authenticationStatusText(status)).find(L"RSSI") != std::wstring::npos,
+        "RSSI rejection must not be labelled as a session change");
+    status.failure = AuthenticationFailure::none;
+    require(!encodeAuthenticationStatus(status, bytes), "failed stage requires an explicit reason");
+    status.stage = AuthenticationStage::awaitingAssertion;
+    PhoneChallengePayload challenge{status, "{\"version\":1}"};
+    PhoneChallengePayload decodedChallenge;
+    require(encodePhoneChallenge(challenge, bytes) &&
+        decodePhoneChallenge(bytes.value.data(), bytes.value.size(), decodedChallenge) &&
+        decodedChallenge.status.deadline == status.deadline && decodedChallenge.json == challenge.json,
+        "queued challenge must preserve the authoritative deadline");
+    bytes.value.push_back(0);
+    require(!decodePhoneChallenge(bytes.value.data(), bytes.value.size(), decodedChallenge),
+        "challenge framing must reject trailing data");
+    Packet reply;
+    require(!callPhone(Operation::unlockEligibility, SensitiveBytes{}, reply),
+        "transport must not expose unlock eligibility");
+    require(encodeAuthenticationStatus({}, bytes) &&
+        decodeAuthenticationStatus(bytes.value.data(), bytes.value.size(), decoded), "idle status must round trip");
+    bytes.value[47] = 1;
+    require(!decodeAuthenticationStatus(bytes.value.data(), bytes.value.size(), decoded), "idle padding must be canonical");
+    HANDLE reader = INVALID_HANDLE_VALUE;
+    HANDLE writer = INVALID_HANDLE_VALUE;
+    require(CreatePipe(&reader, &writer, nullptr, 0) != FALSE, "legacy packet test pipe must open");
+    const std::array<std::uint8_t, 16> oldHeader{0x47, 0x43, 0x43, 0x31, 1, 0, 15, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    DWORD written = 0;
+    require(WriteFile(writer, oldHeader.data(), static_cast<DWORD>(oldHeader.size()), &written, nullptr) &&
+        written == oldHeader.size(), "legacy packet header must write");
+    require(!readPacket(reader, reply) && GetLastError() == ERROR_INVALID_DATA, "old IPC version must not be silently accepted");
+    require(CloseHandle(reader) && CloseHandle(writer), "legacy packet pipe handles must close");
+}
+
 } // namespace
 
 int main() {
@@ -118,6 +174,7 @@ int main() {
     testPhoneEndpointRejectsCredentialOperations();
     testAutoSubmitOffer();
     testAuthenticationOperationPackets();
+    testAuthenticationState();
     std::cout << "Saved credential protocol tests passed.\n";
     return EXIT_SUCCESS;
 }

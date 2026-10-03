@@ -1,6 +1,7 @@
 // Created by Rui MA on 27 Sep 2026
 
 #include "UnlockCredentialProvider.h"
+#include "../Resources/resource.h"
 
 #include <Windows.h>
 #include <initguid.h>
@@ -301,7 +302,7 @@ void run() {
     BOOL autoLogon = TRUE;
     require(
         provider->GetCredentialCount(&credentialCount, &defaultIndex, &autoLogon) == S_OK &&
-            credentialCount == 1 && defaultIndex == CREDENTIAL_PROVIDER_NO_DEFAULT && autoLogon == FALSE,
+            credentialCount == 0 && defaultIndex == CREDENTIAL_PROVIDER_NO_DEFAULT && autoLogon == FALSE,
         "unexpected Credential Provider credential count"
     );
 
@@ -316,66 +317,28 @@ void run() {
     }
 
     ICredentialProviderCredential* credential = nullptr;
-    require(provider->GetCredentialAt(0, &credential) == S_OK, "credential tile missing");
+    require(provider->GetCredentialAt(0, &credential) == E_INVALIDARG && credential == nullptr,
+        "a synthetic user without verified locked console identity must have no tile");
 
     CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR* descriptor = nullptr;
     require(provider->GetFieldDescriptorAt(0, &descriptor) == S_OK, "logo field missing");
-    require(descriptor->cpft == CPFT_TILE_IMAGE, "logo field type mismatch");
-    require(IsEqualGUID(descriptor->guidFieldType, CPFG_CREDENTIAL_PROVIDER_LOGO),
-        "logo field GUID mismatch");
-    HBITMAP logo = nullptr;
-    require(credential != nullptr, "credential must be available before testing its logo");
+    require(descriptor->cpft == CPFT_TILE_IMAGE &&
+        IsEqualGUID(descriptor->guidFieldType, CPFG_CREDENTIAL_PROVIDER_LOGO),
+        "provider logo must not replace the account photo");
     CoTaskMemFree(descriptor->pszLabel);
     CoTaskMemFree(descriptor);
-    require(credential->GetBitmapValue(0, &logo) == S_OK && logo != nullptr,
-        "credential logo is missing");
+    const auto logo = static_cast<HBITMAP>(LoadImageW(module, MAKEINTRESOURCEW(IDB_UNLOCK_TILE),
+        IMAGE_BITMAP, 0, 0, LR_CREATEDIBSECTION));
+    require(logo != nullptr, "embedded tile bitmap missing");
+    BITMAP image{};
+    require(GetObjectW(logo, sizeof(image), &image) != 0 && image.bmWidth == 72 && image.bmHeight == 72,
+        "tile bitmap dimensions changed");
     DeleteObject(logo);
-
     descriptor = nullptr;
-    require(provider->GetFieldDescriptorAt(1, &descriptor) == S_OK, "title field missing");
-    require(descriptor->cpft == CPFT_LARGE_TEXT, "title field type mismatch");
+    require(provider->GetFieldDescriptorAt(1, &descriptor) == S_OK &&
+        descriptor->cpft == CPFT_LARGE_TEXT, "title field missing");
     CoTaskMemFree(descriptor->pszLabel);
     CoTaskMemFree(descriptor);
-
-    ICredentialProviderCredential2* credential2 = nullptr;
-    require(
-        credential->QueryInterface(
-            __uuidof(ICredentialProviderCredential2),
-            reinterpret_cast<void**>(&credential2)
-        ) == S_OK,
-        "V2 credential interface is missing"
-    );
-    LPWSTR userSid = nullptr;
-    require(
-        credential2->GetUserSid(&userSid) == S_OK &&
-            std::wstring(userSid) == L"S-1-5-21-1000-1000-1000-1001",
-        "Credential Provider returned the wrong user SID"
-    );
-    CoTaskMemFree(userSid);
-    credential2->Release();
-
-    LPWSTR title = nullptr;
-    require(credential->GetStringValue(1, &title) == S_OK, "credential title missing");
-    require(std::wstring(title) == L"Unlock with iPhone", "credential title mismatch");
-    CoTaskMemFree(title);
-
-    CREDENTIAL_PROVIDER_GET_SERIALIZATION_RESPONSE response{};
-    CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION serialization{};
-    LPWSTR status = nullptr;
-    CREDENTIAL_PROVIDER_STATUS_ICON statusIcon = CPSI_NONE;
-    require(
-        credential->GetSerialization(&response, &serialization, &status, &statusIcon) == S_OK,
-        "Credential Provider serialization call failed"
-    );
-    require(
-        response == CPGSR_NO_CREDENTIAL_NOT_FINISHED &&
-            serialization.cbSerialization == 0 &&
-            statusIcon == CPSI_WARNING &&
-            status != nullptr,
-        "provider unexpectedly returned a credential without an approved grant"
-    );
-    CoTaskMemFree(status);
-    credential->Release();
     provider->Release();
     require(canUnloadNow() == S_OK, "Credential Provider DLL still has live objects");
     FreeLibrary(module);

@@ -18,6 +18,7 @@ inline constexpr wchar_t kServiceName[] = L"UnlockWindowsSavedCredentialService"
 inline constexpr wchar_t kServiceExeName[] = L"unlock_saved_credential_service.exe";
 inline constexpr std::size_t kMaxPacket = 16 * 1024;
 inline constexpr std::size_t kNonceSize = 16;
+inline constexpr ULONGLONG kPhoneAuthenticationLifetimeMs = 30'000;
 
 enum class Operation : std::uint16_t {
     captureIdentity = 1,
@@ -34,6 +35,7 @@ enum class Operation : std::uint16_t {
     takePhoneChallenge = 13,
     reportPhoneFailure = 14,
     phoneAuthenticationStatus = 15,
+    unlockEligibility = 16,
 };
 
 inline constexpr bool isKnownOperation(const std::uint16_t value) noexcept {
@@ -52,6 +54,7 @@ inline constexpr bool isKnownOperation(const std::uint16_t value) noexcept {
     case Operation::takePhoneChallenge:
     case Operation::reportPhoneFailure:
     case Operation::phoneAuthenticationStatus:
+    case Operation::unlockEligibility:
         return true;
     default:
         return false;
@@ -92,6 +95,43 @@ struct AutoSubmitOffer final {
     std::array<std::uint8_t, kNonceSize> nonce{};
     ULONGLONG expiresAt = 0;
 };
+
+enum class AuthenticationStage : std::uint8_t {
+    idle, waitingPhone, awaitingAssertion, approved, failed, consumed,
+};
+
+enum class AuthenticationFailure : std::uint8_t {
+    none, rssiTooLow, automaticDisabled, rssiUnavailable, subscriptionLost,
+    deliveryFailed, signingFailed, expired, sessionChanged, invalidAssertion,
+};
+
+struct AuthenticationStatus final {
+    std::string requestId;
+    AuthenticationStage stage = AuthenticationStage::idle;
+    AuthenticationFailure failure = AuthenticationFailure::none;
+    ULONGLONG deadline = 0;
+};
+
+struct PhoneChallengePayload final {
+    AuthenticationStatus status;
+    std::string json;
+};
+
+inline constexpr AuthenticationFailure authenticationExpiry(
+    ULONGLONG now, ULONGLONG deadline, bool sameConsole, bool locked) noexcept {
+    if (!sameConsole || !locked) return AuthenticationFailure::sessionChanged;
+    return now >= deadline ? AuthenticationFailure::expired : AuthenticationFailure::none;
+}
+
+inline constexpr bool isObservedConsoleEvent(DWORD eventSession, DWORD observedSession) noexcept {
+    return observedSession != 0xffffffff && eventSession == observedSession;
+}
+
+[[nodiscard]] const wchar_t* authenticationStatusText(const AuthenticationStatus& status) noexcept;
+[[nodiscard]] bool encodeAuthenticationStatus(const AuthenticationStatus& status, SensitiveBytes& output);
+[[nodiscard]] bool decodeAuthenticationStatus(const std::uint8_t* data, std::size_t size, AuthenticationStatus& output);
+[[nodiscard]] bool encodePhoneChallenge(const PhoneChallengePayload& challenge, SensitiveBytes& output);
+[[nodiscard]] bool decodePhoneChallenge(const std::uint8_t* data, std::size_t size, PhoneChallengePayload& output);
 
 struct Packet final {
     Operation operation = Operation::status;

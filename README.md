@@ -113,7 +113,7 @@ This project is licensed under the MIT License. See [LICENSE.md](LICENSE.md).
 
 ## 配对 UI 调整（2026-10-02，Windows 交互已获用户确认）
 
-应用图标以根目录 `icon.png` 为来源，转换为多尺寸 ICO 后嵌入所有 Windows EXE，托盘使用同一资源，部署无需额外 PNG；菜单的退出始终位于最底部。新增移除手机登记按钮：一次 UAC 后显示目标账户和删除确认窗口，取消不修改登记，确认仅删除手机公钥并重新加载服务，不修改密码副本。移除期间不开放桌面配对广播。用户已确认 Windows 交互符合预期；完整登记、移除后的实际效力和失败专项尚未验收，测试暂缓。
+应用图标以iOS `Assets.xcassets/AppIcon.appiconset/Contents.json` 中无 `appearances` 的标准图标为唯一来源，转换为多尺寸 ICO 后嵌入所有 Windows EXE，托盘使用同一资源，部署无需额外 PNG；菜单的退出始终位于最底部。新增移除手机登记按钮：一次 UAC 后显示目标账户和删除确认窗口，取消不修改登记，确认仅删除手机公钥并重新加载服务，不修改密码副本。移除期间不开放桌面配对广播。用户已确认 Windows 交互符合预期；完整登记、移除后的实际效力和失败专项尚未验收，测试暂缓。
 
 点击配对立即请求一次 UAC；窗口显示等待手机，工具就绪后才开启配对广播。公钥经受限本地命名管道交给工具，同一窗口随后显示完整指纹并允许确认，无第二次 UAC。通道拒绝远程连接、限定 ACL 并核对双方实际进程身份和原控制台用户 SID。用户明确要求跳过独立通信实验，已直接接入产品并删除新探针；Windows 交互已获用户确认；跨管理员产品通信及完整生命周期尚未逐项验证，测试暂缓。
 
@@ -133,7 +133,7 @@ This project is licensed under the MIT License. See [LICENSE.md](LICENSE.md).
 
 ## Windows 程序图标
 
-所有 CMake EXE 目标（包括服务、管理器、GATT host、PairingTool、Components Wizard 和测试程序）统一嵌入由根目录 `icon.png` 转换的 `windows/Resources/AppIcon.ico`。ICO 包含 16、24、32、48、64、128、256 像素尺寸；GUI 窗口及 GATT 托盘也使用同一图标资源。更新源 PNG 后运行 `powershell -File windows/Resources/Update-AppIcon.ps1` 重新生成 ICO，再在获得构建授权后构建。运行和部署不需要外置 PNG 或 ICO。
+所有 CMake EXE 目标（包括服务、管理器、GATT host、PairingTool、Components Wizard 和测试程序）统一嵌入由 iOS `Assets.xcassets/AppIcon.appiconset/Contents.json` 中无 `appearances` 的标准图标 派生的 `windows/Resources/AppIcon.ico`。ICO 包含 16、24、32、48、64、128、256 像素尺寸；GUI 窗口及 GATT 托盘也使用同一图标资源。Windows ICO（16/24/32/48/64/128/256）与 CP 的 72×72 位图直接从该标准图像派生并提交，EXE 和 CP DLL 内嵌资源；不新增生成脚本。根目录旧 `icon.png` 保留但不再作为当前资源来源。修改标准图像时须同步更新两个派生资源，再在获得构建授权后构建。运行和部署不需要外置 PNG 或 ICO。
 
 2026-10-02：图标资源已接入，ICO 内容与 EXE 目标覆盖已做静态检查；本次未构建或运行，新 EXE 图标及窗口显示仍待验证。
 
@@ -154,3 +154,34 @@ This project is licensed under the MIT License. See [LICENSE.md](LICENSE.md).
 ComponentFiles.h 唯一定义六个部署文件及工具属性，暂存、替换、路径核对和工具移除复用同一清单；DesktopDeployment.cpp 统一管理任务、Run、快捷方式和托盘交接，移除重复 COM/任务封装及转调接口。Run 是唯一持续 GATT 自启入口，旧任务名仅用于迁移移除和诊断。事务 TargetSid 是目标身份来源，观察快照与完成结果不另行选择用户。
 
 可冻结已观察的 Update 与自启项注册成果，不扩大为全部部署测试通过。此次结构清理仅静态检查，新增清单用例未编译或执行；清理后的二进制仍需一次 Update/登录自启及手机解锁回归。具体当前流程与待验收项集中在 [安装器文档](windows/ComponentsWizard/README.md)。
+
+## 首次登录、后台待机与图标（2026-10-03，代码完成／待验收）
+
+当前流程为已有控制台会话锁屏 → 默认手机磁贴 → Enter 发起 → 手机按新鲜 RSSI 自动批准 → CP 自动提交；没有“刚锁屏即请求”的行为。服务通过 WTSQueryUserToken 确认已有登录用户并核对锁屏状态，首次登录、注销后登录和其他会话不枚举磁贴。默认候选不代表强制抢占系统选择，实际 Enter 和默认选中行为须在目标 Windows 验收。
+
+认证请求由服务维护 30 秒单调时钟 deadline；托盘连接与双通知订阅就绪后才领取，CP 不再独立使用 5 秒超时。内部 IPC 升为 v2，返回结构化阶段与原因；服务、CP、托盘、配对／管理工具需同一构建更新。BLE 的签名格式不变，iOS 收到 challenge 后仍只有 3 秒用于新鲜 RSSI／签名，成功发送后不把 Windows 返回延迟误当成 RSSI 超时。低 RSSI、无读数、订阅丢失、请求超时与真实会话变化分别提示。
+
+iOS 对系统恢复的候选设备读取 ComputerId 并重新核实订阅；长期等待与单轮初始化分离，电脑暂时不提供服务不关闭未来等待。服务失效优先在原连接串行重新发现；旧 RSSI 回调按 generation/request 隔离。当前恢复合同及实测边界集中在 [iOS 文档](ios/README.md#connection-and-recovery)。诊断页面只保留最近 64 条阶段／耗时／RSSI 与允许列表结果码，不包含密码、nonce 或签名。
+
+已添加 Windows 结构化状态、超时／会话事件和无磁贴用例，以及 Swift 纯策略单测（在获得测试授权后可从根目录执行 `swift test --package-path ./ios`）。本次只做静态检查；未构建、执行测试、安装或开展后台实测。前台历史成功不等于此次变更或后台可靠性已通过。
+
+待验收：重启首次登录无手机入口；原生登录后锁屏默认候选与 Enter；手机前台、后台短暂停留、锁屏整夜待机；Windows 重启后重连；RSSI 阈值两侧和无读数；真实会话变化、服务重启和重放；统一图标及 Update 后凭据／登记保留。先记录 iOS／Windows 版本与服务阶段，不能仅凭旧混合提示归因给 iOS。RSSI 不承诺米数；用户强制退出 App 后的自动恢复不在本轮承诺范围，未引入 AccessorySetupKit。
+
+参考：
+
+- [Windows 登录与解锁场景](https://learn.microsoft.com/en-us/windows/win32/api/credentialprovider/ne-credentialprovider-credential_provider_usage_scenario)
+- [Credential Provider 焦点约束](https://learn.microsoft.com/en-us/windows/win32/api/credentialprovider/ne-credentialprovider-credential_provider_field_interactive_state)
+- [Apple 后台蓝牙处理](https://developer.apple.com/library/archive/documentation/NetworkingInternetWeb/Conceptual/CoreBluetooth_concepts/CoreBluetoothBackgroundProcessingForIOSApps/PerformingTasksWhileYourAppIsInTheBackground.html)
+- [Apple 蓝牙恢复条件](https://developer.apple.com/documentation/technotes/tn3115-bluetooth-state-restoration-app-relaunch-rules)
+
+## iOS 连接回归、长期等待与界面（2026-10-03，代码完成／待验收）
+
+用户报告 `70ca5eb` 后出现服务失效／主动断连循环和无法解锁；此前修复已改为原连接重新发现。随后用户确认：重新登记后电脑处于未锁屏桌面时，iOS 未发现服务或初始化超时；后续电脑锁屏无法恢复，但手动重试或返回前台可恢复并成功解锁。已确认代码会在重试耗尽后停止扫描；具体 Windows 服务回调时序仍待双端日志核对，不宣称所有错误均由停止广播直接造成。
+
+本轮仅修复 iOS 等待生命周期：已登记目标的系统待连接请求无十秒期限，未知候选探测与实际初始化仍限制十秒；每轮最多一次主动重连，耗尽后保持被动等待而非全局停用扫描。服务发现为空保留物理连接并等待服务变化，当前身份资格、旧特征和未完成认证失效；服务恢复后重新核对 ComputerId 与双订阅。设备去重限定于扫描轮次并使用有界最近历史，新 UUID 可串行替换旧待连接。返回前台仅协调缺失操作，不重置正常等待；无无限定时轮询。连接、登记和认证保持独立状态，旧 RSSI／发现／写入回调不能直接推进新请求。
+
+复用 Windows `cd11511` 已有 ComputerId 只读特征，将 peripheral UUID 降为连接缓存、名称仅作显示。旧 iPhone 登记需显式重新登记一次，沿用 Secure Enclave 密钥；取消、失败与服务重新加载失败不替换有效目标。自动响应首次升级静默开启一次，之后仅由用户主动改变，断连不关闭开关。删除常驻连接／停止、手动准备密钥和本地签名自测按钮，登记独立流程，失败才出现连接重试。
+
+现有 ComputerId 登记无需再次迁移或重新登记。本轮仅修改 iOS 及公共说明，没有修改现有 Windows 工作区改动；已补长期等待、事件恢复、扫描去重及旧数据隔离用例，未构建、执行测试、安装或实机验收。详见 [iOS 状态合同、迁移与验收](ios/README.md)。先验收桌面等待至少一分钟、手机保持后台且不点击重试，随后 Windows 锁屏／Enter 解锁及连续五轮循环，再测托盘重启、新 UUID 与整夜待机。若服务重新发布不能触发系统恢复事件，保留证据并报告，不增加无限轮询或私自修改 Windows 广播；完整配对取消／失败专项继续单列。
+
+参考：[Apple 服务失效与重新发现](https://developer.apple.com/documentation/corebluetooth/cbperipheraldelegate/peripheral(_:didmodifyservices:))、[Apple 指定服务扫描](https://developer.apple.com/documentation/corebluetooth/cbcentralmanager/scanforperipherals(withservices:options:))、[Apple 后台蓝牙与长期待连接](https://developer.apple.com/library/archive/documentation/NetworkingInternetWeb/Conceptual/CoreBluetooth_concepts/CoreBluetoothBackgroundProcessingForIOSApps/PerformingTasksWhileYourAppIsInTheBackground.html)。

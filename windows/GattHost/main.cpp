@@ -394,7 +394,7 @@ private:
         }
         if (bytes.size() == 38 && bytes.front() == kRejectRequest && isAuthenticationSession(session) &&
             std::string(bytes.begin() + 1, bytes.begin() + 37) == authenticationRequestId_ &&
-            (bytes.back() == 1 || bytes.back() == 2 || bytes.back() == 3 || bytes.back() == 6)) {
+            (bytes.back() == 1 || bytes.back() == 2 || bytes.back() == 3 || bytes.back() == 4 || bytes.back() == 6)) {
             reportFailure(bytes.back());
             return;
         }
@@ -439,10 +439,19 @@ private:
 public:
     void pollAuthentication() {
         using namespace unlock_windows::saved_credential;
-        if (authenticationSession_ && (GetTickCount64() >= authenticationDeadline_ ||
-            !subscriber(authenticationSession_))) {
+        if (authenticationSession_ && GetTickCount64() < authenticationDeadline_ &&
+            !subscriber(authenticationSession_)) {
             reportFailure(4);
         }
+        GattSubscribedClient target{nullptr};
+        if (!pairingActive) {
+            for (const auto& client : challengeCharacteristic_.SubscribedClients()) {
+                if (!subscriber(client.Session())) continue;
+                if (target) return;
+                target = client;
+            }
+        }
+        if (!target) return;
         Packet response;
         CallDiagnostics diagnostics;
         if (!callPhone(Operation::takePhoneChallenge, SensitiveBytes{}, response, 250, &diagnostics)) {
@@ -460,24 +469,42 @@ public:
                 << static_cast<unsigned>(response.result);
             return;
         }
-        if (response.payload.value.empty()) return;
-        if (response.payload.value.size() <= 36) throw std::runtime_error("Invalid queued challenge frame");
-        authenticationRequestId_.assign(response.payload.value.begin(), response.payload.value.begin() + 36);
-        authenticationSession_ = nullptr;
-        authenticationDeadline_ = GetTickCount64() + 5000;
-        GattSubscribedClient target{nullptr};
-        if (!pairingActive) {
-            for (const auto& client : challengeCharacteristic_.SubscribedClients()) {
-                if (!subscriber(client.Session())) continue;
-                if (target) { reportFailure(4); return; }
-                target = client;
-            }
+        PhoneChallengePayload challenge;
+        if (!decodePhoneChallenge(response.payload.value.data(), response.payload.value.size(), challenge)) {
+            throw std::runtime_error("Invalid structured phone challenge frame");
         }
-        if (!target) { reportFailure(4); return; }
+        if (challenge.json.empty()) {
+            if (authenticationSession_ && (challenge.status.stage == AuthenticationStage::failed ||
+                challenge.status.stage == AuthenticationStage::idle || challenge.status.stage == AuthenticationStage::consumed)) {
+                state_->record(authenticationStatusText(challenge.status), true);
+                if (challenge.status.stage == AuthenticationStage::failed &&
+                    challenge.status.requestId == authenticationRequestId_) {
+                    const auto client = subscriber(authenticationSession_);
+                    if (client) {
+                        const char* code = challenge.status.failure == AuthenticationFailure::expired
+                            ? "challenge_expired" : challenge.status.failure == AuthenticationFailure::sessionChanged
+                            ? "session_changed" : "phone_rejected";
+                        const std::string result = std::string("{\"authenticated\":false,\"status\":\"") + code +
+                            "\",\"requestID\":\"" + authenticationRequestId_ + "\"}";
+                        const auto sent = resultCharacteristic_.NotifyValueAsync(makeBuffer(result), client).get();
+                        if (sent.Status() != GattCommunicationStatus::Success)
+                            state_->record(L"Authentication failure result delivery failed", true);
+                    }
+                }
+                authenticationSession_ = nullptr;
+                authenticationRequestId_.clear();
+            }
+            return;
+        }
+        authenticationRequestId_ = challenge.status.requestId;
+        authenticationDeadline_ = challenge.status.deadline;
+        if (GetTickCount64() >= authenticationDeadline_) return;
         authenticationSession_ = target.Session();
         try {
-            const std::string json(response.payload.value.begin() + 36, response.payload.value.end());
-            const auto result = challengeCharacteristic_.NotifyValueAsync(makeBuffer(json), target).get();
+            const auto now = GetTickCount64();
+            LogLine(state_, false) << "[GattHost] challenge ready; subscriptions=2 remainingMs="
+                << (now < authenticationDeadline_ ? authenticationDeadline_ - now : 0);
+            const auto result = challengeCharacteristic_.NotifyValueAsync(makeBuffer(challenge.json), target).get();
             if (result.Status() != GattCommunicationStatus::Success) {
                 LogLine(state_, true) << "[GattHost] challenge delivery status=" << static_cast<int>(result.Status());
                 reportFailure(5);

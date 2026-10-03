@@ -15,7 +15,7 @@ namespace unlock_windows::saved_credential {
 namespace {
 
 constexpr std::uint32_t kMagic = 0x31434347;
-constexpr std::uint16_t kVersion = 1;
+constexpr std::uint16_t kVersion = 2;
 constexpr std::uint32_t kAckMagic = 0x314b4341;
 
 #pragma pack(push, 1)
@@ -452,6 +452,84 @@ bool decodeAutoSubmitOffer(const std::uint8_t* data, const std::size_t size, Aut
     std::memcpy(&decoded.expiresAt, data + kNonceSize, sizeof(decoded.expiresAt));
     if (decoded.expiresAt == 0) return false;
     output = decoded;
+    return true;
+}
+
+const wchar_t* authenticationStatusText(const AuthenticationStatus& status) noexcept {
+    switch (status.failure) {
+    case AuthenticationFailure::rssiTooLow: return L"iPhone signal is below the configured RSSI threshold.";
+    case AuthenticationFailure::automaticDisabled: return L"Automatic approval is disabled on iPhone.";
+    case AuthenticationFailure::rssiUnavailable: return L"iPhone could not read a fresh RSSI value. Press Enter to retry.";
+    case AuthenticationFailure::subscriptionLost: return L"iPhone notification subscriptions are not ready. Press Enter to retry.";
+    case AuthenticationFailure::deliveryFailed: return L"Bluetooth challenge delivery failed. Press Enter to retry.";
+    case AuthenticationFailure::signingFailed: return L"iPhone could not sign the challenge. Press Enter to retry.";
+    case AuthenticationFailure::expired: return L"Phone authentication timed out. Press Enter to retry.";
+    case AuthenticationFailure::sessionChanged: return L"The console user, session or lock state changed. Select the tile again.";
+    case AuthenticationFailure::invalidAssertion: return L"The phone assertion was rejected. Press Enter to retry.";
+    case AuthenticationFailure::none: break;
+    }
+    switch (status.stage) {
+    case AuthenticationStage::waitingPhone: return L"Waiting for iPhone connection and notification subscriptions...";
+    case AuthenticationStage::awaitingAssertion: return L"Waiting for fresh iPhone RSSI and signed approval...";
+    case AuthenticationStage::approved: return L"Phone approved. Submitting Windows credential...";
+    case AuthenticationStage::consumed: return L"This phone approval has already been consumed. Press Enter for a new request.";
+    default: return L"Unlock with iPhone";
+    }
+}
+
+bool encodeAuthenticationStatus(const AuthenticationStatus& status, SensitiveBytes& output) {
+    output.clear();
+    if (status.stage > AuthenticationStage::consumed || status.failure > AuthenticationFailure::invalidAssertion ||
+        (status.stage == AuthenticationStage::idle ? !status.requestId.empty() : status.requestId.size() != 36) ||
+        (status.stage == AuthenticationStage::idle ? status.deadline != 0 : status.deadline == 0) ||
+        ((status.stage == AuthenticationStage::failed) != (status.failure != AuthenticationFailure::none))) return false;
+    for (std::size_t index = 0; index < status.requestId.size(); ++index) {
+        const char ch = status.requestId[index];
+        const bool separator = index == 8 || index == 13 || index == 18 || index == 23;
+        if (separator ? ch != '-' : !((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f'))) return false;
+    }
+    const std::array<std::uint8_t, 4> fields{1, static_cast<std::uint8_t>(status.stage),
+        static_cast<std::uint8_t>(status.failure), static_cast<std::uint8_t>(status.requestId.size())};
+    append(output, fields.data(), fields.size());
+    append(output, &status.deadline, sizeof(status.deadline));
+    std::array<char, 36> requestId{};
+    std::copy(status.requestId.begin(), status.requestId.end(), requestId.begin());
+    append(output, requestId.data(), requestId.size());
+    return true;
+}
+
+bool decodeAuthenticationStatus(const std::uint8_t* data, const std::size_t size, AuthenticationStatus& output) {
+    if (data == nullptr || size != 48 || data[0] != 1 || (data[3] != 0 && data[3] != 36)) return false;
+    AuthenticationStatus decoded;
+    decoded.stage = static_cast<AuthenticationStage>(data[1]);
+    decoded.failure = static_cast<AuthenticationFailure>(data[2]);
+    std::memcpy(&decoded.deadline, data + 4, sizeof(decoded.deadline));
+    decoded.requestId.assign(reinterpret_cast<const char*>(data + 12), data[3]);
+    SensitiveBytes canonical;
+    if (!encodeAuthenticationStatus(decoded, canonical) ||
+        !std::equal(canonical.value.begin(), canonical.value.end(), data)) return false;
+    output = std::move(decoded);
+    return true;
+}
+
+bool encodePhoneChallenge(const PhoneChallengePayload& challenge, SensitiveBytes& output) {
+    if (!encodeAuthenticationStatus(challenge.status, output) || challenge.json.size() > 4096 ||
+        (!challenge.json.empty() && challenge.status.stage != AuthenticationStage::awaitingAssertion)) return false;
+    const auto size = static_cast<std::uint32_t>(challenge.json.size());
+    append(output, &size, sizeof(size));
+    if (size != 0) append(output, challenge.json.data(), size);
+    return true;
+}
+
+bool decodePhoneChallenge(const std::uint8_t* data, const std::size_t size, PhoneChallengePayload& output) {
+    if (data == nullptr || size < 52 || size > 52 + 4096) return false;
+    PhoneChallengePayload decoded;
+    if (!decodeAuthenticationStatus(data, 48, decoded.status)) return false;
+    std::uint32_t jsonSize = 0;
+    std::memcpy(&jsonSize, data + 48, sizeof(jsonSize));
+    if (jsonSize != size - 52 || (jsonSize != 0 && decoded.status.stage != AuthenticationStage::awaitingAssertion)) return false;
+    decoded.json.assign(reinterpret_cast<const char*>(data + 52), jsonSize);
+    output = std::move(decoded);
     return true;
 }
 

@@ -22,9 +22,9 @@
 
 ## 当前箭头行为（2026-10-03，待验收）
 
-手动点击 **Unlock** 提交箭头调用 `beginPhoneAuthentication`，返回不含凭据的等待状态，不同步等待蓝牙或领取密码。工作线程同时查询当前请求失败信息，经原有消息窗口在 COM 所在线程更新磁贴提示。请求 ID 防止旧失败说明覆盖新请求，通信失败或五秒无响应显示明确错误。有效手机批准仍触发现有一次自动提交；该分支不会再发起 challenge。仅枚举/选择磁贴不发起认证。
+手动点击 **Unlock** 提交箭头调用 `beginPhoneAuthentication`，返回不含凭据的等待状态，不同步等待蓝牙或领取密码。工作线程同时查询当前请求失败信息，经原有消息窗口在 COM 所在线程更新磁贴提示。请求 ID 防止旧失败说明覆盖新请求，通信失败或服务确认的 30 秒期限到期显示明确错误。有效手机批准仍触发现有一次自动提交；该分支不会再发起 challenge。仅枚举/选择磁贴不发起认证。
 
-2026-10-03 用户观察到等待提示一直停留，取消后才显示 `iPhone is not connected with both notifications subscribed.`。该说明由服务端记录，表示 GATT host 未找到唯一且同时订阅 challenge/result 通知的客户端，尚未进行手机 RSSI 判断。此前成功发起请求同时通过磁贴字段和 `GetSerialization` 的 optional status text 显示等待，但异步失败只更新磁贴字段。现成功发起时 optional status text 保持空，只用磁贴字段更新等待、失败及五秒超时，避免静态提交提示遮盖异步结果。此 UI 原因与现象吻合，修改仅静态检查，尚未实机验证；不改变有效批准后的自动提交分支。
+2026-10-03 用户观察到等待提示一直停留，取消后才显示 `iPhone is not connected with both notifications subscribed.`。该说明由服务端记录，表示 GATT host 未找到唯一且同时订阅 challenge/result 通知的客户端，尚未进行手机 RSSI 判断。此前成功发起请求同时通过磁贴字段和 `GetSerialization` 的 optional status text 显示等待，但异步失败只更新磁贴字段。现成功发起时 optional status text 保持空，只用磁贴字段更新等待、失败及服务确认的超时，避免静态提交提示遮盖异步结果。此 UI 原因与现象吻合，修改仅静态检查，尚未实机验证；不改变有效批准后的自动提交分支。
 
 ## 自动提交（2026-10-02，实体机正常路径通过）
 
@@ -60,17 +60,23 @@ Provider 在 `Advise` 和有效用户身份均就绪后启动工作线程，每 
 & '.\windows\build\unlock_gatt_host.exe'
 ```
 
-1. Win+L，显示登录选项，但不要点击自定义磁贴的 **Unlock**。iPhone App 保持前台并发起认证。
+1. Win+L，确认默认选中 **Unlock with iPhone**，按一次 Enter（或点击箭头）发起。iPhone 自动批准开关开启；本轮分别记录前台和后台结果。仅选择磁贴不会发起请求。
 2. 手机显示 `unlock_approved` 后，观察 Windows 是否自动解锁；记录是否需要触碰屏幕或先选择磁贴。若必须先选择，不能记为无操作自动解锁通过。
 3. 核对恢复的是原有账户与 session。用根目录终端运行 `whoami /user` 和 `(Get-Process -Id $PID).SessionId`，与锁屏前比较。
-4. 再锁屏，不发起手机批准；应保持锁定且不自动提交。重新发起批准应可产生一次新的自动提交。
+4. 再锁屏，不按 Enter；应保持锁定且不自动提交。按 Enter 发出新请求后才可获得新批准并自动提交。
 5. 自动认证失败后不得连续重试同一批准；不要为了本轮验收反复输入错误密码。使用原生 PIN/密码恢复。
 6. 验证服务重启使旧批准失效，需要重新手机批准；完整身份变化和错误调用方测试继续单列。
 
-如自动提交未发生，先记录手机和 GATT 的结果，并尝试一次手动 **Unlock** 以区分批准/密码链路和通知链路。CP 使用 `OutputDebugString` 输出非秘密阶段：`phone approval triggered CredentialsChanged`、`automatic submission offered once`，以及带 HRESULT 的通知或 IPC 错误；不会记录密码或 nonce。
+如自动提交未发生，先记录手机和 GATT 的结果，确认本轮已按 Enter 发起请求；记录服务阶段及失败原因，失败后仅发起一份新请求，不能手动绕过 offer 消费。CP 使用 `OutputDebugString` 输出非秘密阶段：`phone approval triggered CredentialsChanged`、`automatic submission offered once`，以及带 HRESULT 的通知或 IPC 错误；不会记录密码或 nonce。
 
 ## 参考资料
 
 - [CredentialsChanged](https://learn.microsoft.com/en-us/windows/win32/api/credentialprovider/nf-credentialprovider-icredentialproviderevents-credentialschanged)
 - [GetCredentialCount](https://learn.microsoft.com/en-us/windows/win32/api/credentialprovider/nf-credentialprovider-icredentialprovider-getcredentialcount)
 - [Message-only windows](https://learn.microsoft.com/en-us/windows/win32/winmsg/window-features#message-only-windows)
+
+## 当前枚举与请求合同（2026-10-03，待验收）
+
+首次登录／注销后无已有控制台用户 token 时返回零磁贴；唯一候选账户不再构成回退依据。仅当系统枚举身份匹配当前物理控制台、服务确认已有用户且明确锁定时返回磁贴。正常候选默认索引为 0、autoLogon=FALSE；有效一次性 offer 才设置 autoLogon=TRUE。选中手机磁贴后一次 Enter 发起，等待期间重复 Enter 不创建第二份请求。箭头不可编辑，不设置 CPFIS_FOCUSED、不添加伪输入框或键盘钩子。此默认选择／Enter 行为须实测，不能保证跨 provider 抢占用户系统选择。
+
+工作线程消费结构化 AuthenticationStatus，只对当前 requestID 更新提示；服务为唯一期限来源。相同 SID、QualifiedUserName、ProviderID 和 session 重新枚举时保留尚待提交 offer；身份变化清除。嵌入 72×72 AppTile.bmp 使用 iOS 标准 App Icon 派生图像，仍为 provider logo，不替换账户照片。无磁贴和嵌入图像用例已修改，未执行。

@@ -237,7 +237,7 @@ struct PhoneChallenge final {
     ULONGLONG deadline = 0;
     std::string requestId;
     std::string json;
-    bool delivered = false;
+    PhoneChallengeDeliveryState delivery;
 };
 
 std::int64_t nowMilliseconds() {
@@ -279,15 +279,11 @@ public:
             if (removing_ && request.operation != Operation::clearForRemoval) return response;
             if (endpoint == Endpoint::phone) {
                 if (client.logonUi || client.userSid != console.sid || !console.locked) return response;
-                if (request.operation != Operation::takePhoneChallenge &&
-                    request.operation != Operation::reportPhoneFailure &&
-                    request.operation != Operation::submitPhoneAssertion) return response;
+                if (!isPhoneOperation(request.operation)) return response;
                 processPhone(request, console, response);
                 return response;
             }
-            if (request.operation == Operation::takePhoneChallenge ||
-                request.operation == Operation::reportPhoneFailure ||
-                request.operation == Operation::submitPhoneAssertion) return response;
+            if (isPhoneOperation(request.operation)) return response;
             if (request.operation == Operation::unlockEligibility) {
                 Identity identity;
                 if (!client.logonUi || !console.locked ||
@@ -316,7 +312,7 @@ public:
                 if (generation != gConsoleGeneration.load()) return response;
                 authenticationIdentity_ = identity;
                 phoneChallenge_ = PhoneChallenge{identity, console.session, generation,
-                    GetTickCount64() + kPhoneAuthenticationLifetimeMs, phoneCore_.requestIdString(issued.challenge), issued.json, false};
+                    GetTickCount64() + kPhoneAuthenticationLifetimeMs, phoneCore_.requestIdString(issued.challenge), issued.json, {}};
                 authenticationStatus_ = {phoneChallenge_->requestId, AuthenticationStage::waitingPhone,
                     AuthenticationFailure::none, phoneChallenge_->deadline};
                 logAuthentication();
@@ -500,10 +496,12 @@ private:
 
     void processPhone(Packet& request, const Console& console, Packet& response) {
         const ULONGLONG generation = gConsoleGeneration.load();
-        if (request.operation == Operation::takePhoneChallenge) {
+        if (request.operation == Operation::takePhoneChallenge || request.operation == Operation::peekPhoneAuthentication) {
             if (!request.payload.value.empty()) return;
-            if (phoneChallenge_ && !phoneChallenge_->delivered) {
-                phoneChallenge_->delivered = true;
+            const bool deliver = phoneChallenge_ && phoneChallenge_->delivery.beginDelivery(request.operation);
+            if (request.operation == Operation::peekPhoneAuthentication) {
+                if (!encodeAuthenticationStatus(authenticationStatus_, response.payload)) fail("phone status encoding failed");
+            } else if (deliver) {
                 authenticationStatus_.stage = AuthenticationStage::awaitingAssertion;
                 logAuthentication();
                 if (!encodePhoneChallenge({authenticationStatus_, phoneChallenge_->json}, response.payload)) fail("phone challenge encoding failed");
@@ -514,7 +512,7 @@ private:
             return;
         }
         if (request.operation == Operation::reportPhoneFailure) {
-            if (!phoneChallenge_ || !phoneChallenge_->delivered || request.payload.value.size() != 37 ||
+            if (!phoneChallenge_ || !phoneChallenge_->delivery.delivered() || request.payload.value.size() != 37 ||
                 std::memcmp(request.payload.value.data(), phoneChallenge_->requestId.data(), 36) != 0) return;
             const auto reason = request.payload.value[36];
             if (reason < 1 || reason > 6) return;
@@ -524,7 +522,7 @@ private:
             return;
         }
         if (request.payload.value.empty() || request.payload.value.size() > 4096 ||
-            !phoneChallenge_ || !phoneChallenge_->delivered || phoneChallenge_->session != console.session ||
+            !phoneChallenge_ || !phoneChallenge_->delivery.delivered() || phoneChallenge_->session != console.session ||
             phoneChallenge_->consoleGeneration != generation ||
             phoneChallenge_->identity.sid != enrolledSid_ || !enrollmentMatches() ||
             phoneChallenge_->identity.sid != console.sid) return;

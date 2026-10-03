@@ -537,8 +537,7 @@ bool call(const Operation operation, SensitiveBytes&& request, Packet& reply, co
 
 bool callPhone(const Operation operation, SensitiveBytes&& request, Packet& reply, const DWORD waitMs,
                CallDiagnostics* const diagnostics) {
-    if (operation != Operation::takePhoneChallenge && operation != Operation::reportPhoneFailure &&
-        operation != Operation::submitPhoneAssertion) {
+    if (!isPhoneOperation(operation)) {
         SetLastError(ERROR_INVALID_PARAMETER);
         if (diagnostics != nullptr) *diagnostics = {CallStage::requestValidation, ERROR_INVALID_PARAMETER};
         return false;

@@ -1,6 +1,8 @@
 // Created by Rui MA on 30 Sep 2026
 
 #include "../SavedCredential/SavedCredentialIpc.h"
+#include "../GattHost/AdvertisingLifecycle.h"
+#include "../GattHost/TransportReadiness.h"
 
 #include <cstdlib>
 #include <iostream>
@@ -66,7 +68,7 @@ void testPhoneEndpointRejectsCredentialOperations() {
 void testAuthenticationOperationPackets() {
     for (const std::uint16_t operation : {std::uint16_t{12}, std::uint16_t{6},
             std::uint16_t{9}, std::uint16_t{13}, std::uint16_t{14}, std::uint16_t{15},
-            std::uint16_t{16}, std::uint16_t{0}, std::uint16_t{65535}}) {
+            std::uint16_t{16}, std::uint16_t{17}, std::uint16_t{18}, std::uint16_t{0}, std::uint16_t{65535}}) {
         HANDLE reader = INVALID_HANDLE_VALUE;
         HANDLE writer = INVALID_HANDLE_VALUE;
         require(CreatePipe(&reader, &writer, nullptr, 0) != FALSE, "test pipe must open");
@@ -78,7 +80,7 @@ void testAuthenticationOperationPackets() {
         const bool accepted = readPacket(reader, inbound);
         const DWORD error = GetLastError();
         require(CloseHandle(writer) && CloseHandle(reader), "test pipe handles must close");
-        const bool known = operation == 9 || (operation >= 12 && operation <= 16);
+        const bool known = operation == 9 || (operation >= 12 && operation <= 17);
         require(isKnownOperation(operation) == known, "operation whitelist rejected new operation or accepted unknown operation");
         require(accepted == known, "packet parser must accept authentication operations and reject unknown operations");
         if (accepted) {
@@ -99,7 +101,7 @@ void testPacketTransportParity() {
         FILE_FLAG_OVERLAPPED, nullptr);
     require(client != INVALID_HANDLE_VALUE, "overlapped packet test client must open");
     require(ConnectNamedPipe(server, nullptr) || GetLastError() == ERROR_PIPE_CONNECTED, "test pipe must connect");
-    for (auto operation : {std::uint16_t{9}, std::uint16_t{12}, std::uint16_t{6}, std::uint16_t{65535}}) {
+    for (auto operation : {std::uint16_t{9}, std::uint16_t{12}, std::uint16_t{17}, std::uint16_t{18}, std::uint16_t{6}, std::uint16_t{65535}}) {
         Packet outbound;
         outbound.operation = static_cast<Operation>(operation);
         outbound.payload.value = {17, 91};
@@ -254,6 +256,109 @@ void testAuthenticationMessages() {
         "consumed approval must ask for a new request");
 }
 
+void testChallengePeekDoesNotConsumeDelivery() {
+    PhoneChallengeDeliveryState delivery;
+    require(isPhoneOperation(Operation::peekPhoneAuthentication), "peek must use the locked-console phone endpoint");
+    require(!isPhoneOperation(Operation::phoneAuthenticationStatus), "LogonUI status must not become a phone operation");
+    require(!delivery.beginDelivery(Operation::peekPhoneAuthentication) && !delivery.delivered(),
+        "status peek must leave challenge undelivered");
+    require(delivery.beginDelivery(Operation::takePhoneChallenge) && delivery.delivered(), "take must deliver once");
+    require(!delivery.beginDelivery(Operation::peekPhoneAuthentication) && delivery.delivered(), "peek must not reset delivery");
+    require(!delivery.beginDelivery(Operation::takePhoneChallenge), "duplicate take must not deliver again");
+}
+
+void testAdvertisingTransitions() {
+    using Lifecycle = unlock_windows::gatt::AdvertisingLifecycle;
+    using Action = Lifecycle::Action;
+    Lifecycle lifecycle;
+    lifecycle.desire(true);
+    require(lifecycle.advance(0, 3) == Action::start, "old aborted state must permit a new start");
+    require(lifecycle.advance(1, 3) == Action::none && lifecycle.failures() == 0,
+        "old aborted state must not be counted as a new start failure");
+    lifecycle.desire(false);
+    require(lifecycle.advance(2, 3) == Action::none, "stop must wait for pending start");
+    require(lifecycle.advance(3, 2) == Action::stop, "completed start must honor merged stop target");
+    lifecycle.desire(true);
+    require(lifecycle.advance(4, 2) == Action::none, "new start must wait for pending stop");
+    require(lifecycle.advance(5, 1) == Action::start, "completed stop must honor merged start target");
+    require(lifecycle.advance(6, 2) == Action::none, "start confirmation must complete operation");
+    require(lifecycle.advance(7, 3) == Action::none && lifecycle.retryAt() == 1007,
+        "actual abort must schedule bounded recovery");
+    require(lifecycle.advance(1007, 3) == Action::start, "aborted provider must restart automatically");
+    lifecycle.desire(false);
+    require(lifecycle.advance(6007, 3) == Action::none && lifecycle.retries() == 0,
+        "unlock must cancel recovery after the pending operation deadline");
+}
+
+void testAdvertisingRetryBudgetAndDeadline() {
+    using Lifecycle = unlock_windows::gatt::AdvertisingLifecycle;
+    using Action = Lifecycle::Action;
+    Lifecycle lifecycle;
+    lifecycle.desire(true);
+    require(lifecycle.advance(0, 0) == Action::start, "initial start missing");
+    require(lifecycle.advance(4999, 3) == Action::none, "start deadline shortened");
+    require(lifecycle.advance(5000, 3) == Action::none && lifecycle.retryAt() == 6000, "start timeout needs one-second retry");
+    require(lifecycle.advance(6000, 3) == Action::start, "first retry missing");
+    lifecycle.commandFailed(6000, Action::start);
+    require(lifecycle.retryAt() == 8000, "second retry must wait two seconds");
+    require(lifecycle.advance(7999, 3) == Action::none && lifecycle.advance(8000, 3) == Action::start, "retry issued early");
+    lifecycle.commandFailed(8000, Action::start);
+    require(lifecycle.retryAt() == 12000, "third retry must wait four seconds");
+    require(lifecycle.advance(12000, 3) == Action::start, "third retry missing");
+    lifecycle.commandFailed(12000, Action::start);
+    require(lifecycle.exhausted() && lifecycle.advance(90000, 3) == Action::none, "retry budget must not loop");
+    lifecycle.desire(false);
+    require(!lifecycle.exhausted() && lifecycle.advance(90001, 3) == Action::none, "sleep/unlock must cancel retries");
+    lifecycle.desire(true);
+    require(lifecycle.advance(90002, 3) == Action::start && lifecycle.retries() == 0, "new lock needs fresh budget");
+    require(lifecycle.advance(90003, 2) == Action::none && lifecycle.failure() == Lifecycle::Failure::none,
+        "confirmed start must clear current failure");
+
+    Lifecycle stop;
+    stop.desire(true);
+    require(stop.advance(0, 2) == Action::none, "already running must be recognized");
+    stop.desire(false);
+    require(stop.advance(1, 2) == Action::stop && stop.advance(5000, 2) == Action::none, "stop operation must be serialized");
+    require(stop.advance(5001, 2) == Action::none && stop.exhausted(), "stop timeout must be explicit");
+    stop.refresh();
+    require(stop.advance(5002, 2) == Action::stop, "explicit refresh must retry a failed stop");
+}
+
+void testTransportReadinessBindingAndExpiry() {
+    using unlock_windows::gatt::TransportReadiness;
+    const std::string request = "01234567-89ab-cdef-0123-456789abcdef";
+    const std::string next = "11234567-89ab-cdef-0123-456789abcdef";
+    std::vector<std::uint8_t> frame{0x04};
+    frame.insert(frame.end(), request.begin(), request.end());
+    TransportReadiness gate;
+    require(gate.prepare(request, L"phone", 1, 30000, 0), "current request must prepare");
+    require(!gate.acknowledge(frame, L"phone", 1, 0, 0), "unsolicited receipt must fail");
+    require(gate.probeDue(0), "first probe must be due");
+    gate.probeAttempted(0, true);
+    require(!gate.probeDue(999) && gate.probeDue(1000), "probes must be limited to one per second");
+    require(!gate.acknowledge(frame, L"other", 1, 1, 1) && !gate.acknowledge(frame, L"phone", 2, 1, 1),
+        "receipt must bind connection and generation");
+    auto malformed = frame;
+    malformed.push_back(0);
+    require(!gate.acknowledge(malformed, L"phone", 1, 1, 1), "receipt length must be exact");
+    malformed = frame;
+    malformed[0] = 1;
+    require(!gate.acknowledge(malformed, L"phone", 1, 1, 1), "legacy opcode must not confirm readiness");
+    require(gate.acknowledge(frame, L"phone", 1, 1, 1) && gate.ready(1), "current receipt must enable delivery");
+    require(gate.acknowledge(frame, L"phone", 1, 2, 2) && !gate.probeDue(2), "duplicate receipt must be idempotent");
+    require(!gate.ready(30000) && !gate.acknowledge(frame, L"phone", 1, 30000, 30000), "deadline must not extend");
+    require(gate.prepare(next, L"phone", 1, 60000, 30001) && !gate.ready(30001), "new request must clear old readiness");
+    gate.probeAttempted(30001, true);
+    require(!gate.acknowledge(frame, L"phone", 1, 30002, 30002), "old receipt must not ready new request");
+    gate.clear();
+    require(!gate.probeDue(30003) && !gate.ready(30003), "cancel must discard all readiness state");
+    require(gate.prepare(request, L"phone", 2, 60000, 30004), "reconnected request must prepare");
+    gate.probeAttempted(30004, true);
+    require(!gate.acknowledge(frame, L"phone", 2, 30005, 30003), "queued old-connection receipt must fail");
+    require(gate.acknowledge(frame, L"phone", 2, 30005, 30005), "fresh receipt after reconnection must succeed");
+    require(!TransportReadiness::validRequestId("01234567-89AB-cdef-0123-456789abcdef"), "uppercase receipt ID must fail");
+}
+
 } // namespace
 
 int main() {
@@ -265,6 +370,10 @@ int main() {
     testAuthenticationOperationPackets();
     testAuthenticationState();
     testAuthenticationMessages();
+    testChallengePeekDoesNotConsumeDelivery();
+    testAdvertisingTransitions();
+    testAdvertisingRetryBudgetAndDeadline();
+    testTransportReadinessBindingAndExpiry();
     std::cout << "Saved credential protocol tests passed.\n";
     return EXIT_SUCCESS;
 }

@@ -36,6 +36,7 @@ enum class Operation : std::uint16_t {
     reportPhoneFailure = 14,
     phoneAuthenticationStatus = 15,
     unlockEligibility = 16,
+    peekPhoneAuthentication = 17,
 };
 
 inline constexpr bool isKnownOperation(const std::uint16_t value) noexcept {
@@ -55,11 +56,29 @@ inline constexpr bool isKnownOperation(const std::uint16_t value) noexcept {
     case Operation::reportPhoneFailure:
     case Operation::phoneAuthenticationStatus:
     case Operation::unlockEligibility:
+    case Operation::peekPhoneAuthentication:
         return true;
     default:
         return false;
     }
 }
+
+inline constexpr bool isPhoneOperation(Operation operation) noexcept {
+    return operation == Operation::takePhoneChallenge || operation == Operation::reportPhoneFailure ||
+        operation == Operation::submitPhoneAssertion || operation == Operation::peekPhoneAuthentication;
+}
+
+class PhoneChallengeDeliveryState final {
+public:
+    bool beginDelivery(Operation operation) noexcept {
+        if (operation != Operation::takePhoneChallenge || delivered_) return false;
+        delivered_ = true;
+        return true;
+    }
+    bool delivered() const noexcept { return delivered_; }
+private:
+    bool delivered_ = false;
+};
 
 enum class Result : std::uint32_t {
     success = 0,

@@ -8,13 +8,15 @@
 
 仅进程会话为当前物理控制台且明确锁定时广播；桌面只有主动两分钟配对窗口例外。注销退出，睡眠／结束期间不启动广播。WTS／恢复／广播事件及定期查询核对实际状态，不用历史错误代替当前状态。
 
-服务和 characteristic 初始化后复用。停止广播不主动断开 BLE、不销毁订阅；实际 Windows 解锁决定停止，手机 `unlock_approved` 不单独触发停止。保留连接上的请求仍由服务核对锁屏身份及授权。
+服务和 characteristic 初始化后复用。停止发布不主动断开 BLE，但不保证远端服务和订阅仍可用；iPhone 确认服务缺失后会释放连接，等待下次服务广播。实际 Windows 解锁决定停止，手机 `unlock_approved` 不单独触发停止。保留可用连接上的请求仍由服务核对锁屏身份及授权。
 
-磁贴发起后，host 等待唯一同时订阅 challenge／result 的连接；无接收者或多个接收者时不领取 challenge，不立即消耗请求。总期限由服务限定 30 秒。投递后通知失败或断连明确报告；assertion 原样交 LocalSystem 验签。密码不进入 host。
+目标广播状态、实际 WinRT 状态和在途启停操作分别记录。控制线程串行启停，操作最多等待五秒，期间合并新的目标状态。启动失败／实际中止最多按 1、2、4 秒重试三次，耗尽明确提示；解锁、睡眠或退出取消待重试，新锁屏周期重建预算。成功确认后清除当前错误，历史原始状态、BluetoothError 和 HRESULT 保留；启动时上一轮 Aborted 不立即认作新故障。
+
+磁贴发起后，host 用 phone-only IPC `peekPhoneAuthentication = 17` 查询状态，等待唯一同时订阅 challenge／result 的连接，向其 result 发送 `transport_ready_required`，每秒最多一次。收到当前连接的 `0x04 + 36 字节小写 requestID` 后重新核对请求与订阅，才单次领取 challenge。未就绪时不消费请求，总期限仍为服务原有 30 秒；断连、停止发布、服务失效、配对或请求结束清除准备状态。assertion 原样交 LocalSystem 验签，密码不进入 host。
 
 服务 UUID 为 `F1E2D3C4-B5A6-4789-8012-3456789ABCDE`；request／challenge／assertion／result／ComputerId 依次以 ABCD1–ABCD5 结尾。ComputerId 为当前用户 HKCU 中的持久 UUID；异常已有值报错，不重新生成。手机用它核对目标，不以名称或 peripheral UUID 授权。
 
-request 接受失败帧 `0x03 + requestID + 原因`；配对窗口接受 `0x02 + 65 字节 P-256 公钥`，不接受旧 `0x01`。配对期间不处理认证 request／assertion。
+request 接受失败帧 `0x03 + requestID + 原因` 和固定 37 字节的 `0x04` 就绪回执；配对窗口接受 `0x02 + 65 字节 P-256 公钥`，不接受旧 `0x01`。配对期间不处理认证 request／assertion。
 
 ## 托盘菜单
 
@@ -39,6 +41,10 @@ request 接受失败帧 `0x03 + requestID + 原因`；配对窗口接受 `0x02 +
 
 唯一记录见 [Windows 验收记录](../Validation.md)。旧交互或前台成功不代表完整配对、整夜后台或部署专项通过。
 
+2026-10-03 锁屏恢复修复：日志已证明成功解锁后 iOS 服务失效并长期等待，广播中止的底层原因尚未确认。广播状态机和手机就绪握手已实现，回归源码覆盖启停交错、重试／取消、连接与请求绑定、过期和 peek 不消费 challenge；仅静态检查，未构建或执行测试。
+
+获得授权后，Windows／iOS 一起更新为匹配版本，保留已有登记；连续锁屏／解锁至少 20 轮、手机后台 15 分钟及隔夜、电脑睡眠恢复、手机离开返回和蓝牙关闭恢复。全程不 Refresh、不点击手机 Retry。特别核对服务缺失无连接循环、未就绪时 challenge 未投递、30 秒准确失败、重复回执不重复批准，以及正常配对与保存凭据回归。双端日志记录 UTC、单调时间、generation 和 requestID，不含密码或签名正文。
+
 获授权的诊断启动命令从仓库根目录执行；不要与已安装托盘同时运行：
 
 ```powershell
@@ -51,3 +57,4 @@ request 接受失败帧 `0x03 + requestID + 原因`；配对窗口接受 `0x02 +
 - [WTS notifications](https://learn.microsoft.com/en-us/windows/win32/api/wtsapi32/nf-wtsapi32-wtsregistersessionnotification)
 - [WTS lock state](https://learn.microsoft.com/en-us/windows/win32/api/wtsapi32/ns-wtsapi32-wtsinfoex_level1_w)
 - [Advertisement status](https://learn.microsoft.com/en-us/uwp/api/windows.devices.bluetooth.genericattributeprofile.gattserviceprovideradvertisementstatus)
+- [Microsoft: GATT server publication](https://learn.microsoft.com/en-us/windows/apps/develop/devices-sensors/gatt-server)

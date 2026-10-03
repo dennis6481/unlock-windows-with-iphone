@@ -1,6 +1,8 @@
 // Created by Rui MA on 26 Sep 2026
 
 #include "SavedCredentialIpc.h"
+#include "AdvertisingLifecycle.h"
+#include "TransportReadiness.h"
 #include "../ComponentFiles.h"
 #include "EnrollmentStore.h"
 #include "../PairingTool/EnrollmentSession.h"
@@ -36,6 +38,8 @@
 #include <array>
 #include <filesystem>
 #include <thread>
+#include <iomanip>
+#include <algorithm>
 
 namespace {
 
@@ -78,9 +82,18 @@ struct CallbackState final {
     }
 
     void record(const std::wstring& message, bool error) {
-        OutputDebugStringW((message + L"\n").c_str());
+        SYSTEMTIME utc{};
+        GetSystemTime(&utc);
+        std::wostringstream prefix;
+        prefix << std::setfill(L'0') << std::setw(4) << utc.wYear << L'-'
+            << std::setw(2) << utc.wMonth << L'-' << std::setw(2) << utc.wDay << L'T'
+            << std::setw(2) << utc.wHour << L':' << std::setw(2) << utc.wMinute << L':'
+            << std::setw(2) << utc.wSecond << L'.' << std::setw(3) << utc.wMilliseconds
+            << L"Z tickMs=" << GetTickCount64() << L' ';
+        const auto line = prefix.str() + message;
+        OutputDebugStringW((line + L"\n").c_str());
         std::lock_guard lock(mutex);
-        diagnostics += message + L"\r\n";
+        diagnostics += line + L"\r\n";
         if (diagnostics.size() > 16000) diagnostics.erase(0, diagnostics.find(L"\n", 8000) + 1);
         if (error) transportError = message;
     }
@@ -178,7 +191,8 @@ public:
     std::wstring connectionSummary() const {
         if (!initialized_) return L"iPhone connection: unavailable.";
         for (const auto& client : challengeCharacteristic_.SubscribedClients())
-            if (subscriber(client.Session())) return L"iPhone connection: unlock channel ready.";
+            if (subscriber(client.Session())) return readiness_.ready(GetTickCount64()) || authenticationSession_
+                ? L"iPhone connection: unlock channel ready." : L"iPhone connection: waiting for channel confirmation.";
         if (challengeCharacteristic_.SubscribedClients().Size() || resultCharacteristic_.SubscribedClients().Size())
             return L"iPhone connection: preparing unlock channel.";
         return L"iPhone connection: waiting for your iPhone.";
@@ -257,26 +271,38 @@ public:
                 });
             }
         );
-        challengeSubscriptionToken_ = challengeCharacteristic_.SubscribedClientsChanged(
-            [state = state_](GattLocalCharacteristic const& characteristic, winrt::Windows::Foundation::IInspectable const&) {
+        const auto subscriptionsChanged =
+            [this, state = state_](GattLocalCharacteristic const& characteristic, winrt::Windows::Foundation::IInspectable const&) {
                 try {
-                    const auto count = characteristic.SubscribedClients().Size();
-                    state->post([state, count] { LogLine(state, false) << "[GattHost] challenge subscribers: " << count; });
+                    std::vector<std::wstring> peers;
+                    for (const auto& client : characteristic.SubscribedClients())
+                        peers.emplace_back(client.Session().DeviceId().Id());
+                    state->post([this, state, peers = std::move(peers)] {
+                        LogLine(state, false) << "[GattHost] notification subscribers=" << peers.size()
+                            << " generation=" << transportGeneration_;
+                        if (!watchedSession_) return;
+                        const std::wstring peer(watchedSession_.DeviceId().Id());
+                        if (std::find(peers.begin(), peers.end(), peer) != peers.end()) return;
+                        try { if (authenticationSession_ && GetTickCount64() < authenticationDeadline_) reportFailure(4); }
+                        catch (...) { state->record(L"Subscription loss report: " + exceptionText(), true); }
+                        invalidateTransport(L"selected notification subscription lost");
+                    });
                 } catch (...) { state->record(exceptionText(), true); }
-            }
-        );
+            };
+        challengeSubscriptionToken_ = challengeCharacteristic_.SubscribedClientsChanged(subscriptionsChanged);
+        resultSubscriptionToken_ = resultCharacteristic_.SubscribedClientsChanged(subscriptionsChanged);
 
         advertisementStatusToken_ = serviceProvider_.AdvertisementStatusChanged(
-            [state = state_, statusChanged](
+            [this, state = state_, statusChanged](
                 GattServiceProvider const&,
                 GattServiceProviderAdvertisementStatusChangedEventArgs const& args
             ) {
                 try {
                     const auto status = args.Status();
                     const auto error = args.Error();
-                    state->post([state, statusChanged, status, error] {
+                    state->post([this, state, statusChanged, status, error] {
                         LogLine(state, false) << "[GattHost] advertisement event status=" << static_cast<int>(status)
-                            << " error=" << static_cast<int>(error);
+                            << " error=" << static_cast<int>(error) << " generation=" << transportGeneration_;
                         if (error != winrt::Windows::Devices::Bluetooth::BluetoothError::Success)
                             state->record(L"Advertisement BluetoothError=" + std::to_wstring(static_cast<int>(error)), true);
                         statusChanged();
@@ -292,26 +318,79 @@ public:
     GattServiceProviderAdvertisementStatus status() const { return serviceProvider_.AdvertisementStatus(); }
 
     void advertise(bool enabled) {
-        if (!enabled) {
-            const auto current = status();
-            if (!stopRequested_ && (current == GattServiceProviderAdvertisementStatus::Started ||
-                current == GattServiceProviderAdvertisementStatus::StartedWithoutAllAdvertisementData)) {
-                serviceProvider_.StopAdvertising();
-                stopRequested_ = true;
-            }
-            advertisingRequested_ = false;
-            return;
+        using Action = unlock_windows::gatt::AdvertisingLifecycle::Action;
+        const auto now = GetTickCount64();
+        if (advertising_.desired() != enabled || transportPairing_ != pairingActive) {
+            invalidateTransport(L"publication target or pairing changed");
+            transportPairing_ = pairingActive;
         }
-        if (advertisingRequested_) return;
-        GattServiceProviderAdvertisingParameters parameters;
-        parameters.IsDiscoverable(true);
-        parameters.IsConnectable(true);
-        advertisingRequested_ = true;
-        stopRequested_ = false;
-        serviceProvider_.StartAdvertising(parameters);
+        advertising_.desire(enabled);
+        const auto action = advertising_.advance(now, static_cast<int>(status()));
+        if (action != Action::none) {
+            invalidateTransport(action == Action::start ? L"publication starting" : L"publication stopping");
+            LogLine(state_, false) << "[GattHost] publication command=" << (action == Action::start ? "start" : "stop")
+                << " generation=" << transportGeneration_ << " retry=" << advertising_.retries();
+            try {
+                if (action == Action::stop) serviceProvider_.StopAdvertising();
+                else {
+                    GattServiceProviderAdvertisingParameters parameters;
+                    parameters.IsDiscoverable(true);
+                    parameters.IsConnectable(true);
+                    serviceProvider_.StartAdvertising(parameters);
+                }
+            } catch (...) {
+                advertising_.commandFailed(now, action);
+                state_->record(L"Publication command: " + exceptionText(), true);
+            }
+        }
+        if (advertising_.failures() != loggedAdvertisingFailures_) {
+            loggedAdvertisingFailures_ = advertising_.failures();
+            invalidateTransport(L"publication failed");
+            state_->record(advertisingError(), true);
+        }
     }
 
-    void retryAdvertising() { advertisingRequested_ = false; }
+    void retryAdvertising() { advertising_.refresh(); }
+
+    bool advertisingReady() const {
+        return advertising_.desired() && advertising_.pending() == unlock_windows::gatt::AdvertisingLifecycle::Action::none &&
+            status() == GattServiceProviderAdvertisementStatus::Started;
+    }
+
+    bool advertisingExhausted() const { return advertising_.exhausted(); }
+
+    std::wstring advertisingError() const {
+        using Failure = unlock_windows::gatt::AdvertisingLifecycle::Failure;
+        const wchar_t* text = L"Bluetooth publication failed";
+        switch (advertising_.failure()) {
+        case Failure::startTimeout: text = L"Bluetooth publication did not start within 5 seconds"; break;
+        case Failure::startException: text = L"Bluetooth publication start failed; see the original error in history"; break;
+        case Failure::aborted: text = L"Bluetooth publication was interrupted"; break;
+        case Failure::incomplete: text = L"Bluetooth publication is missing advertisement data"; break;
+        case Failure::stopTimeout: text = L"Bluetooth publication did not stop within 5 seconds"; break;
+        case Failure::stopException: text = L"Bluetooth publication stop failed; see the original error in history"; break;
+        case Failure::none: return {};
+        }
+        return std::wstring(text) + L"; status=" + std::to_wstring(static_cast<int>(status())) +
+            L"; retries=" + std::to_wstring(advertising_.retries()) +
+            (advertising_.exhausted() ? L"; open Status and choose Refresh" : L"; automatic recovery pending");
+    }
+
+    void invalidateTransport(const wchar_t* reason) {
+        ++transportGeneration_;
+        if (watchedSession_ && sessionStatusToken_.value) {
+            watchedSession_.SessionStatusChanged(sessionStatusToken_);
+            sessionStatusToken_ = {};
+        }
+        watchedSession_ = nullptr;
+        readiness_.clear();
+        preparationSession_ = nullptr;
+        authenticationSession_ = nullptr;
+        authenticationRequestId_.clear();
+        authenticationDeadline_ = 0;
+        LogLine(state_, false) << "[GattHost] transport invalidated generation=" << transportGeneration_
+            << " reason=" << to_string(hstring(reason));
+    }
 
     void shutdown() {
         {
@@ -322,7 +401,12 @@ public:
             try { action(); } catch (...) { state_->record(L"Shutdown: " + exceptionText(), true); }
         };
         if (serviceProvider_) {
-            cleanup([this] { advertise(false); });
+            cleanup([this] {
+                invalidateTransport(L"exit");
+                advertising_.desire(false);
+                if (status() != GattServiceProviderAdvertisementStatus::Created &&
+                    status() != GattServiceProviderAdvertisementStatus::Stopped) serviceProvider_.StopAdvertising();
+            });
             if (advertisementStatusToken_.value) cleanup([this] { serviceProvider_.AdvertisementStatusChanged(advertisementStatusToken_); });
         }
         if (requestCharacteristic_ && requestWriteToken_.value)
@@ -331,6 +415,8 @@ public:
             cleanup([this] { assertionCharacteristic_.WriteRequested(assertionWriteToken_); });
         if (challengeCharacteristic_ && challengeSubscriptionToken_.value)
             cleanup([this] { challengeCharacteristic_.SubscribedClientsChanged(challengeSubscriptionToken_); });
+        if (resultCharacteristic_ && resultSubscriptionToken_.value)
+            cleanup([this] { resultCharacteristic_.SubscribedClientsChanged(resultSubscriptionToken_); });
         std::unique_lock lock(state_->mutex);
         state_->drained.wait(lock, [this] { return state_->activeWrites == 0; });
         state_->pending.clear();
@@ -399,6 +485,22 @@ private:
     }
 
     void handleRequestWrite(const std::vector<std::uint8_t>& bytes, const GattSession& session, ULONGLONG receivedAt) {
+        if (!bytes.empty() && bytes.front() == unlock_windows::gatt::TransportReadiness::readyRequest) {
+            using namespace unlock_windows::saved_credential;
+            AuthenticationStatus current;
+            if (preparationSession_ && (!subscriber(preparationSession_) || !challengeSubscriber(preparationSession_)))
+                invalidateTransport(L"preparation connection no longer active");
+            const bool subscribed = session && subscriber(session) && challengeSubscriber(session);
+            if (pairingActive || !advertisingReady() || !subscribed || !peekAuthentication(current) ||
+                current.stage != AuthenticationStage::waitingPhone || current.requestId != readiness_.request() ||
+                !readiness_.acknowledge(bytes, std::wstring(session.DeviceId().Id()), transportGeneration_, GetTickCount64(), receivedAt)) {
+                state_->record(L"Ready acknowledgment rejected: stale request, frame, connection or publication", true);
+                return;
+            }
+            LogLine(state_, false) << "[GattHost] ready acknowledged requestID=" << current.requestId
+                << " generation=" << transportGeneration_ << " receivedTickMs=" << receivedAt;
+            return;
+        }
         if (!bytes.empty() && bytes.front() == kEnrollmentRequest) {
             enrollmentRequest(bytes, session, receivedAt);
             return;
@@ -450,19 +552,71 @@ private:
 public:
     void pollAuthentication() {
         using namespace unlock_windows::saved_credential;
+        if (pairingActive || !advertisingReady()) return;
         if (authenticationSession_ && GetTickCount64() < authenticationDeadline_ &&
-            !subscriber(authenticationSession_)) {
+            (!subscriber(authenticationSession_) || !challengeSubscriber(authenticationSession_))) {
             reportFailure(4);
+            invalidateTransport(L"authentication subscription lost");
+        }
+        if (preparationSession_ && (!subscriber(preparationSession_) || !challengeSubscriber(preparationSession_)))
+            invalidateTransport(L"preparation subscription lost");
+        AuthenticationStatus current;
+        if (!peekAuthentication(current)) return;
+        if (current.stage != AuthenticationStage::waitingPhone) {
+            if (current.stage == AuthenticationStage::awaitingAssertion) return;
+            const auto session = authenticationSession_ ? authenticationSession_ : preparationSession_;
+            const auto request = authenticationSession_ ? authenticationRequestId_ : readiness_.request();
+            if (session && current.stage == AuthenticationStage::failed && current.requestId == request) {
+                const auto client = subscriber(session);
+                if (client) {
+                    const char* code = current.failure == AuthenticationFailure::expired ? "challenge_expired" :
+                        current.failure == AuthenticationFailure::sessionChanged ? "session_changed" : "phone_rejected";
+                    const std::string json = std::string("{\"authenticated\":false,\"status\":\"") + code +
+                        "\",\"requestID\":\"" + request + "\"}";
+                    const auto sent = resultCharacteristic_.NotifyValueAsync(makeBuffer(json), client).get();
+                    if (sent.Status() != GattCommunicationStatus::Success)
+                        state_->record(L"Authentication failure result delivery failed", true);
+                }
+                state_->record(authenticationStatusText(current), true);
+            }
+            if (session || watchedSession_ || !readiness_.request().empty()) invalidateTransport(L"request ended");
+            return;
         }
         GattSubscribedClient target{nullptr};
-        if (!pairingActive) {
-            for (const auto& client : challengeCharacteristic_.SubscribedClients()) {
-                if (!subscriber(client.Session())) continue;
-                if (target) return;
-                target = client;
+        for (const auto& client : challengeCharacteristic_.SubscribedClients()) {
+            if (!subscriber(client.Session())) continue;
+            if (target) {
+                if (preparationSession_) invalidateTransport(L"multiple subscribed connections");
+                return;
             }
+            target = client;
         }
-        if (!target) return;
+        if (!target) {
+            if (preparationSession_) invalidateTransport(L"preparation subscription lost");
+            return;
+        }
+        if (preparationSession_ && preparationSession_.DeviceId().Id() != target.Session().DeviceId().Id())
+            invalidateTransport(L"preparation connection changed");
+        const auto now = GetTickCount64();
+        if (!readiness_.prepare(current.requestId, std::wstring(target.Session().DeviceId().Id()),
+            transportGeneration_, current.deadline, now)) return;
+        preparationSession_ = target.Session();
+        watchConnection(preparationSession_);
+        if (!readiness_.ready(now)) {
+            if (!readiness_.probeDue(now)) return;
+            const std::string json = "{\"authenticated\":false,\"status\":\"transport_ready_required\",\"requestID\":\"" +
+                current.requestId + "\"}";
+            bool sent = false;
+            try {
+                const auto client = subscriber(target.Session());
+                const auto result = resultCharacteristic_.NotifyValueAsync(makeBuffer(json), client).get();
+                sent = result.Status() == GattCommunicationStatus::Success;
+                LogLine(state_, !sent) << "[GattHost] ready probe requestID=" << current.requestId
+                    << " generation=" << transportGeneration_ << " status=" << static_cast<int>(result.Status());
+            } catch (...) { state_->record(L"Ready probe delivery: " + exceptionText(), true); }
+            readiness_.probeAttempted(now, sent);
+            return;
+        }
         Packet response;
         CallDiagnostics diagnostics;
         if (!callPhone(Operation::takePhoneChallenge, SensitiveBytes{}, response, 250, &diagnostics)) {
@@ -484,38 +638,27 @@ public:
         if (!decodePhoneChallenge(response.payload.value.data(), response.payload.value.size(), challenge)) {
             throw std::runtime_error("Invalid structured phone challenge frame");
         }
-        if (challenge.json.empty()) {
-            if (authenticationSession_ && (challenge.status.stage == AuthenticationStage::failed ||
-                challenge.status.stage == AuthenticationStage::idle || challenge.status.stage == AuthenticationStage::consumed)) {
-                state_->record(authenticationStatusText(challenge.status), true);
-                if (challenge.status.stage == AuthenticationStage::failed &&
-                    challenge.status.requestId == authenticationRequestId_) {
-                    const auto client = subscriber(authenticationSession_);
-                    if (client) {
-                        const char* code = challenge.status.failure == AuthenticationFailure::expired
-                            ? "challenge_expired" : challenge.status.failure == AuthenticationFailure::sessionChanged
-                            ? "session_changed" : "phone_rejected";
-                        const std::string result = std::string("{\"authenticated\":false,\"status\":\"") + code +
-                            "\",\"requestID\":\"" + authenticationRequestId_ + "\"}";
-                        const auto sent = resultCharacteristic_.NotifyValueAsync(makeBuffer(result), client).get();
-                        if (sent.Status() != GattCommunicationStatus::Success)
-                            state_->record(L"Authentication failure result delivery failed", true);
-                    }
-                }
-                authenticationSession_ = nullptr;
-                authenticationRequestId_.clear();
-            }
-            return;
+        if (challenge.json.empty()) return;
+        if (challenge.status.requestId != readiness_.request() || challenge.status.deadline != current.deadline ||
+            challenge.status.stage != AuthenticationStage::awaitingAssertion) {
+            invalidateTransport(L"challenge no longer matches readiness");
+            throw std::runtime_error("Challenge changed after readiness confirmation");
         }
         authenticationRequestId_ = challenge.status.requestId;
         authenticationDeadline_ = challenge.status.deadline;
         if (GetTickCount64() >= authenticationDeadline_) return;
         authenticationSession_ = target.Session();
+        readiness_.clear();
+        preparationSession_ = nullptr;
         try {
             const auto now = GetTickCount64();
-            LogLine(state_, false) << "[GattHost] challenge ready; subscriptions=2 remainingMs="
+            LogLine(state_, false) << "[GattHost] challenge delivery attempt requestID=" << authenticationRequestId_
+                << " generation=" << transportGeneration_ << " subscriptions=2 remainingMs="
                 << (now < authenticationDeadline_ ? authenticationDeadline_ - now : 0);
             const auto result = challengeCharacteristic_.NotifyValueAsync(makeBuffer(challenge.json), target).get();
+            LogLine(state_, result.Status() != GattCommunicationStatus::Success)
+                << "[GattHost] challenge delivery completed requestID=" << authenticationRequestId_
+                << " generation=" << transportGeneration_ << " status=" << static_cast<int>(result.Status());
             if (result.Status() != GattCommunicationStatus::Success) {
                 LogLine(state_, true) << "[GattHost] challenge delivery status=" << static_cast<int>(result.Status());
                 reportFailure(5);
@@ -527,6 +670,54 @@ public:
     }
 
 private:
+    void watchConnection(const GattSession& session) {
+        if (watchedSession_) return;
+        const auto generation = transportGeneration_;
+        sessionStatusToken_ = session.SessionStatusChanged([this, state = state_, generation](const GattSession&,
+            const GattSessionStatusChangedEventArgs& args) {
+            try {
+                const auto status = args.Status();
+                state->post([this, state, generation, status] {
+                    LogLine(state, false) << "[GattHost] connection status=" << static_cast<int>(status)
+                        << " generation=" << generation;
+                    if (generation != transportGeneration_ || status == GattSessionStatus::Active) return;
+                    try { if (authenticationSession_ && GetTickCount64() < authenticationDeadline_) reportFailure(4); }
+                    catch (...) { state->record(L"Disconnection report: " + exceptionText(), true); }
+                    invalidateTransport(L"selected connection disconnected");
+                });
+            } catch (...) { state->record(L"Connection status callback: " + exceptionText(), true); }
+        });
+        watchedSession_ = session;
+    }
+
+    bool challengeSubscriber(const GattSession& session) const {
+        if (!session || session.SessionStatus() != GattSessionStatus::Active) return false;
+        for (const auto& client : challengeCharacteristic_.SubscribedClients())
+            if (client.Session().DeviceId().Id() == session.DeviceId().Id()) return true;
+        return false;
+    }
+
+    bool peekAuthentication(unlock_windows::saved_credential::AuthenticationStatus& current) {
+        using namespace unlock_windows::saved_credential;
+        Packet response;
+        CallDiagnostics diagnostics;
+        if (!callPhone(Operation::peekPhoneAuthentication, SensitiveBytes{}, response, 250, &diagnostics)) {
+            if (diagnostics.win32Error != lastAuthenticationIpcError_)
+                LogLine(state_, true) << "[GattHost] status peek failed stage=" << to_string(callStageName(diagnostics.stage))
+                    << " win32=" << diagnostics.win32Error;
+            lastAuthenticationIpcError_ = diagnostics.win32Error;
+            return false;
+        }
+        lastAuthenticationIpcError_ = NO_ERROR;
+        if (response.result != Result::success) {
+            LogLine(state_, true) << "[GattHost] status peek rejected result=" << static_cast<unsigned>(response.result);
+            return false;
+        }
+        if (!decodeAuthenticationStatus(response.payload.value.data(), response.payload.value.size(), current))
+            throw std::runtime_error("Invalid phone authentication status frame");
+        return true;
+    }
+
     void handleAssertionWrite(const std::vector<std::uint8_t>& bytes) {
         if (bytes.empty() || bytes.size() > kMaxTransportFrameSize) {
             LogLine(state_, true) << "[GattHost] rejected assertion frame length=" << bytes.size() << "\n";
@@ -579,16 +770,23 @@ private:
                     LogLine(state_, true) << "[GattHost] result delivery status=" << static_cast<int>(notification.Status());
             } else state_->record(L"Authentication result subscriber disconnected", true);
         }
+        invalidateTransport(L"assertion result delivered or failed");
     }
 
     std::shared_ptr<CallbackState> state_;
     GattSession authenticationSession_{nullptr};
+    GattSession watchedSession_{nullptr};
+    event_token sessionStatusToken_{};
     std::string authenticationRequestId_;
     ULONGLONG authenticationDeadline_ = 0;
     DWORD lastAuthenticationIpcError_ = NO_ERROR;
     bool initialized_ = false;
-    bool advertisingRequested_ = false;
-    bool stopRequested_ = false;
+    unlock_windows::gatt::AdvertisingLifecycle advertising_;
+    unlock_windows::gatt::TransportReadiness readiness_;
+    std::uint64_t loggedAdvertisingFailures_ = 0;
+    std::uint64_t transportGeneration_ = 0;
+    bool transportPairing_ = false;
+    GattSession preparationSession_{nullptr};
     GattServiceProvider serviceProvider_{nullptr};
     GattLocalCharacteristic requestCharacteristic_{nullptr};
     GattLocalCharacteristic challengeCharacteristic_{nullptr};
@@ -598,6 +796,7 @@ private:
     event_token requestWriteToken_{};
     event_token assertionWriteToken_{};
     event_token challengeSubscriptionToken_{};
+    event_token resultSubscriptionToken_{};
     event_token advertisementStatusToken_{};
 };
 
@@ -939,25 +1138,28 @@ private:
                 if (pairing_) condition_ = pairing_->remove ? L"Waiting for confirmation to remove paired iPhone." :
                     !pairing_->helperReady ? L"Pairing: waiting for Windows permission." :
                     pairing_->session ? L"Pairing: compare the fingerprints." : L"Pairing: waiting for your iPhone.";
-                if (recheck && advertising && host_.status() != GattServiceProviderAdvertisementStatus::Started &&
-                    host_.status() != GattServiceProviderAdvertisementStatus::StartedWithoutAllAdvertisementData)
+                if (recheck && (host_.advertisingExhausted() || (advertising &&
+                    host_.status() != GattServiceProviderAdvertisementStatus::Started &&
+                    host_.status() != GattServiceProviderAdvertisementStatus::StartedWithoutAllAdvertisementData)))
                     host_.retryAdvertising();
                 host_.advertise(advertising);
-                if (locked) host_.pollAuthentication();
+                if (locked && host_.advertisingReady()) host_.pollAuthentication();
                 const auto status = host_.status();
+                if (host_.advertisingExhausted()) {
+                    if (!currentError.empty()) currentError += L"; ";
+                    currentError += host_.advertisingError();
+                }
                 lifecycleConfirmed = currentError.empty() && (advertising
-                    ? status == GattServiceProviderAdvertisementStatus::Started
+                    ? host_.advertisingReady()
                     : status == GattServiceProviderAdvertisementStatus::Stopped ||
-                        status == GattServiceProviderAdvertisementStatus::Created);
+                        status == GattServiceProviderAdvertisementStatus::Created ||
+                        status == GattServiceProviderAdvertisementStatus::Aborted);
                 if (advertising) {
-                    if (status == GattServiceProviderAdvertisementStatus::Started) {
+                    if (host_.advertisingReady()) {
                         if (!pairing_) condition_ = L"This PC is locked and discoverable by your iPhone.";
                     }
-                    else if (status == GattServiceProviderAdvertisementStatus::Aborted)
-                        throw hresult_error(E_FAIL, L"GATT advertising aborted; open Status and choose Refresh");
-                    else if (status == GattServiceProviderAdvertisementStatus::StartedWithoutAllAdvertisementData)
-                        throw hresult_error(E_FAIL, L"GATT started without all advertisement data");
-                    else condition_ = L"Starting Bluetooth discovery...";
+                    else if (host_.advertisingExhausted()) condition_ = L"Bluetooth discovery needs attention.";
+                    else condition_ += L" Starting or recovering Bluetooth discovery...";
                 } else if (status == GattServiceProviderAdvertisementStatus::Started ||
                     status == GattServiceProviderAdvertisementStatus::StartedWithoutAllAdvertisementData)
                     condition_ += L" Bluetooth discovery is stopping.";

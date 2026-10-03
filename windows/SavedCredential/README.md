@@ -10,7 +10,7 @@ LocalSystem 服务是 Windows 手机认证和密码领取的权威。保存记�
 
 1. LogonUI 的 unlockEligibility 核对已有物理控制台 token、SID、session 和明确 locked 状态；首次登录不合格。
 2. beginPhoneAuthentication 仅由合格 LogonUI 发起；保存身份、登记 SID 及控制台一致才签发。服务和验签核心共用 30 秒 challenge 期限。
-3. phone pipe 仅接受 takePhoneChallenge、reportPhoneFailure 和 submitPhoneAssertion，不开放密码操作或新请求签发。host 双订阅就绪后单次领取 challenge。
+3. phone pipe 仅接受 peekPhoneAuthentication、takePhoneChallenge、reportPhoneFailure 和 submitPhoneAssertion，不开放密码操作或新请求签发。host 双订阅有效并收到绑定本次连接／请求的手机就绪回执后，单次领取 challenge。
 4. 服务验签、防重放和登记核对通过，形成独立 120 秒内存 grant；服务重启、解锁／会话变化使旧请求及批准失效。
 5. takeAutoSubmitOffer 只向合格 LogonUI 发出一次 nonce／期限，不解密。claimCredential 首次合格领取先不可逆消费，再解密；打包失败、错误密码或 CP 重建不恢复批准。
 
@@ -23,6 +23,8 @@ saved-credential pipe 按操作核对管理员、当前控制台和 LogonUI；ph
 内部 IPC v2 拒绝旧包，所有组件使用同一构建。同步／带超时传输共用报头构造与校验；服务映像名来自共享组件清单。
 
 AuthenticationStatus 提供 requestID、阶段、原因和单调时钟 deadline。阶段为 idle／waitingPhone／awaitingAssertion／approved／failed／consumed；等待、距离失败、断连、超时和真实 session 变化分开。无关 session 事件不使目标请求失效；每次操作仍重新核对实际控制台。
+
+`peekPhoneAuthentication = 17` 是 phone-only 空请求，返回上述状态，不返回 challenge、不修改投递标记或进入 awaitingAssertion；其他端点拒绝。准备消息与回执不会延长服务原有 30 秒期限。新增投递状态回归用例用于检查 peek 不消费、take 只消费一次；本轮未构建或运行用例，两端匹配版本的实测待验收。
 
 reportPhoneFailure 保留 `36 字节 requestID + 1 字节原因`，原因 1–6 为 RSSI 不足、自动批准关闭、新读数失败、订阅／连接丢失、投递失败、签名失败。迟到结果不覆盖新请求。日志不记录密码、nonce、密钥或断言正文。
 

@@ -50,7 +50,9 @@ flowchart TB
 
     Tray <-->|"BLE · 身份发现与订阅"| Identity
     Tile -->|"受限 IPC · beginPhoneAuthentication"| Request
-    Request -->|"phone-only IPC · 双订阅就绪才取 challenge"| Tray
+    Request -->|"phone-only IPC · peek 状态，手机回执后取 challenge"| Tray
+    Tray -->|"result · transport_ready_required"| Identity
+    Identity -->|"request · 0x04 就绪回执"| Tray
     Tray -->|"challenge 通知"| Sign
     Sign -->|"assertion 写入"| Tray
     Tray -->|"phone-only IPC · 原样转送"| Verify
@@ -79,7 +81,7 @@ flowchart TB
 
 1. 已有锁定会话中，用户按 Enter／Unlock，CP 发起 `beginPhoneAuthentication`。选择磁贴或刚锁屏本身不创建请求。
 2. 服务核对 CP 当前身份、保存身份、登记 SID 和锁屏会话，生成随机 requestID、32 字节密码学随机 nonce 及服务时间戳。整次认证等待期限为 **30 秒**；服务的单调时钟 deadline 决定内部剩余时间。
-3. 托盘只有确认唯一接收者的 challenge／result 两项订阅均就绪，才单次领取并投递 challenge。尚未连接时等待，不提前消耗 challenge。
+3. 托盘通过 `peekPhoneAuthentication = 17` 查询状态，选定唯一同时订阅 challenge／result 的连接，定向发送准备消息。手机完成 ComputerId 核对和双订阅后回执；托盘重新检查连接、当前 requestID、订阅与期限后，才调用 `takePhoneChallenge` 单次领取并投递。查询和准备消息不消费 challenge。
 4. iPhone 核对目标、自动响应偏好及 challenge，读取本次新鲜 RSSI。读数／签名窗口为 **3 秒**，默认阈值为 **−60 dBm**，用户可调；不复用历史读数，签名后的 Windows 结果等待不是 RSSI 超时。RSSI 不承诺固定距离，也不构成防中继的密码学距离证明。
 5. 服务从 outstanding challenge 重建签名字节，核对 requestID、版本、有效期、登记公钥与指纹并验签、防重放；challenge 的 audience／nonce 来自服务当前请求，而不是信任 assertion 自报。
 6. 有效结果建立最长 **120 秒**、绑定完整保存身份、console session 与锁屏代际的内存 grant。服务重启、期限届满或真实解锁／会话变化使旧请求及批准失效。管理界面的五分钟身份快照不是批准，也不决定当次 CP 领取资格。
@@ -134,7 +136,7 @@ Windows 为 GATT Server，iPhone 为 CoreBluetooth Central。服务 UUID：`F1E2
 
 | 特征 | UUID 末段 | 方向／属性 | 当前用途 |
 |---|---|---|---|
-| request | `3456789ABCD1` | iPhone → Windows，Write With Response | 登记帧／当前请求的失败报告；不创建认证请求 |
+| request | `3456789ABCD1` | iPhone → Windows，Write With Response | 登记帧／就绪回执／当前请求的失败报告；不创建认证请求 |
 | challenge | `3456789ABCD2` | Windows → iPhone，Notify／Read | 完整 challenge JSON |
 | assertion | `3456789ABCD3` | iPhone → Windows，Write With Response | 完整 assertion JSON |
 | result | `3456789ABCD4` | Windows → iPhone，Notify／Read | 关联本次认证或登记的结果 |
@@ -143,10 +145,27 @@ Windows 为 GATT Server，iPhone 为 CoreBluetooth Central。服务 UUID：`F1E2
 各特征的完整 UUID 均使用前缀 `F1E2D3C4-B5A6-4789-8012-` 加表中末段。
 
 - 登记帧：`0x02 || publicKey[65 bytes]`，共 66 字节；仅主动配对窗口接收。
+- 就绪回执：`0x04 || requestID[36 lowercase ASCII bytes]`，固定 37 字节；只接受已发送准备消息的选定连接和当前未过期请求。
 - 手机失败帧：`0x03 || requestID[36 ASCII bytes] || reason[1 byte]`，共 38 字节；必须来自本次认证连接并关联当前 requestID。
 - 手机可报告的原因：`1` 距离读数不足、`2` 自动响应关闭、`3` 新读数不可用、`4` 连接／订阅失效、`6` 签名失败。`5` 为 Windows 投递失败的内部报告，不是当前手机 request 帧接受的原因。
 - 旧 `0x01` 手机请求 challenge 不再支持。认证从 CP 发起，经本地 phone-only IPC 转送，不新增另一套认证入口。
-- ComputerId 持久化在目标用户的 `HKCU\Software\UnlockWindowsWithIPhone\GattHost`；停止广播不主动断开物理连接或销毁订阅。Ready 必须重新核对 ComputerId 并确认双订阅，不能把已连接等同于可认证。
+- ComputerId 持久化在目标用户的 `HKCU\Software\UnlockWindowsWithIPhone\GattHost`。Windows 停止发布不主动断开物理连接，但远端服务可能消失；iPhone 在原连接限时重新发现，确认缺失后串行断开并等待指定服务的广播，再重新核对 ComputerId 和双订阅。已有有效 ComputerId 和公钥无需重新登记。
+
+### 手机就绪确认
+
+准备消息经 result characteristic 定向发送，每秒最多一次：
+
+```json
+{"authenticated":false,"status":"transport_ready_required","requestID":"<current UUID>"}
+```
+
+iPhone 初始化期间最多暂存一条准备请求，完成身份核对与双订阅后才写入 `0x04` 回执。准备消息不批准解锁、不签名、不进入登记或解锁成功逻辑；提前到达的 challenge 被拒绝并记录。断连、服务失效、停止发布、用户切换、睡眠、配对及请求结束清除准备状态；旧回执不能使新请求就绪。重复回执不会重复领取或批准。
+
+phone-only IPC 的 `peekPhoneAuthentication = 17` 接收空 payload，返回现有 `AuthenticationStatus`，不包含 challenge，也不修改投递标记；仍须通过当前控制台、SID、会话及锁屏检查，其他 IPC 端点拒绝。`takePhoneChallenge` 格式保持不变。准备、恢复与回执共用服务原始 30 秒期限，不延长请求、不自动签发新请求。两端须使用匹配版本，无旧协议兼容分支。
+
+Windows 广播使用目标、实际 WinRT 状态和在途启停三种独立状态；操作期限五秒，启动失败或中止最多按 1／2／4 秒重试三次。解锁、睡眠和退出取消待重试；新的锁屏周期重建预算。iOS 初始化仍为十秒与一次主动重试，确认服务缺失后不立即连接缓存设备、不循环重启扫描；新的有效广播发现、前台恢复或明确重试可开启新周期。
+
+2026-10-03：上述修复已写入源码并补充回归用例，尚未构建、执行测试或完成双端实机验收。用户日志已观察到解锁成功后服务失效并长期等待；广播中止的底层原因和此前后台恢复失败的完整事件顺序仍未确认。
 
 协议层只处理完整逻辑消息；截断或解析失败必须拒绝。底层 MTU、发现及状态恢复不改变上述签名字节，也不能被宣称为已经完成的应用分片支持。
 

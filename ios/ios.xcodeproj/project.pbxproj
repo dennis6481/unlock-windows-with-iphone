@@ -7,7 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		D10000010000000000000006 /* BluetoothAuthenticationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000020000000000000006 /* BluetoothAuthenticationState.swift */; };
 		B57E0D973067DAE300E8280A /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B57E0D953067DAE300E8280A /* ContentView.swift */; };
 		B57E0D983067DAE300E8280A /* MyApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B57E0D963067DAE300E8280A /* MyApp.swift */; };
 		B57E0D993067DAE300E8280A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B57E0D943067DAE300E8280A /* Assets.xcassets */; };
@@ -16,10 +15,10 @@
 		D10000010000000000000003 /* UnlockProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000020000000000000003 /* UnlockProtocol.swift */; };
 		D10000010000000000000004 /* UnlockSetupModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000020000000000000004 /* UnlockSetupModel.swift */; };
 		D10000010000000000000005 /* BluetoothAuthenticator.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000020000000000000005 /* BluetoothAuthenticator.swift */; };
+		D10000010000000000000006 /* BluetoothAuthenticationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000020000000000000006 /* BluetoothAuthenticationState.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		D10000020000000000000006 /* BluetoothAuthenticationState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BluetoothAuthenticationState.swift; sourceTree = "<group>"; };
 		000000000000000000000120 /* ios.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ios.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B57E0D943067DAE300E8280A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B57E0D953067DAE300E8280A /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
@@ -29,6 +28,7 @@
 		D10000020000000000000003 /* UnlockProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnlockProtocol.swift; sourceTree = "<group>"; };
 		D10000020000000000000004 /* UnlockSetupModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnlockSetupModel.swift; sourceTree = "<group>"; };
 		D10000020000000000000005 /* BluetoothAuthenticator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BluetoothAuthenticator.swift; sourceTree = "<group>"; };
+		D10000020000000000000006 /* BluetoothAuthenticationState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BluetoothAuthenticationState.swift; sourceTree = "<group>"; };
 		D10000030000000000000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 

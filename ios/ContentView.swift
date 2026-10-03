@@ -4,115 +4,393 @@ import SwiftUI
 
 struct ContentView: View {
     let model: UnlockSetupModel
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var showingSettings = false
     @State private var showingEnrollment = false
-
-    private var state: BluetoothViewState { model.bluetooth }
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section {
-                    Label(state.enrollment.isActive ? state.connectedComputer?.name ?? "正在寻找登记电脑" :
-                          state.target?.name ?? "尚未登记 Windows 电脑",
-                          systemImage: state.connection == .ready ? "desktopcomputer" : "antenna.radiowaves.left.and.right")
-                        .font(.headline)
-                    Text(state.connection.title)
-                        .foregroundStyle(state.connection == .ready ? Color.green : Color.secondary)
-                    Text(connectionHint)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    if let failure = state.connection.failure {
-                        Text(failure).foregroundStyle(.red).textSelection(.enabled)
-                        Button("重试连接", action: model.retryConnection)
-                    }
-                    if let issue = state.issue, issue != state.connection.failure {
-                        Text(issue).font(.footnote).foregroundStyle(.orange).textSelection(.enabled)
-                    }
-                    Button(state.target == nil ? "登记电脑" : "重新登记电脑") {
-                        showingEnrollment = true
-                    }
-                    .disabled(state.enrollment.isActive)
-                } header: {
-                    Text("目标电脑")
-                }
-
-                Section {
-                    Toggle("自动响应 Windows 请求",
-                           isOn: Binding(get: { state.automaticEnabled }, set: model.setAutomaticEnabled))
-                    Text(state.authentication.title)
-                        .textSelection(.enabled)
-                    Text("仅响应已登记电脑的请求。断连不会改变此开关；关闭后暂停自动批准。")
-                        .font(.footnote).foregroundStyle(.secondary)
-                } header: {
-                    Text("解锁")
-                }
-
-                Section {
-                    Text("RSSI 批准阈值：\(state.threshold) dBm")
-                    Slider(value: Binding(get: { Double(state.threshold) }, set: model.setRSSIThreshold),
-                           in: -100 ... -30, step: 1)
-                    if let rssi = state.rssi, let date = state.rssiMeasuredAt {
-                        Text("最近认证 RSSI：\(rssi) dBm")
-                        Text(date, style: .time).font(.footnote).foregroundStyle(.secondary)
-                    } else {
-                        Text("尚无本次认证的有效 RSSI 读数").foregroundStyle(.secondary)
-                    }
-                    Text("每次请求都读取新信号。最近读数不用于下一次批准，也不代表固定距离。")
-                        .font(.footnote).foregroundStyle(.secondary)
-                } header: {
-                    Text("距离设置")
-                }
-
-                Section {
-                    DisclosureGroup("登记信息与诊断") {
-                        Text("登记状态：\(state.enrollment.title)")
-                        if let id = state.target?.computerID {
-                            Text("ComputerId：\(id.uuidString.lowercased())")
-                                .font(.caption.monospaced()).textSelection(.enabled)
-                        }
-                        if let fingerprint = model.publicKeyFingerprint {
-                            Text("手机公钥指纹")
-                            Text(fingerprint).font(.caption.monospaced()).textSelection(.enabled)
-                        }
-                        if let error = model.keyError {
-                            Text("手机密钥不可用：\(error)").foregroundStyle(.red)
-                        }
-                        Text("蓝牙诊断（最近 64 条）").font(.caption)
-                        Text(model.bluetoothDiagnostics.joined(separator: "\n"))
-                            .font(.caption.monospaced()).textSelection(.enabled)
+            ScrollView {
+                VStack(spacing: 28) {
+                    ComputerDisplayView(
+                        name: model.bluetooth.target?.name,
+                        authentication: model.bluetooth.authentication,
+                        isVisible: scenePhase == .active && !showingSettings && !showingEnrollment
+                    )
+                    HomeStatusView(state: model.bluetooth, keyError: model.keyError,
+                                   retry: model.retryConnection)
+                    if model.bluetooth.target == nil {
+                        Button("登记电脑") { showingEnrollment = true }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.large)
+                            .disabled(model.bluetooth.enrollment.isActive)
                     }
                 }
-
-                Section {
-                    Text("只解锁已有 Windows 会话。重启后首次登录仍使用原生 PIN／密码，锁屏后按一次 Enter 发起手机认证。")
-                    Text("后台及整夜待机仍待实机验收；强制退出 App 后需重新打开。")
-                        .foregroundStyle(.secondary)
-                } header: {
-                    Text("使用边界")
+                .padding(24)
+                .frame(maxWidth: 600)
+                .frame(maxWidth: .infinity)
+            }
+            .background(Color(uiColor: .systemGroupedBackground))
+            .navigationTitle("Unlock with iPhone®")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("设置", systemImage: "gearshape") { showingSettings = true }
                 }
             }
-            .navigationTitle("iPhone Unlock")
+            .sheet(isPresented: $showingSettings) {
+                SettingsView(model: model)
+            }
             .sheet(isPresented: $showingEnrollment) {
                 EnrollmentView(model: model)
             }
         }
     }
+}
 
-    private var connectionHint: String {
-        if !state.automaticEnabled {
-            return "自动响应已暂停；登记仍可单独进行。"
+private struct ComputerDisplayView: View {
+    let name: String?
+    let authentication: PhoneAuthenticationState
+    let isVisible: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ScaledMetric(relativeTo: .largeTitle) private var symbolSize = 100
+    @State private var symbol = "desktopcomputer"
+    @State private var resetTask: Task<Void, Never>?
+
+    var body: some View {
+        VStack(spacing: 24) {
+            Image(systemName: symbol)
+                .font(.system(size: symbolSize, weight: .light))
+                .foregroundStyle(Color.accentColor)
+                .contentTransition(
+                    .symbolEffect(
+                        .replace.magic(fallback: .downUp.wholeSymbol),
+                        options: .nonRepeating
+                    )
+                )
+                .symbolEffectsRemoved(reduceMotion)
+                .accessibilityHidden(true)
+            VStack(spacing: 8) {
+                Text(name == nil ? "尚未配对" : "已配对电脑")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Text(name ?? "添加你的 Windows 电脑")
+                    .font(.title2.weight(.semibold))
+                    .multilineTextAlignment(.center)
+                    .textSelection(.enabled)
+            }
         }
-        if state.enrollment.isActive { return "当前连接用于登记，Windows 确认前不会自动批准解锁。" }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 40)
+        .onAppear { synchronizeSymbol() }
+        .onChange(of: displayState) { oldValue, newValue in
+            guard oldValue.isVisible, newValue.isVisible else {
+                synchronizeSymbol()
+                return
+            }
+            if oldValue.authentication != newValue.authentication,
+               newValue.authentication == .approved {
+                cancelReset()
+                setSymbol("lock.open.desktopcomputer", animated: true)
+                resetTask = Task { @MainActor in
+                    do { try await Task.sleep(for: .seconds(5)) }
+                    catch { return }
+                    guard !Task.isCancelled else { return }
+                    setSymbol("desktopcomputer", animated: true)
+                    resetTask = nil
+                }
+            }
+        }
+        .onDisappear {
+            cancelReset()
+            setSymbol("desktopcomputer", animated: false)
+        }
+    }
+
+    private struct DisplayState: Equatable {
+        let authentication: PhoneAuthenticationState
+        let isVisible: Bool
+    }
+
+    private var displayState: DisplayState {
+        DisplayState(authentication: authentication, isVisible: isVisible)
+    }
+
+    private func synchronizeSymbol(animated: Bool = false) {
+        cancelReset()
+        setSymbol("desktopcomputer", animated: animated)
+    }
+
+    private func setSymbol(_ value: String, animated: Bool) {
+        var transaction = Transaction(animation: animated && !reduceMotion ? .default : nil)
+        transaction.disablesAnimations = !animated || reduceMotion
+        withTransaction(transaction) { symbol = value }
+    }
+
+    private func cancelReset() {
+        resetTask?.cancel()
+        resetTask = nil
+    }
+}
+
+private struct HomeStatusView: View {
+    let state: BluetoothViewState
+    let keyError: String?
+    let retry: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("状态").font(.subheadline).foregroundStyle(.secondary)
+            StatusLine(presentation: connectionPresentation, isHeadline: true)
+            StatusLine(presentation: authenticationPresentation, isHeadline: false)
+            if state.enrollment.isActive {
+                Text(state.enrollment.title).foregroundStyle(.secondary)
+            }
+            if state.connection == .bluetoothUnavailable {
+                Text("请检查手机蓝牙权限和系统蓝牙开关。")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            }
+            if let failure = state.connection.failure {
+                Text(failure).foregroundStyle(.red).textSelection(.enabled)
+                Button("重试连接", action: retry).buttonStyle(.bordered)
+            }
+            if let issue = state.issue, issue != state.connection.failure {
+                Text(issue).foregroundStyle(.orange).textSelection(.enabled)
+            }
+            if let keyError {
+                Text("手机密钥不可用：\(keyError)").foregroundStyle(.red).textSelection(.enabled)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(24)
+        .background(Color(uiColor: .secondarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 24))
+    }
+
+    private var connectionPresentation: StatusPresentation {
+        let title: String
+        let immediate: Bool
         switch state.connection {
-        case .unregistered: return "先在 Windows 托盘开启配对，再登记电脑。"
-        case .waitingComputer: return "等待电脑广播，尚未建立连接；不能据此判断电脑是否锁屏。"
-        case .waitingService: return "物理蓝牙连接仍存在，解锁服务暂时不可用；保持等待，服务恢复后重新核对身份与订阅。"
-        case .connecting: return "发现了候选电脑，正在建立连接；尚未核对身份。"
-        case .discovering, .verifyingComputer, .subscribing, .recovering:
-            return "已进入连接准备流程，身份与双通知订阅完成前不会批准。"
-        case .ready: return "目标身份与双通知订阅已就绪，等待 Windows 发起请求。"
-        case .bluetoothUnavailable: return "请检查手机蓝牙权限和系统蓝牙开关。"
-        case .failed: return "本轮初始化已结束，仍在等待电脑恢复；不会无限重连。也可检查电脑组件后手动重试。"
+        case .unregistered:
+            title = String(localized: "尚未登记电脑")
+            immediate = true
+        case .bluetoothUnavailable:
+            title = String(localized: "蓝牙不可用")
+            immediate = true
+        case .waitingComputer, .waitingService:
+            let paused = !state.automaticEnabled && !state.enrollment.isActive
+            title = paused ? String(localized: "自动响应已暂停") : String(localized: "正在搜索Windows电脑")
+            immediate = paused
+        case .connecting, .discovering, .verifyingComputer, .subscribing, .recovering:
+            title = String(localized: "正在连接")
+            immediate = false
+        case .ready:
+            title = String(localized: "已连接，等待请求")
+            immediate = false
+        case .failed:
+            title = String(localized: "连接异常")
+            immediate = true
+        }
+        return StatusPresentation(title: title,
+                                  symbol: state.connection == .ready ? "checkmark.circle.fill" : "circle.dotted",
+                                  color: state.connection == .ready ? .green : .primary,
+                                  immediate: immediate)
+    }
+
+    private var authenticationPresentation: StatusPresentation {
+        let immediate: Bool
+        switch state.authentication {
+        case .approved, .rejected, .paused: immediate = true
+        case .waiting, .readingRSSI, .signing, .awaitingWindows: immediate = !state.automaticEnabled
+        }
+        return StatusPresentation(title: authenticationTitle, symbol: nil,
+                                  color: authenticationColor, immediate: immediate)
+    }
+
+    private var authenticationTitle: String {
+        if !state.automaticEnabled { return String(localized: "自动响应已暂停") }
+        switch state.authentication {
+        case .waiting: return String(localized: "等待电脑发起解锁请求")
+        case .paused: return String(localized: "自动响应已暂停")
+        case .readingRSSI, .signing: return String(localized: "正在认证")
+        case .awaitingWindows: return String(localized: "等待电脑确认")
+        case .approved: return String(localized: "请求已获批准")
+        case let .rejected(message): return message
+        }
+    }
+
+    private var authenticationColor: Color {
+        if !state.automaticEnabled { return .secondary }
+        switch state.authentication {
+        case .approved: return .green
+        case .rejected: return .red
+        default: return .secondary
+        }
+    }
+}
+
+private struct StatusPresentation: Equatable {
+    let title: String
+    let symbol: String?
+    let color: Color
+    let immediate: Bool
+}
+
+private struct StatusLine: View {
+    let presentation: StatusPresentation
+    let isHeadline: Bool
+    @State private var displayed: StatusPresentation?
+
+    var body: some View {
+        let visible = displayed ?? presentation
+        Group {
+            if let symbol = visible.symbol {
+                Label(visible.title, systemImage: symbol)
+            } else {
+                Text(visible.title)
+            }
+        }
+        .font(isHeadline ? .headline : .body)
+        .foregroundStyle(visible.color)
+        .textSelection(.enabled)
+        .task(id: presentation) {
+            if displayed != nil && !presentation.immediate {
+                do { try await Task.sleep(for: .milliseconds(300)) }
+                catch { return }
+            }
+            guard !Task.isCancelled else { return }
+            displayed = presentation
+        }
+    }
+}
+
+private struct SettingsView: View {
+    let model: UnlockSetupModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var showingEnrollment = false
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                UnlockSettingsSection(model: model)
+                DistanceSettingsSection(model: model)
+                Section("电脑") {
+                    if let name = model.bluetooth.target?.name {
+                        LabeledContent("已配对电脑", value: name)
+                    }
+                    Button(model.bluetooth.target == nil ? "登记电脑" : "重新登记电脑") {
+                        showingEnrollment = true
+                    }
+                    .disabled(model.bluetooth.enrollment.isActive)
+                    NavigationLink("登记信息与诊断") {
+                        DiagnosticsView(model: model)
+                    }
+                }
+                UsageSection()
+            }
+            .navigationTitle("设置")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { dismiss() }
+                }
+            }
+            .sheet(isPresented: $showingEnrollment) {
+                EnrollmentView(model: model)
+            }
+        }
+    }
+}
+
+private struct UnlockSettingsSection: View {
+    let model: UnlockSetupModel
+
+    var body: some View {
+        Section {
+            Toggle("自动响应 Windows 请求",
+                   isOn: Binding(get: { model.bluetooth.automaticEnabled }, set: model.setAutomaticEnabled))
+            Text("仅响应已登记电脑的请求。断连不会改变此开关；关闭后暂停自动批准。")
+                .font(.footnote).foregroundStyle(.secondary)
+        } header: {
+            Text("解锁")
+        }
+    }
+}
+
+private struct DistanceSettingsSection: View {
+    let model: UnlockSetupModel
+
+    var body: some View {
+        Section {
+            Text("RSSI 批准阈值：\(model.bluetooth.threshold) dBm")
+            Slider(value: Binding(get: { Double(model.bluetooth.threshold) }, set: model.setRSSIThreshold),
+                   in: -100 ... -30, step: 1)
+                .accessibilityLabel("RSSI 批准阈值")
+                .accessibilityValue("\(model.bluetooth.threshold) dBm")
+            if let rssi = model.bluetooth.rssi, let date = model.bluetooth.rssiMeasuredAt {
+                Text("最近认证 RSSI：\(rssi) dBm")
+                Text(date, style: .time).font(.footnote).foregroundStyle(.secondary)
+            } else {
+                Text("尚无本次认证的有效 RSSI 读数").foregroundStyle(.secondary)
+            }
+            Text("每次请求都读取新信号。最近读数不用于下一次批准，也不代表固定距离。")
+                .font(.footnote).foregroundStyle(.secondary)
+        } header: {
+            Text("距离设置")
+        }
+    }
+}
+
+private struct DiagnosticsView: View {
+    let model: UnlockSetupModel
+
+    var body: some View {
+        Form {
+            Section("登记信息") {
+                Text("登记状态：\(model.bluetooth.enrollment.title)")
+                if let id = model.bluetooth.target?.computerID {
+                    Text("ComputerId：\(id.uuidString.lowercased())")
+                        .font(.caption.monospaced()).textSelection(.enabled)
+                }
+                if let fingerprint = model.publicKeyFingerprint {
+                    Text("手机公钥指纹")
+                    Text(fingerprint).font(.caption.monospaced()).textSelection(.enabled)
+                }
+                if let error = model.keyError {
+                    Text("手机密钥不可用：\(error)").foregroundStyle(.red).textSelection(.enabled)
+                }
+            }
+            Section("连接与认证") {
+                Text(model.bluetooth.connection.title)
+                Text(model.bluetooth.authentication.title)
+                if let failure = model.bluetooth.connection.failure {
+                    Text(failure).foregroundStyle(.red).textSelection(.enabled)
+                }
+                if let issue = model.bluetooth.issue, issue != model.bluetooth.connection.failure {
+                    Text(issue).foregroundStyle(.orange).textSelection(.enabled)
+                }
+            }
+            Section("蓝牙诊断（最近 64 条）") {
+                if model.bluetoothDiagnostics.isEmpty {
+                    Text("暂无诊断记录").foregroundStyle(.secondary)
+                } else {
+                    Text(model.bluetoothDiagnostics.joined(separator: "\n"))
+                        .font(.caption.monospaced()).textSelection(.enabled)
+                }
+            }
+        }
+        .navigationTitle("登记信息与诊断")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct UsageSection: View {
+    var body: some View {
+        Section("使用说明") {
+            Text("只解锁已有 Windows 会话。重启后首次登录仍使用原生 PIN／密码，锁屏后按一次 Enter 发起手机认证。")
+            Text("请求获批不代表电脑已完成解锁；App 不显示电脑实时锁定状态。")
+            Text("后台及整夜待机仍待实机验收；强制退出 App 后需重新打开。")
+                .foregroundStyle(.secondary)
         }
     }
 }

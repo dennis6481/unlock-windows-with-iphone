@@ -3,6 +3,7 @@
 @preconcurrency import CoreBluetooth
 import Foundation
 import UIKit
+import OSLog
 
 enum BluetoothUnlockError: LocalizedError {
     case bluetoothUnavailable(CBManagerState)
@@ -51,6 +52,9 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
     var onStatus: ((String) -> Void)?
     var onRSSI: ((Int?) -> Void)?
     var onTarget: ((UUID) -> Void)?
+    var onDiagnostic: ((String) -> Void)?
+    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "iPhoneUnlock", category: "BluetoothUnlock")
+    private var recovery = BluetoothAuthenticationState()
     private lazy var centralManager = CBCentralManager(
         delegate: self, queue: nil,
         options: [CBCentralManagerOptionRestoreIdentifierKey: "com.example.unlock-windows-with-iphone.central"]
@@ -111,6 +115,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
         enrolling = false
         enrollmentSent = false
         wantsConnection = true
+        recovery.resetConnectionRetries()
         connectTargetIfReady()
     }
 
@@ -138,10 +143,13 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
     }
 
     func setForeground(_ active: Bool) {
+        diagnostic("lifecycle foreground=\(active)")
         foreground = active
         displayTask?.cancel()
         displayTask = nil
         guard active else { return }
+        recovery.resetConnectionRetries()
+        if wantsConnection && automaticEnabled && !enrolling { connectTargetIfReady() }
         displayTask = Task { [weak self] in
             while !Task.isCancelled {
                 self?.readDisplayRSSI()
@@ -169,6 +177,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
     }
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        diagnostic("central state=\(central.state.rawValue)")
         guard central.state == .poweredOn else {
             if central.state != .unknown && central.state != .resetting {
                 record(BluetoothUnlockError.bluetoothUnavailable(central.state))
@@ -176,12 +185,15 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
             clearConnectionState()
             return
         }
+        recovery.resetConnectionRetries()
         if enrolling && wantsConnection { central.scanForPeripherals(withServices: [Self.serviceUUID]) }
         else { connectTargetIfReady() }
     }
 
     func centralManager(_ central: CBCentralManager, willRestoreState dict: [String: Any]) {
-        guard let restored = dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral] else { return }
+        diagnostic("restoration received")
+        wantsConnection = automaticEnabled && targetIdentifier != nil
+        let restored = dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral] ?? []
         for item in restored {
             guard automaticEnabled, item.identifier == targetIdentifier else {
                 central.cancelPeripheralConnection(item)
@@ -193,6 +205,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
             if item.state == .connected { prepareConnection(item) }
             else if item.state == .disconnected { central.connect(item) }
         }
+        if peripheral == nil { connectTargetIfReady() }
     }
 
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral,
@@ -210,6 +223,8 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
             central.cancelPeripheralConnection(peripheral)
             return
         }
+        recovery.resetConnectionRetries()
+        diagnostic("connected; preparing subscriptions")
         prepareConnection(peripheral)
     }
 
@@ -217,10 +232,15 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
         guard self.peripheral === peripheral else { return }
         clearConnectionState()
         record(BluetoothUnlockError.connectionFailed(error?.localizedDescription ?? "系统没有提供详细错误。"))
+        if wantsConnection && automaticEnabled && !enrolling && recovery.takeConnectionRetry() {
+            diagnostic("connection failure; one reconnect attempt")
+            connectTargetIfReady()
+        } else { diagnostic("connection failure; waiting for user or Bluetooth state change") }
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         guard self.peripheral === peripheral else { return }
+        diagnostic("disconnected; pending approval discarded")
         clearConnectionState()
         if let error { record(BluetoothUnlockError.connectionFailed(error.localizedDescription)) }
         else { onStatus?("连接已断开") }
@@ -290,6 +310,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
     private func connectionReady() {
         guard let peripheral, resultCharacteristic?.isNotifying == true,
               challengeCharacteristic?.isNotifying == true else { return }
+        diagnostic("subscriptions ready challenge=true result=true")
         if enrolling && !enrollmentSent {
             do {
                 guard let requestCharacteristic else { throw BluetoothUnlockError.characteristicMissing("request") }
@@ -328,6 +349,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
                     finishPending()
                 }
                 onResult?(result.status + (result.detail.map { "：" + $0 } ?? ""))
+                diagnostic("Windows result authenticated=\(result.authenticated) enrollment=\(result.status.hasPrefix("enrollment_"))")
                 if result.authenticated == false && !result.status.hasPrefix("enrollment_") {
                     onStatus?("本次认证失败：" + result.status)
                 }
@@ -341,7 +363,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
             if pendingChallenge != nil { rejectPending(reason: 6) }
             finishPending()
             pendingChallenge = challenge
-            pendingDeadline = ProcessInfo.processInfo.systemUptime + 3
+            pendingDeadline = ProcessInfo.processInfo.systemUptime + BluetoothAuthenticationState.responseLifetime
             lastHandledRequest = challenge.requestID
             guard challenge.version == 1, challenge.audience == "windows-unlock", challenge.nonce.count == 32 else {
                 rejectPending(reason: 6)
@@ -352,12 +374,18 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
                 return
             }
             onStatus?("收到 Windows 请求，正在读取新 RSSI")
+            diagnostic("challenge received foreground=\(foreground); fresh RSSI required")
             requestTimeout = Task { [weak self] in
-                do { try await Task.sleep(for: .seconds(3)) } catch { return }
+                do { try await Task.sleep(for: .seconds(BluetoothAuthenticationState.responseLifetime)) } catch { return }
                 guard self?.pendingChallenge?.requestID == challenge.requestID ||
                     self?.awaitingResultID == challenge.requestID else { return }
                 if self?.pendingChallenge != nil { self?.rejectPending(reason: 3) }
                 else { self?.finishPending() }
+                self?.diagnostic("response deadline reached")
+                if let self, self.rssiReadInFlight, let peripheral = self.peripheral {
+                    self.diagnostic("RSSI callback missing; cancelling stale connection")
+                    self.centralManager.cancelPeripheralConnection(peripheral)
+                }
                 self?.record(BluetoothUnlockError.connectionFailed("读取 RSSI 或批准请求超时。"))
             }
             readChallengeRSSI()
@@ -403,13 +431,16 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
         } else {
             onRSSI?(value)
             if let challenge = pendingChallenge, measuredRequest == challenge.requestID {
-                guard ProcessInfo.processInfo.systemUptime < pendingDeadline else {
+                diagnostic("fresh RSSI=\(value) threshold=\(threshold) remainingMs=\(Int(max(0, pendingDeadline - ProcessInfo.processInfo.systemUptime) * 1000))")
+                let decision = BluetoothAuthenticationState.signalDecision(rssi: value, threshold: threshold,
+                    now: ProcessInfo.processInfo.systemUptime, deadline: pendingDeadline)
+                guard decision != .expired else {
                     rejectPending(reason: 3)
                     record(BluetoothUnlockError.connectionFailed("RSSI 响应已超时。"))
                     return
                 }
                 guard automaticEnabled else { rejectPending(reason: 2); return }
-                guard value >= threshold else {
+                guard decision == .approve else {
                     rejectPending(reason: 1)
                     onStatus?("信号不足：\(value) dBm，阈值 \(threshold) dBm")
                     return
@@ -425,7 +456,10 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
                     peripheral.writeValue(data, for: assertionCharacteristic, type: .withResponse)
                     awaitingResultID = challenge.requestID
                     pendingChallenge = nil
+                    requestTimeout?.cancel()
+                    requestTimeout = nil
                     onStatus?("RSSI 达标，签名已发送，等待 Windows 结果")
+                    diagnostic("assertion sent; awaiting result")
                 } catch { rejectPending(reason: 6); record(error) }
             }
         }
@@ -449,12 +483,16 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
     func peripheral(_ peripheral: CBPeripheral, didModifyServices invalidatedServices: [CBService]) {
         guard self.peripheral === peripheral,
               invalidatedServices.contains(where: { $0.uuid == Self.serviceUUID }) else { return }
-        clearCharacteristics()
-        peripheral.discoverServices([Self.serviceUUID])
+        diagnostic("GATT service invalidated; reconnecting to discard stale RSSI and subscriptions")
+        rejectPending(reason: 4)
+        clearConnectionState()
+        self.peripheral = peripheral
+        centralManager.cancelPeripheralConnection(peripheral)
     }
 
     private func rejectPending(reason: UInt8) {
         guard let challenge = pendingChallenge else { return }
+        diagnostic("approval rejected reason=\(reason)")
         if let peripheral, peripheral.state == .connected, let requestCharacteristic {
             var data = Data([0x03])
             data.append(Data(challenge.requestID.uuidString.lowercased().utf8))
@@ -472,7 +510,16 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
         requestTimeout = nil
     }
 
-    private func record(_ error: Error) { onError?(error.localizedDescription) }
+    private func diagnostic(_ event: String) {
+        let text = "\(Int(ProcessInfo.processInfo.systemUptime))s \(event)"
+        logger.info("\(text, privacy: .public)")
+        onDiagnostic?(text)
+    }
+
+    private func record(_ error: Error) {
+        diagnostic("Bluetooth operation failed")
+        onError?(error.localizedDescription)
+    }
 
     private func clearCharacteristics() {
         finishPending()

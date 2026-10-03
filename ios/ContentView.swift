@@ -36,6 +36,12 @@ struct ContentView: View {
                         targetIdentifier: model.targetIdentifier
                     )
                     ScopeSection()
+                    DisclosureGroup("蓝牙诊断（最近 64 条）") {
+                        Text(model.bluetoothDiagnostics.joined(separator: "\n"))
+                            .font(.caption.monospaced())
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
                 .padding()
             }

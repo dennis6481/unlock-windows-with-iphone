@@ -31,7 +31,7 @@ Windows sends `{"authenticated":false,"status":"transport_ready_required","reque
 
 Windows retains the authoritative original thirty-second deadline. Readiness, rediscovery and reconnects do not extend it or create a request. Service invalidation, cancellation, enrollment and request completion clear preparation state. The existing three-second fresh RSSI/signing window and assertion format remain unchanged. No legacy protocol path is added.
 
-## Stable target and migration
+## Stable target and registration
 
 Windows already provides the following contract (introduced in `cd11511`):
 
@@ -44,9 +44,9 @@ Windows already provides the following contract (introduced in `cd11511`):
 
 The iPhone scans by service, connects to candidates, and reads ComputerId before signing. One registered ComputerId is stored; peripheral UUID is only a routing cache/preference and the name is only display text. A changed peripheral UUID does not require registration again. A same-name but different ComputerId is not accepted. ComputerId is not a cryptographic server identity and does not replace Windows signature verification.
 
-The earlier ComputerId migration requires one Windows-confirmed registration for old UUID-only iPhone records; this readiness/recovery revision requires none for valid ComputerId records. It preserves the existing Secure Enclave key. Only `enrollment_saved` or `enrollment_already_registered`, with a valid ComputerId and no service reload failure, offers a replacement target. Cancellation, rejection, errors and `saved_reload_failed` preserve the previous valid target. If Windows has lost its persistent ComputerId, explicit registration is required; no name-based fallback is used.
+Registration preserves the existing Secure Enclave key. Only `enrollment_saved` or `enrollment_already_registered`, with a valid ComputerId and no service reload failure, offers a replacement target. Cancellation, rejection, errors and `saved_reload_failed` preserve the previous valid target. Unknown result codes never match an enrollment outcome, including when their detail is `saved_reload_failed`. If Windows has lost its persistent ComputerId, explicit registration is required; no name-based fallback is used.
 
-The new iPhone record is `registeredWindowsComputer` in UserDefaults: ComputerId, display name and last peripheral UUID. The old `unlockTargetPeripheral` key is removed only after a valid record is saved.
+The sole iPhone target record is `registeredWindowsComputer` in UserDefaults: ComputerId, display name and last peripheral UUID. The undeployed version has no historical target-record migration or old-record compatibility path.
 
 ## UI and automatic-response preference
 
@@ -63,7 +63,7 @@ The new iPhone record is `registeredWindowsComputer` in UserDefaults: ComputerId
 - Removed constant Connect/Stop buttons and manual key preparation, local signature testing and raw public-key clipboard actions.
 - Registration uses its own sheet: Start registration, Cancel registration while active, Finish afterwards. The Windows fingerprint must still be confirmed locally.
 - Retry connection appears on failure; it does not re-enroll or create Windows approval.
-- Automatic response defaults to on. Preference version 2 silently turns it on once on upgrade; subsequent explicit user changes are preserved. Disconnect, missing target, Bluetooth failure and enrollment failure do not change or disable the toggle.
+- Automatic response reads the saved `automaticUnlockEnabled` switch; an absent setting uses the view-state default (on), and a saved `false` stays off. Reading the preference writes neither the setting nor a migration marker. Disconnect, missing target, Bluetooth failure and enrollment failure do not change or disable the toggle. RSSI settings use the same threshold default as the view state.
 - Recent diagnostics retain at most 64 entries with UTC, monotonic uptime, GATT generation, per-route attempt, peripheral UUID, native peripheral state and requestID, plus phases, subscription flags, RSSI, native errors, readiness and recovery events. Native peripheral identifiers are routing diagnostics, not trusted identity. No passwords, keys, candidate public-key data, nonces or signature bodies are logged.
 
 ## UI visual acceptance (pending)
@@ -104,7 +104,9 @@ The tests cover a restored waiter alongside a fresh connected route, per-device 
 
 For this recovery revision, additionally check: an old restored `.connecting` route does not delay a new advertised UUID; failed cached routes do not loop without a new discovery/foreground recovery/explicit Retry; cancellation and a late native connect callback do not cancel the newly ready route; automatic off, Bluetooth off/on, enrollment cancellation, and enrollment on an already-ready connection retain their behavior. Allow GATT initialization to exceed ten seconds while suspended, then resume with identity/subscription callbacks: it must fail that initialization and use only its remaining retry, never accept expired readiness. Pending-connection waiting has no ten-second task. Capture the new peripheral UUID/native-state/attempt fields to determine why the earlier native request stalled.
 
-Capture both sides' UTC and monotonic timing, generation and requestID: Windows publication target/operation/status/errors, readiness probes/receipts and challenge delivery; iOS scan round, service absence/change, subscriptions and authentication result. Preserve raw errors to investigate the still-unconfirmed abort cause. Full pairing cancellation and Windows failure acceptance remain pending. No target-record migration or new registration is required for this revision's existing ComputerId records; the earlier UUID-only migration requirement still applies.
+Capture both sides' UTC and monotonic timing, generation and requestID: Windows publication target/operation/status/errors, readiness probes/receipts and challenge delivery; iOS scan round, service absence/change, subscriptions and authentication result. Preserve raw errors to investigate the still-unconfirmed abort cause. Full pairing cancellation and Windows failure acceptance remain pending.
+
+2026-10-04 source cleanup removes preference/target migrations, unused challenge construction/encoding, public-key hexadecimal formatting and the unproduced local-verification error. Enrollment codes have one switch definition. Updated test sources cover first-read defaults, a preserved off setting, repeated reads without persistence and unknown enrollment results. Only static inspection was performed; Swift tests and device behavior remain unverified.
 
 ## References
 

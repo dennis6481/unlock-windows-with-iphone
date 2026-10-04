@@ -133,11 +133,7 @@ struct BluetoothAuthenticationState {
     }
 
     static func automaticPreference(_ defaults: UserDefaults) -> Bool {
-        if defaults.integer(forKey: "automaticUnlockPreferenceVersion") < 2 {
-            defaults.set(true, forKey: "automaticUnlockEnabled")
-            defaults.set(2, forKey: "automaticUnlockPreferenceVersion")
-        }
-        return defaults.bool(forKey: "automaticUnlockEnabled")
+        defaults.object(forKey: "automaticUnlockEnabled") as? Bool ?? BluetoothViewState().automaticEnabled
     }
 
     static func computerID(from data: Data) -> UUID? {
@@ -148,23 +144,19 @@ struct BluetoothAuthenticationState {
     }
 
     static func enrollmentOutcome(code: String, detail: String?) -> ComputerEnrollmentState? {
-        let knownCodes = ["enrollment_saved", "enrollment_already_registered", "enrollment_cancelled",
-                          "enrollment_rejected", "enrollment_busy", "enrollment_expired",
-                          "enrollment_error", "enrollment_removed"]
-        guard knownCodes.contains(code) else { return nil }
-        if detail == "saved_reload_failed" {
-            return .failed("Windows 登记已修改，但服务重新加载失败；请在 Windows 检查后重试")
-        }
+        let outcome: ComputerEnrollmentState
         switch code {
-        case "enrollment_saved", "enrollment_already_registered": return .succeeded
-        case "enrollment_cancelled": return .cancelled
-        case "enrollment_rejected": return .rejected("Windows 拒绝登记，请先开启托盘配对窗口")
-        case "enrollment_busy": return .rejected("Windows 正在处理另一份登记")
-        case "enrollment_expired": return .failed("Windows 配对窗口已过期")
-        case "enrollment_error": return .failed("Windows 登记失败")
-        case "enrollment_removed": return .failed("Windows 已移除登记，请重新登记")
+        case "enrollment_saved", "enrollment_already_registered": outcome = .succeeded
+        case "enrollment_cancelled": outcome = .cancelled
+        case "enrollment_rejected": outcome = .rejected("Windows 拒绝登记，请先开启托盘配对窗口")
+        case "enrollment_busy": outcome = .rejected("Windows 正在处理另一份登记")
+        case "enrollment_expired": outcome = .failed("Windows 配对窗口已过期")
+        case "enrollment_error": outcome = .failed("Windows 登记失败")
+        case "enrollment_removed": outcome = .failed("Windows 已移除登记，请重新登记")
         default: return nil
         }
+        return detail == "saved_reload_failed"
+            ? .failed("Windows 登记已修改，但服务重新加载失败；请在 Windows 检查后重试") : outcome
     }
 
     static func acceptsResult(requestID: UUID?, pending: UUID?, awaiting: UUID?) -> Bool {

@@ -7,17 +7,6 @@ struct UnlockChallenge: Codable, Equatable, Sendable {
     let nonce: Data
     let issuedAtMilliseconds: Int64
     let audience: String
-
-    static func new(audience: String, now: Date = Date()) -> UnlockChallenge {
-        let nonce = Data((0..<32).map { _ in UInt8.random(in: UInt8.min...UInt8.max) })
-        return UnlockChallenge(
-            version: 1,
-            requestID: UUID(),
-            nonce: nonce,
-            issuedAtMilliseconds: Int64(now.timeIntervalSince1970 * 1_000),
-            audience: audience
-        )
-    }
 }
 
 struct UnlockAssertion: Codable, Equatable, Sendable {
@@ -30,16 +19,6 @@ struct UnlockAssertion: Codable, Equatable, Sendable {
 
 enum UnlockProtocol {
     static let signatureContext = Data("unlock-windows-with-iphone/v1".utf8)
-
-    static func encode(challenge: UnlockChallenge) throws -> Data {
-        do {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.sortedKeys]
-            return try encoder.encode(challenge)
-        } catch {
-            throw UnlockError.protocolEncodingFailed("编码 challenge 失败：\(error.localizedDescription)")
-        }
-    }
 
     static func decodeChallenge(from data: Data) throws -> UnlockChallenge {
         do {

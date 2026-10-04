@@ -41,12 +41,6 @@ final class SecureEnclaveKeyStore {
         return privateKey.publicKey.x963Representation
     }
 
-    func publicKeyHexRepresentation() throws -> String {
-        try publicKeyRawRepresentation()
-            .map { String(format: "%02x", $0) }
-            .joined()
-    }
-
     func sign(data: Data) throws -> Data {
         let privateKey = try loadOrCreateKey()
 

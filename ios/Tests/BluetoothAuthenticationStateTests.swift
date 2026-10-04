@@ -170,13 +170,12 @@ final class BluetoothAuthenticationStateTests: XCTestCase {
         XCTAssertNil(BluetoothAuthenticationState.enrollmentOutcome(code: "unknown", detail: "saved_reload_failed"))
     }
 
-    func testAutomaticPreferenceMigratesOnceAndSurvivesConnectionFailures() {
+    func testAutomaticPreferencePreservesChoiceAcrossConnectionFailures() {
         let name = "BluetoothAuthenticationPolicyTests.\(UUID())"
         let defaults = UserDefaults(suiteName: name)!
         defer { defaults.removePersistentDomain(forName: name) }
         defaults.set(false, forKey: "automaticUnlockEnabled")
-        XCTAssertTrue(BluetoothAuthenticationState.automaticPreference(defaults))
-        defaults.set(false, forKey: "automaticUnlockEnabled")
+        XCTAssertFalse(BluetoothAuthenticationState.automaticPreference(defaults))
         XCTAssertFalse(BluetoothAuthenticationState.automaticPreference(defaults))
         var state = readyState()
         state.invalidateServices(now: 4)
@@ -185,6 +184,7 @@ final class BluetoothAuthenticationStateTests: XCTestCase {
         XCTAssertFalse(BluetoothAuthenticationState.automaticPreference(defaults))
         defaults.set(true, forKey: "automaticUnlockEnabled")
         XCTAssertTrue(BluetoothAuthenticationState.automaticPreference(defaults))
+        XCTAssertEqual(defaults.persistentDomain(forName: name)?.keys.sorted(), ["automaticUnlockEnabled"])
     }
 
     func testNewInstallDefaultsToAutomaticResponse() {
@@ -192,7 +192,9 @@ final class BluetoothAuthenticationStateTests: XCTestCase {
         let defaults = UserDefaults(suiteName: name)!
         defer { defaults.removePersistentDomain(forName: name) }
         XCTAssertTrue(BluetoothAuthenticationState.automaticPreference(defaults))
-        XCTAssertEqual(defaults.integer(forKey: "automaticUnlockPreferenceVersion"), 2)
+        XCTAssertTrue(BluetoothAuthenticationState.automaticPreference(defaults))
+        XCTAssertNil(defaults.object(forKey: "automaticUnlockEnabled"))
+        XCTAssertTrue(defaults.persistentDomain(forName: name)?.isEmpty ?? true)
     }
 
     func testOldOrUnassociatedAuthenticationResultsCannotMatch() {

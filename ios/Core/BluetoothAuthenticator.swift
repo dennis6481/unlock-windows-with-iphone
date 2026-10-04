@@ -70,12 +70,10 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
         diagnosticClock.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         diagnosticClock.timeZone = TimeZone(secondsFromGMT: 0)
         viewState.automaticEnabled = BluetoothAuthenticationState.automaticPreference(defaults)
-        viewState.threshold = defaults.object(forKey: "unlockRSSIThreshold") as? Int ?? -60
+        viewState.threshold = defaults.object(forKey: "unlockRSSIThreshold") as? Int ?? viewState.threshold
         if let data = defaults.data(forKey: "registeredWindowsComputer") {
             do { viewState.target = try JSONDecoder().decode(RegisteredComputer.self, from: data) }
             catch { viewState.issue = "保存的电脑信息无法读取，请明确重新登记电脑" }
-        } else if defaults.string(forKey: "unlockTargetPeripheral") != nil {
-            viewState.issue = "旧版只保存蓝牙 UUID，请重新登记一次以启用稳定电脑识别；手机密钥不变"
         }
         viewState.authentication = viewState.automaticEnabled ? .waiting : .paused
     }
@@ -700,7 +698,6 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
         do {
             let data = try JSONEncoder().encode(target)
             defaults.set(data, forKey: "registeredWindowsComputer")
-            defaults.removeObject(forKey: "unlockTargetPeripheral")
             viewState.target = target
         } catch {
             viewState.issue = "无法保存目标电脑信息：\(error.localizedDescription)"

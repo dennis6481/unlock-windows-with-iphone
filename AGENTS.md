@@ -28,6 +28,19 @@
 
 ## Implementation Rules
 
+- Before adding a variable, constant, function, or type, search for an existing
+  implementation or source of truth within the same responsibility. MUST reuse
+  a suitable existing source instead of introducing a parallel definition.
+- Each business fact, state contract, and decision rule MUST have one
+  authoritative definition. Cross-language consumers MUST read that definition
+  or be generated from it; MUST NOT maintain handwritten copies independently.
+- Before updating an installer, installation script, persisted format, or other
+  implementation that replaces an existing path, ask the user whether older
+  versions must remain compatible. Reuse an explicit answer already given for
+  the current task; do not ask again.
+- When older-version compatibility is not required, remove the superseded code,
+  migration branches, old contracts, and obsolete tests and documentation as
+  part of the implementation. MUST NOT retain historical paths for later cleanup.
 - MUST fix the root cause when it is identifiable.
 - MUST NOT add cleanup workarounds to compensate for an incorrect
   installation state when that state can be prevented at installation time.

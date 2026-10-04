@@ -13,7 +13,7 @@ final class BluetoothAuthenticationStateTests: XCTestCase {
         state.connected(now: now)
         state.discoveredServices()
         state.discoveredCharacteristics()
-        XCTAssertTrue(state.verifyComputer(computer, expected: computer, enrolling: false))
+        XCTAssertTrue(state.verifyComputer(computer, expected: computer, enrolling: false, now: now))
         XCTAssertTrue(state.subscriptions(challenge: true, result: true, now: now + 1))
         return state
     }
@@ -35,14 +35,13 @@ final class BluetoothAuthenticationStateTests: XCTestCase {
         XCTAssertEqual(state.generation, generation + 1)
         XCTAssertNil(state.verifiedComputerID)
         XCTAssertFalse(state.acceptsAuthentication(target: computer, enabled: true, enrolling: false))
-        XCTAssertEqual(state.remainingConnectionRetries, 1)
         XCTAssertFalse(state.invalidateServices(now: 5))
         XCTAssertEqual(state.completeDiscoveryStep(now: 6), .rediscover)
         XCTAssertEqual(state.completeDiscoveryStep(now: 7), .proceed)
         XCTAssertEqual(state.deadline, 14)
         state.discoveredServices()
         state.discoveredCharacteristics()
-        XCTAssertTrue(state.verifyComputer(computer, expected: computer, enrolling: false))
+        XCTAssertTrue(state.verifyComputer(computer, expected: computer, enrolling: false, now: 7))
         XCTAssertFalse(state.subscriptions(challenge: true, result: false, now: 8))
         XCTAssertTrue(state.subscriptions(challenge: true, result: true, now: 9))
     }
@@ -69,20 +68,16 @@ final class BluetoothAuthenticationStateTests: XCTestCase {
         XCTAssertEqual(state.completeDiscoveryStep(now: 20), .expired)
     }
 
-    func testConnectedButNotReadyDoesNotResetRetryBudget() {
+    func testInitializationDeadlineIsNotExtendedByDiscoveryOrOneSubscription() {
         var state = BluetoothAuthenticationState()
-        XCTAssertTrue(state.takeConnectionRetry())
-        state.connecting(now: 0)
         state.connected(now: 1)
-        XCTAssertEqual(state.remainingConnectionRetries, 0)
-        XCTAssertFalse(state.takeConnectionRetry())
         state.discoveredServices()
         state.discoveredCharacteristics()
-        XCTAssertTrue(state.verifyComputer(computer, expected: computer, enrolling: false))
-        XCTAssertFalse(state.subscriptions(challenge: false, result: true, now: 2))
-        XCTAssertEqual(state.remainingConnectionRetries, 0)
-        XCTAssertTrue(state.subscriptions(challenge: true, result: true, now: 3))
-        XCTAssertEqual(state.remainingConnectionRetries, 1)
+        XCTAssertTrue(state.verifyComputer(computer, expected: computer, enrolling: false, now: 2))
+        XCTAssertFalse(state.subscriptions(challenge: false, result: true, now: 3))
+        XCTAssertEqual(state.deadline, 11)
+        XCTAssertTrue(state.initializationExpired(now: 11))
+        XCTAssertFalse(state.subscriptions(challenge: true, result: true, now: 11))
     }
 
     func testIdentityAndBothSubscriptionsRequired() {
@@ -90,9 +85,9 @@ final class BluetoothAuthenticationStateTests: XCTestCase {
         state.connected(now: 0)
         state.discoveredServices()
         state.discoveredCharacteristics()
-        XCTAssertFalse(state.verifyComputer(otherComputer, expected: computer, enrolling: false))
+        XCTAssertFalse(state.verifyComputer(otherComputer, expected: computer, enrolling: false, now: 1))
         XCTAssertFalse(state.subscriptions(challenge: true, result: true, now: 1))
-        XCTAssertTrue(state.verifyComputer(computer, expected: computer, enrolling: false))
+        XCTAssertTrue(state.verifyComputer(computer, expected: computer, enrolling: false, now: 1))
         XCTAssertFalse(state.subscriptions(challenge: true, result: false, now: 2))
         XCTAssertFalse(state.acceptsAuthentication(target: computer, enabled: true, enrolling: false))
         XCTAssertTrue(state.subscriptions(challenge: true, result: true, now: 3))
@@ -107,7 +102,7 @@ final class BluetoothAuthenticationStateTests: XCTestCase {
         state.connected(now: 0)
         state.discoveredServices()
         state.discoveredCharacteristics()
-        XCTAssertTrue(state.verifyComputer(computer, expected: computer, enrolling: false))
+        XCTAssertTrue(state.verifyComputer(computer, expected: computer, enrolling: false, now: 1))
         XCTAssertFalse(state.subscriptions(challenge: true, result: true, now: 10))
     }
 
@@ -121,7 +116,7 @@ final class BluetoothAuthenticationStateTests: XCTestCase {
         XCTAssertEqual(state.rssiRead, old)
         state.discoveredServices()
         state.discoveredCharacteristics()
-        XCTAssertTrue(state.verifyComputer(computer, expected: computer, enrolling: false))
+        XCTAssertTrue(state.verifyComputer(computer, expected: computer, enrolling: false, now: 2.2))
         XCTAssertTrue(state.subscriptions(challenge: true, result: true, now: 2.2))
         XCTAssertNil(state.beginRSSI(requestID: newRequest, now: 2.3))
         XCTAssertNil(state.finishRSSI(now: 2.4, requestID: newRequest))
@@ -151,7 +146,7 @@ final class BluetoothAuthenticationStateTests: XCTestCase {
         state.connected(now: 0)
         state.discoveredServices()
         state.discoveredCharacteristics()
-        XCTAssertTrue(state.verifyComputer(changed.computerID, expected: old.computerID, enrolling: false))
+        XCTAssertTrue(state.verifyComputer(changed.computerID, expected: old.computerID, enrolling: false, now: 1))
         XCTAssertEqual(try JSONDecoder().decode(RegisteredComputer.self,
             from: JSONEncoder().encode(changed)), changed)
         XCTAssertEqual(BluetoothAuthenticationState.computerID(from: Data(computer.uuidString.lowercased().utf8)), computer)
@@ -243,148 +238,88 @@ final class BluetoothAuthenticationStateTests: XCTestCase {
         XCTAssertEqual(PhoneAuthenticationState.approved.title, "Windows 已批准，等待电脑完成解锁")
     }
 
-    func testDesktopServiceAbsenceEntersPassiveWaitWithoutUsingRetry() {
+    func testServiceAbsenceClearsQualificationAndRequiresAdvertisement() {
         var state = readyState()
         let generation = state.generation
         state.serviceMissing()
         XCTAssertEqual(state.phase, .waitingComputer)
         XCTAssertTrue(state.requiresAdvertisement)
-        XCTAssertTrue(state.isPassiveWait)
         XCTAssertNil(state.deadline)
         XCTAssertNil(state.verifiedComputerID)
         XCTAssertFalse(state.challengeSubscribed)
         XCTAssertFalse(state.resultSubscribed)
         XCTAssertGreaterThan(state.generation, generation)
-        XCTAssertEqual(state.remainingConnectionRetries, 1)
         XCTAssertFalse(state.acceptsAuthentication(target: computer, enabled: true, enrolling: false))
     }
 
-    func testRememberedConnectionCanWaitOvernightButCannotAuthenticate() {
+    func testWaitingOvernightDoesNotStartTheInitializationDeadline() {
         var state = BluetoothAuthenticationState()
-        XCTAssertTrue(state.takeConnectionRetry())
-        state.connecting(now: 0, rememberedTarget: true)
+        state.waitForComputer()
         XCTAssertNil(state.deadline)
-        XCTAssertTrue(state.isPassiveWait)
-        XCTAssertEqual(state.remainingConnectionRetries, 0)
+        XCTAssertFalse(state.initializationExpired(now: 86_400))
         XCTAssertFalse(state.acceptsAuthentication(target: computer, enabled: true, enrolling: false))
         state.connected(now: 86_400)
         XCTAssertEqual(state.deadline, 86_410)
-        XCTAssertFalse(state.isPassiveWait)
-        XCTAssertEqual(state.remainingConnectionRetries, 0)
+        XCTAssertFalse(state.initializationExpired(now: 86_409.999))
+        XCTAssertTrue(state.initializationExpired(now: 86_410))
         XCTAssertEqual(state.completeDiscoveryStep(now: 86_410), .expired)
     }
 
-    func testUnknownCandidateStillHasTenSecondConnectionWindow() {
+    func testSuspendedInitializationExpiresBeforeLateIdentityOrPreparation() {
         var state = BluetoothAuthenticationState()
-        state.connecting(now: 8)
-        XCTAssertEqual(state.deadline, 18)
-        XCTAssertFalse(state.isPassiveWait)
-        XCTAssertEqual(state.completeDiscoveryStep(now: 18), .expired)
+        state.connected(now: 0)
+        let generation = state.generation
+        state.discoveredServices()
+        state.discoveredCharacteristics()
+        XCTAssertTrue(state.initializationExpired(now: 61))
+        XCTAssertFalse(state.verifyComputer(computer, expected: computer, enrolling: false, now: 61))
+        XCTAssertFalse(state.cacheReadyProbe(UUID(), generation: generation, now: 61))
+        XCTAssertFalse(state.subscriptions(challenge: true, result: true, now: 61))
+        XCTAssertFalse(state.acceptsAuthentication(target: computer, enabled: true, enrolling: false))
     }
 
-    func testRetryExhaustionWaitsForAnEventInsteadOfRearmingItself() {
+    func testPreparationCannotFinishSuspendedSubscriptionInitialization() {
+        var state = BluetoothAuthenticationState()
+        let request = UUID()
+        state.connected(now: 0)
+        state.discoveredServices()
+        state.discoveredCharacteristics()
+        XCTAssertTrue(state.verifyComputer(computer, expected: computer, enrolling: false, now: 1))
+        XCTAssertTrue(state.cacheReadyProbe(request, generation: state.generation, now: 2))
+        XCTAssertFalse(state.subscriptions(challenge: true, result: false, now: 3))
+        XCTAssertTrue(state.initializationExpired(now: 61))
+        XCTAssertFalse(state.subscriptions(challenge: true, result: true, now: 61))
+        XCTAssertNil(state.beginReadyAcknowledgment(now: 61))
+        XCTAssertFalse(state.acceptsPreparedChallenge(request, now: 61))
+    }
+
+    func testFailedInitializationClearsDeadlineAndAuthorization() {
         var state = readyState()
-        XCTAssertTrue(state.takeConnectionRetry())
         state.failed()
-        XCTAssertTrue(state.isPassiveWait)
         XCTAssertNil(state.deadline)
-        XCTAssertFalse(state.takeConnectionRetry())
         XCTAssertFalse(state.acceptsAuthentication(target: computer, enabled: true, enrolling: false))
-        XCTAssertTrue(state.invalidateServices(now: 100, discoveryPending: false))
-        XCTAssertEqual(state.remainingConnectionRetries, 1)
+        state.connected(now: 100)
         XCTAssertEqual(state.deadline, 110)
-        XCTAssertFalse(state.isPassiveWait)
         XCTAssertFalse(state.invalidateServices(now: 109, discoveryPending: true))
         XCTAssertEqual(state.deadline, 110)
+        XCTAssertFalse(state.initializationExpired(now: 109))
+        XCTAssertTrue(state.initializationExpired(now: 110))
         XCTAssertEqual(state.completeDiscoveryStep(now: 110), .expired)
     }
 
     func testServiceReturnsAfterLongWaitAndNeedsFreshIdentityAndSubscriptions() {
         var state = readyState()
         state.serviceMissing()
-        XCTAssertTrue(state.invalidateServices(now: 20_000, discoveryPending: false))
+        state.disconnected()
+        state.connected(now: 20_000)
         XCTAssertEqual(state.deadline, 20_010)
         XCTAssertFalse(state.subscriptions(challenge: true, result: true, now: 20_001))
         state.discoveredServices()
         state.discoveredCharacteristics()
-        XCTAssertFalse(state.verifyComputer(otherComputer, expected: computer, enrolling: false))
-        XCTAssertTrue(state.verifyComputer(computer, expected: computer, enrolling: false))
+        XCTAssertFalse(state.verifyComputer(otherComputer, expected: computer, enrolling: false, now: 20_001))
+        XCTAssertTrue(state.verifyComputer(computer, expected: computer, enrolling: false, now: 20_001))
         XCTAssertFalse(state.subscriptions(challenge: true, result: false, now: 20_002))
         XCTAssertTrue(state.subscriptions(challenge: true, result: true, now: 20_003))
-    }
-
-    func testLateDiscoveryMustDrainBeforeRecoveryDiscoveryStarts() {
-        var state = BluetoothAuthenticationState()
-        state.connected(now: 0)
-        state.discoveredServices()
-        state.failed()
-        XCTAssertFalse(state.invalidateServices(now: 30, discoveryPending: true))
-        XCTAssertEqual(state.deadline, 40)
-        XCTAssertEqual(state.completeDiscoveryStep(now: 31), .rediscover)
-        XCTAssertEqual(state.phase, .services)
-        XCTAssertEqual(state.completeDiscoveryStep(now: 32), .proceed)
-    }
-
-    func testSamePeripheralIsDeduplicatedOnlyWithinItsScanRound() {
-        var state = BluetoothAuthenticationState()
-        let peripheral = UUID()
-        state.beginScanRound()
-        let round = state.scanRound
-        XCTAssertTrue(state.discoverCandidate(peripheral))
-        XCTAssertFalse(state.discoverCandidate(peripheral))
-        state.waitForComputer()
-        XCTAssertFalse(state.discoverCandidate(peripheral))
-        state.beginScanRound()
-        XCTAssertEqual(state.scanRound, round + 1)
-        XCTAssertTrue(state.discoverCandidate(peripheral))
-    }
-
-    func testServiceAdvertisementCanRearmWaitingOnceWithinAScanRound() {
-        var state = readyState()
-        let peripheral = UUID()
-        state.serviceMissing()
-        state.beginScanRound()
-        XCTAssertTrue(state.discoverCandidate(peripheral))
-        XCTAssertTrue(state.invalidateServices(now: 100, discoveryPending: false))
-        XCTAssertEqual(state.deadline, 110)
-        state.serviceMissing()
-        XCTAssertFalse(state.discoverCandidate(peripheral))
-        XCTAssertNil(state.deadline)
-        XCTAssertTrue(state.isPassiveWait)
-        XCTAssertTrue(state.invalidateServices(now: 200, discoveryPending: false))
-        XCTAssertEqual(state.deadline, 210)
-    }
-
-    func testNewPeripheralCanBeDiscoveredWhileOldTargetConnectionIsPending() {
-        var state = BluetoothAuthenticationState()
-        let oldPeripheral = UUID()
-        let newPeripheral = UUID()
-        state.beginScanRound()
-        XCTAssertTrue(state.discoverCandidate(oldPeripheral))
-        state.connecting(now: 0, rememberedTarget: true)
-        XCTAssertTrue(state.isPassiveWait)
-        XCTAssertTrue(state.discoverCandidate(newPeripheral))
-        XCTAssertFalse(state.discoverCandidate(newPeripheral))
-        state.disconnected()
-        state.connecting(now: 20)
-        state.connected(now: 21)
-        state.discoveredServices()
-        state.discoveredCharacteristics()
-        XCTAssertFalse(state.verifyComputer(otherComputer, expected: computer, enrolling: false))
-        XCTAssertTrue(state.verifyComputer(computer, expected: computer, enrolling: false))
-    }
-
-    func testCandidateHistoryIsBoundedAndClearedAtANewScanRound() {
-        var state = BluetoothAuthenticationState()
-        state.beginScanRound()
-        for _ in 0 ..< 64 { XCTAssertTrue(state.discoverCandidate(UUID())) }
-        let next = UUID()
-        XCTAssertTrue(state.discoverCandidate(next))
-        XCTAssertEqual(state.candidateHistoryCount, 64)
-        XCTAssertFalse(state.discoverCandidate(next))
-        state.beginScanRound()
-        XCTAssertEqual(state.candidateHistoryCount, 0)
-        XCTAssertTrue(state.discoverCandidate(next))
     }
 
     func testWaitingInvalidatesOldRSSIAndWriteGeneration() {
@@ -410,7 +345,6 @@ final class BluetoothAuthenticationStateTests: XCTestCase {
         var state = readyState()
         state.serviceMissing()
         state.waitForComputer()
-        state.connecting(now: 100, rememberedTarget: true)
         XCTAssertFalse(BluetoothAuthenticationState.automaticPreference(defaults))
         XCTAssertFalse(state.acceptsAuthentication(target: computer, enabled: false, enrolling: false))
     }
@@ -432,12 +366,11 @@ final class BluetoothAuthenticationStateTests: XCTestCase {
         state.disconnected()
         state.waitForComputer()
         XCTAssertTrue(state.requiresAdvertisement)
-        state.connecting(now: 100, rememberedTarget: !state.requiresAdvertisement)
-        XCTAssertEqual(state.deadline, 110)
+        XCTAssertNil(state.deadline)
         state.connected(now: 101)
         state.discoveredServices()
         state.discoveredCharacteristics()
-        XCTAssertTrue(state.verifyComputer(computer, expected: computer, enrolling: false))
+        XCTAssertTrue(state.verifyComputer(computer, expected: computer, enrolling: false, now: 101))
         XCTAssertFalse(state.subscriptions(challenge: true, result: false, now: 102))
         XCTAssertTrue(state.requiresAdvertisement)
         XCTAssertTrue(state.subscriptions(challenge: true, result: true, now: 103))
@@ -453,7 +386,7 @@ final class BluetoothAuthenticationStateTests: XCTestCase {
         XCTAssertFalse(state.acceptsPreparedChallenge(request, now: 1))
         state.discoveredServices()
         state.discoveredCharacteristics()
-        XCTAssertTrue(state.verifyComputer(computer, expected: computer, enrolling: false))
+        XCTAssertTrue(state.verifyComputer(computer, expected: computer, enrolling: false, now: 1))
         XCTAssertFalse(state.subscriptions(challenge: true, result: false, now: 2))
         XCTAssertNil(state.beginReadyAcknowledgment(now: 2))
         XCTAssertTrue(state.subscriptions(challenge: true, result: true, now: 3))

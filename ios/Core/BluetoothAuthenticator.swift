@@ -21,6 +21,9 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "iPhoneUnlock", category: "BluetoothUnlock")
     private let diagnosticClock = ISO8601DateFormatter()
     private var policy = BluetoothAuthenticationState()
+    private var recovery = BluetoothConnectionRecovery()
+    private var connectionPeripherals: [UUID: CBPeripheral] = [:]
+    private var deferredAdvertisements: [UUID: CBPeripheral] = [:]
     private lazy var centralManager = CBCentralManager(delegate: self, queue: nil,
         options: [CBCentralManagerOptionRestoreIdentifierKey: "com.example.unlock-windows-with-iphone.central"])
     private var peripheral: CBPeripheral?
@@ -45,8 +48,6 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
     }
     private var writes: [ObjectIdentifier: [WriteContext]] = [:]
     private var foreground = false
-    private var candidates: [CBPeripheral] = []
-    private var retryCandidate: CBPeripheral?
     private var pendingChallenge: UnlockChallenge?
     private var pendingDeadline = 0.0
     private var awaitingResultID: UUID?
@@ -108,11 +109,12 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
             publish()
             return
         }
-        policy.resetConnectionRetries()
         policy.allowRememberedConnection()
         rememberedTargetRejected = false
+        if let target = viewState.target { recovery.allowRemembered(target.peripheralID) }
         centralManager.stopScan()
-        candidates.removeAll()
+        deferredAdvertisements.removeAll()
+        cancelOtherConnections()
         guard viewState.target != nil else {
             viewState.connection = .unregistered
             publish()
@@ -120,6 +122,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
         }
         viewState.issue = nil
         if let peripheral, peripheral.state == .connected, policy.phase == .ready { publish(); return }
+        viewState.connection = .waitingComputer
         if peripheral != nil { disconnect(action: .resume) }
         else { beginSearch() }
     }
@@ -135,9 +138,9 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
         enrolling = true
         enrollmentSent = false
         enrollmentSequence &+= 1
-        policy.resetConnectionRetries()
         centralManager.stopScan()
-        candidates.removeAll()
+        deferredAdvertisements.removeAll()
+        cancelOtherConnections()
         viewState.enrollment = .searching
         viewState.issue = nil
         if let peripheral, peripheral.state == .connected {
@@ -160,25 +163,18 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
         let becameActive = active && !foreground
         foreground = active
         diagnostic("lifecycle foreground=\(active)")
+        if active && expireInitializationIfNeeded() { return }
         if becameActive && !enrolling && disconnectAction == nil {
-            if policy.phase == .failed {
-                policy.resetConnectionRetries()
-                if let peripheral, peripheral.state == .connected {
-                    rediscoverServices(peripheral, trigger: "foreground recovery")
-                    return
-                }
+            if viewState.connection.failure != nil {
                 centralManager.stopScan()
-                candidates.removeAll()
+                viewState.connection = .waitingComputer
+                if let target = viewState.target { recovery.allowRemembered(target.peripheralID) }
             } else if peripheral == nil && policy.requiresAdvertisement {
                 centralManager.stopScan()
-                candidates.removeAll()
             }
             if let peripheral, peripheral.state == .connected {
                 if policy.phase == .subscriptions { finishSubscriptions(peripheral) }
                 else if policy.phase == .services && discoveryOperation == nil { discoverServices(peripheral) }
-            } else if let peripheral, peripheral.state == .disconnected, policy.phase == .connecting {
-                diagnostic("foreground restored missing connection operation")
-                centralManager.connect(peripheral)
             }
             beginSearch(allowRememberedTarget: viewState.connection.failure == nil)
         }
@@ -197,50 +193,93 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
             return
         }
         if policy.phase != .ready && !centralManager.isScanning {
-            policy.beginScanRound()
-            if let peripheral, peripheral.state != .connected { _ = policy.discoverCandidate(peripheral.identifier) }
-            diagnostic("scan round=\(policy.scanRound) started; service filter active")
+            recovery.beginScanRound()
+            diagnostic("scan round=\(recovery.scanRound) started; service filter active")
             centralManager.scanForPeripherals(withServices: [Self.serviceUUID])
         }
         if peripheral == nil {
             policy.waitForComputer()
             if viewState.connection.failure == nil { viewState.connection = .waitingComputer }
         }
-        connectNextCandidate()
+        reconcileConnections()
         if peripheral == nil && allowRememberedTarget && !policy.requiresAdvertisement && !rememberedTargetRejected && !enrolling,
            let target = viewState.target {
             if rememberedPeripheral == nil {
                 rememberedPeripheral = centralManager.retrievePeripherals(withIdentifiers: [target.peripheralID]).first
             }
-            if let rememberedPeripheral { connect(rememberedPeripheral, newAttempt: true) }
+            if let rememberedPeripheral { requestConnection(rememberedPeripheral, source: .remembered) }
         }
         publish()
     }
 
-    private func connectNextCandidate() {
-        guard peripheral == nil, shouldConnect, !candidates.isEmpty else { return }
-        let candidate = candidates.removeFirst()
-        connect(candidate, newAttempt: true)
+    private func requestConnection(_ candidate: CBPeripheral, source: BluetoothConnectionRecovery.Source) {
+        guard shouldConnect, policy.phase != .ready else { return }
+        let id = candidate.identifier
+        if let existing = recovery.attempts[id] {
+            if existing.stage == .cancelling && source == .advertisement {
+                deferredAdvertisements[id] = candidate
+                diagnostic("advertisement retained until cancellation completes peripheralID=\(id) attempt=\(existing.generation)")
+            } else { reconcileConnections() }
+            return
+        }
+        guard let attempt = recovery.begin(id, source: source) else {
+            diagnostic("connection candidate deferred or rejected peripheralID=\(id) source=\(source) pending=\(recovery.attempts.count)")
+            return
+        }
+        beginConnection(candidate, attempt: attempt)
     }
 
-    private func connect(_ candidate: CBPeripheral, newAttempt: Bool) {
-        guard peripheral == nil, shouldConnect, disconnectAction == nil else { return }
-        if newAttempt { policy.resetConnectionRetries() }
-        peripheral = candidate
+    private func beginConnection(_ candidate: CBPeripheral, attempt: BluetoothConnectionRecovery.Attempt) {
+        connectionPeripherals[candidate.identifier] = candidate
         candidate.delegate = self
-        let remembered = !enrolling &&
-            (candidate === rememberedPeripheral || candidate.identifier == viewState.target?.peripheralID)
-        policy.connecting(now: now, rememberedTarget: remembered && !policy.requiresAdvertisement)
-        viewState.connection = remembered ? .waitingComputer : .connecting
-        viewState.issue = nil
-        diagnostic("candidate connecting remembered=\(remembered) scanRound=\(policy.scanRound)")
-        startInitializationTimeout()
+        diagnostic("system connection waiting peripheralID=\(candidate.identifier) attempt=\(attempt.generation) nativeState=\(candidate.state.rawValue) retries=\(attempt.remainingRetries)")
         if candidate.state == .connected {
-            policy.connected(now: now)
-            startInitializationTimeout()
-            discoverServices(candidate)
-        } else if candidate.state == .disconnected { centralManager.connect(candidate) }
+            _ = recovery.connected(candidate.identifier, generation: attempt.generation)
+            activateNextConnection()
+        } else { requestNativeConnection(candidate) }
+        if peripheral == nil && viewState.connection.failure == nil {
+            viewState.connection = candidate.identifier == viewState.target?.peripheralID ? .waitingComputer : .connecting
+        }
         publish()
+    }
+
+    private func activateNextConnection() {
+        let available = Set(connectionPeripherals.values.filter { $0.state == .connected }.map { $0.identifier })
+        guard shouldConnect, centralManager.state == .poweredOn, peripheral == nil, disconnectAction == nil,
+              let attempt = recovery.selectConnected(preferred: enrolling ? nil : viewState.target?.peripheralID,
+                                                     available: available) else { return }
+        guard let candidate = connectionPeripherals[attempt.peripheralID] else {
+            diagnostic("connection registry missing peripheralID=\(attempt.peripheralID) attempt=\(attempt.generation)")
+            _ = recovery.finish(attempt.peripheralID, generation: attempt.generation)
+            viewState.connection = .failed("蓝牙连接状态不一致，请重试")
+            publish()
+            return
+        }
+        peripheral = candidate
+        policy.connected(now: now)
+        clearCharacteristics()
+        viewState.issue = nil
+        diagnostic("connected; discovery starting peripheralID=\(candidate.identifier) attempt=\(attempt.generation) nativeState=\(candidate.state.rawValue)")
+        startInitializationTimeout()
+        discoverServices(candidate)
+    }
+
+    private func requestNativeConnection(_ candidate: CBPeripheral) {
+        guard centralManager.state == .poweredOn, let attempt = recovery.attempts[candidate.identifier],
+              recovery.request(candidate.identifier, generation: attempt.generation) else { return }
+        if candidate.state == .disconnected {
+            diagnostic("native connect requested peripheralID=\(candidate.identifier) attempt=\(attempt.generation)")
+            centralManager.connect(candidate)
+        }
+    }
+
+    private func reconcileConnections() {
+        for candidate in Array(connectionPeripherals.values) {
+            guard let attempt = recovery.attempts[candidate.identifier], attempt.stage == .waiting else { continue }
+            if candidate.state == .connected { _ = recovery.connected(candidate.identifier, generation: attempt.generation) }
+            else { requestNativeConnection(candidate) }
+        }
+        activateNextConnection()
     }
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
@@ -255,12 +294,14 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
             }
             clearDisconnectedState()
             rememberedPeripheral = nil
-            retryCandidate = nil
-            candidates.removeAll()
+            recovery.reset()
+            connectionPeripherals.removeAll()
+            deferredAdvertisements.removeAll()
             viewState.connection = .bluetoothUnavailable
             publish()
             return
         }
+        _ = expireInitializationIfNeeded()
         beginSearch()
     }
 
@@ -271,23 +312,18 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
                 ($1.identifier == viewState.target?.peripheralID ? 0 : 1)
         }
         for item in restored {
-            guard shouldConnect, peripheral == nil, viewState.target != nil else {
+            guard shouldConnect, viewState.target != nil else {
                 central.cancelPeripheralConnection(item)
                 continue
             }
-            peripheral = item
-            item.delegate = self
             if item.identifier == viewState.target?.peripheralID { rememberedPeripheral = item }
-            if item.state == .connected {
-                policy.connected(now: now)
-                startInitializationTimeout()
-                discoverServices(item)
-            } else {
-                let remembered = item.identifier == viewState.target?.peripheralID
-                policy.connecting(now: now, rememberedTarget: remembered)
-                viewState.connection = remembered ? .waitingComputer : .connecting
-                startInitializationTimeout()
-                if item.state == .disconnected { central.connect(item) }
+            diagnostic("restored peripheralID=\(item.identifier) nativeState=\(item.state.rawValue)")
+            if recovery.attempts[item.identifier] == nil,
+               let attempt = recovery.begin(item.identifier, source: .restoration) {
+                beginConnection(item, attempt: attempt)
+            } else if recovery.attempts[item.identifier] == nil {
+                diagnostic("restored connection exceeds candidate limit; cancelling peripheralID=\(item.identifier)")
+                central.cancelPeripheralConnection(item)
             }
         }
         if central.state == .poweredOn { beginSearch() }
@@ -295,122 +331,133 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
 
     func centralManager(_ central: CBCentralManager, didDiscover candidate: CBPeripheral,
                         advertisementData: [String: Any], rssi RSSI: NSNumber) {
+        _ = expireInitializationIfNeeded()
         guard shouldConnect, policy.phase != .ready else { return }
-        if candidate === peripheral {
-            guard candidate.state == .connected, policy.isPassiveWait, disconnectAction == nil,
-                  policy.discoverCandidate(candidate.identifier) else { return }
-            rediscoverServices(candidate, trigger: "service advertisement")
-            return
-        }
-        guard candidates.count < 16, !candidates.contains(where: { $0.identifier == candidate.identifier }),
-              policy.discoverCandidate(candidate.identifier) else { return }
-        if candidate.identifier == viewState.target?.peripheralID { candidates.insert(candidate, at: 0) }
-        else { candidates.append(candidate) }
-        diagnostic("candidate discovered scanRound=\(policy.scanRound) passiveWait=\(policy.isPassiveWait)")
-        if peripheral != nil && policy.isPassiveWait && disconnectAction == nil {
-            diagnostic("new candidate replacing passive wait; serialized disconnect")
-            disconnect(action: .search)
-            return
-        }
-        connectNextCandidate()
+        diagnostic("advertisement peripheralID=\(candidate.identifier) nativeState=\(candidate.state.rawValue) scanRound=\(recovery.scanRound)")
+        requestConnection(candidate, source: .advertisement)
     }
 
     func centralManager(_ central: CBCentralManager, didConnect candidate: CBPeripheral) {
-        guard peripheral === candidate, shouldConnect, disconnectAction == nil else {
+        _ = expireInitializationIfNeeded()
+        if connectionPeripherals[candidate.identifier] === candidate,
+           recovery.attempts[candidate.identifier]?.stage == .cancelling {
+            diagnostic("late connect during cancellation ignored peripheralID=\(candidate.identifier)")
+            return
+        }
+        guard connectionPeripherals[candidate.identifier] === candidate,
+              let attempt = recovery.attempts[candidate.identifier], shouldConnect,
+              attempt.stage != .cancelling else {
+            diagnostic("unselected or cancelled connection callback peripheralID=\(candidate.identifier) nativeState=\(candidate.state.rawValue)")
             central.cancelPeripheralConnection(candidate)
             return
         }
-        diagnostic("connected; discovery starting")
-        viewState.issue = nil
-        policy.connected(now: now)
-        clearCharacteristics()
-        startInitializationTimeout()
-        discoverServices(candidate)
+        guard recovery.connected(candidate.identifier, generation: attempt.generation) else {
+            diagnostic("connection callback already adopted peripheralID=\(candidate.identifier) attempt=\(attempt.generation)")
+            return
+        }
+        diagnostic("native connected peripheralID=\(candidate.identifier) attempt=\(attempt.generation)")
+        activateNextConnection()
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect candidate: CBPeripheral, error: Error?) {
-        guard peripheral === candidate else { return }
-        diagnostic("connection attempt failed code=\((error as NSError?)?.code ?? 0)")
-        let action = disconnectAction
-        disconnectAction = nil
-        clearDisconnectedState()
-        if let action { resumeAfterDisconnect(action); return }
-        failWithoutConnection("无法建立蓝牙连接", candidate: candidate, retry: true)
+        if let error { diagnosticError("native connection peripheralID=\(candidate.identifier)", error) }
+        connectionEnded(candidate, message: "无法建立蓝牙连接", failedToConnect: true)
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral candidate: CBPeripheral, error: Error?) {
-        guard peripheral === candidate else { return }
-        diagnostic("disconnected; approval discarded code=\((error as NSError?)?.code ?? 0)")
-        let action = disconnectAction
-        let wasWaiting = policy.phase == .ready || policy.requiresAdvertisement
-        disconnectAction = nil
-        discardAuthentication(message: "蓝牙已断开，本次认证已失效")
-        clearDisconnectedState()
-        if let action { resumeAfterDisconnect(action); return }
-        if enrolling && enrollmentSent {
-            enrolling = false
-            enrollmentSent = false
-            viewState.enrollment = .failed("登记连接中断，原目标保留")
-        }
-        failWithoutConnection("蓝牙连接已断开", candidate: candidate, retry: !wasWaiting)
+        if let error { diagnosticError("native disconnect peripheralID=\(candidate.identifier)", error) }
+        connectionEnded(candidate, message: "蓝牙连接已断开", failedToConnect: false)
     }
 
-    private func failWithoutConnection(_ message: String, candidate: CBPeripheral, retry: Bool) {
-        diagnostic("connection ended; retry=\(retry) remaining=\(policy.remainingConnectionRetries)")
-        if !retry {
-            viewState.issue = nil
-            viewState.connection = .waitingComputer
-            beginSearch()
-        } else if shouldConnect && policy.takeConnectionRetry() {
-            diagnostic("recovery retry remaining=\(policy.remainingConnectionRetries)")
-            connect(candidate, newAttempt: false)
-            beginSearch(allowRememberedTarget: false)
-        } else {
-            viewState.connection = .failed(message + "；仍在等待电脑恢复")
-            if enrolling {
-                enrolling = false
-                viewState.enrollment = .failed(message + "；原目标保留")
-            }
-            beginSearch(allowRememberedTarget: false)
+    private func connectionEnded(_ candidate: CBPeripheral, message: String, failedToConnect: Bool) {
+        let id = candidate.identifier
+        guard connectionPeripherals[id] === candidate, let attempt = recovery.attempts[id],
+              let completed = recovery.finish(id, generation: attempt.generation) else {
+            diagnostic("old connection end ignored peripheralID=\(id) nativeState=\(candidate.state.rawValue)")
+            return
         }
+        connectionPeripherals.removeValue(forKey: id)
+        diagnostic("connection ended peripheralID=\(id) attempt=\(completed.generation) stage=\(completed.stage) nativeState=\(candidate.state.rawValue)")
+        let wasActive = peripheral === candidate
+        let action = wasActive ? disconnectAction : nil
+        if wasActive {
+            disconnectAction = nil
+            discardAuthentication(message: "蓝牙已断开，本次认证已失效")
+            clearDisconnectedState()
+            if action == nil && enrolling && enrollmentSent {
+                enrolling = false
+                enrollmentSent = false
+                viewState.enrollment = .failed("登记连接中断，原目标保留")
+            }
+        }
+        if let action {
+            resumeAfterDisconnect(action, candidate: candidate, completed: completed)
+        } else if completed.stage != .cancelling {
+            let retry = failedToConnect || completed.stage != .ready
+            if retry { recovery.failed(id) }
+            activateNextConnection()
+            if shouldConnect && retry && policy.phase != .ready,
+               let next = recovery.retry(completed) {
+                beginConnection(candidate, attempt: next)
+            } else if retry && peripheral == nil && shouldConnect {
+                viewState.connection = .failed(message + "；仍在等待电脑广播")
+                if enrolling {
+                    enrolling = false
+                    viewState.enrollment = .failed(message + "；原目标保留")
+                }
+            }
+            beginSearch(allowRememberedTarget: !retry && !policy.requiresAdvertisement)
+        } else if peripheral == nil { beginSearch() }
+        if let advertised = deferredAdvertisements.removeValue(forKey: id) {
+            requestConnection(advertised, source: .advertisement)
+        }
+        publish()
+    }
+
+    private func cancelOtherConnections() {
+        for candidate in Array(connectionPeripherals.values) where candidate !== peripheral {
+            cancelConnection(candidate)
+        }
+    }
+
+    private func cancelConnection(_ candidate: CBPeripheral) {
+        guard let attempt = recovery.attempts[candidate.identifier], recovery.cancel(candidate.identifier) else { return }
+        diagnostic("connection cancellation peripheralID=\(candidate.identifier) nativeState=\(candidate.state.rawValue)")
+        if candidate.state == .disconnected && !attempt.connectionRequested && attempt.stage == .waiting {
+            connectionEnded(candidate, message: "连接已取消", failedToConnect: false)
+        } else { centralManager.cancelPeripheralConnection(candidate) }
     }
 
     private func disconnect(action: DisconnectAction) {
-        if action == .halt || action == .resume { centralManager.stopScan() }
-        if action != .recover { retryCandidate = nil }
+        if action == .halt || action == .resume {
+            centralManager.stopScan()
+            deferredAdvertisements.removeAll()
+            cancelOtherConnections()
+        }
         discardAuthentication(message: "连接已结束，本次认证已失效")
         if action != .halt { viewState.connection = .recovering }
         else { viewState.connection = viewState.target == nil ? .unregistered : .waitingComputer }
         guard let peripheral else { resumeAfterDisconnect(action); return }
-        if action == .recover {
-            retryCandidate = peripheral
-        }
-        if peripheral.state == .disconnected {
-            clearDisconnectedState()
-            resumeAfterDisconnect(action)
-            return
-        }
         disconnectAction = action
         initializationTimeout?.cancel()
         initializationTimeout = nil
         clearCharacteristics()
         policy.failed()
-        centralManager.cancelPeripheralConnection(peripheral)
+        cancelConnection(peripheral)
     }
 
-    private func resumeAfterDisconnect(_ action: DisconnectAction) {
+    private func resumeAfterDisconnect(_ action: DisconnectAction, candidate: CBPeripheral? = nil,
+                                       completed: BluetoothConnectionRecovery.Attempt? = nil) {
         switch action {
         case .recover:
-            let candidate = retryCandidate
-            retryCandidate = nil
-            if let candidate { connect(candidate, newAttempt: false) }
+            activateNextConnection()
+            if shouldConnect && policy.phase != .ready, let candidate, let completed,
+               let attempt = recovery.retry(completed) { beginConnection(candidate, attempt: attempt) }
             beginSearch(allowRememberedTarget: false)
         case .search: beginSearch()
         case .resume:
-            candidates.removeAll()
             beginSearch()
         case .advertisement:
-            candidates.removeAll()
             viewState.connection = .waitingComputer
             beginSearch(allowRememberedTarget: false)
         case .halt:
@@ -425,7 +472,8 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
         let stage = String(describing: policy.phase)
         let failure = "\(message)（阶段：\(stage)）；仍在等待电脑恢复"
         let elapsed = policy.deadline.map { max(0, now - ($0 - BluetoothAuthenticationState.initializationLifetime)) }
-        diagnostic("initialization or transport failed phase=\(stage) elapsed=\(elapsed ?? 0) retryRemaining=\(policy.remainingConnectionRetries)")
+        let retries = peripheral.flatMap { recovery.attempts[$0.identifier]?.remainingRetries } ?? 0
+        diagnostic("initialization or transport failed phase=\(stage) elapsed=\(elapsed ?? 0) retryRemaining=\(retries)")
         viewState.issue = nil
         discardAuthentication(message: message)
         if enrolling && enrollmentSent {
@@ -433,19 +481,14 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
             enrollmentSent = false
             viewState.enrollment = .failed(message + "；登记未确认，原目标保留")
         }
-        let retry = shouldConnect && policy.takeConnectionRetry()
+        let retry = shouldConnect && retries > 0
         if retry {
             viewState.connection = .recovering
             disconnect(action: .recover)
         } else {
             if enrolling { enrolling = false; viewState.enrollment = .failed(message) }
-            initializationTimeout?.cancel()
-            initializationTimeout = nil
-            clearCharacteristics()
-            policy.failed()
-            viewState.connection = .failed(failure)
-            if peripheral?.state == .connected { beginSearch(allowRememberedTarget: false) }
-            else { disconnect(action: .search) }
+            if let peripheral { recovery.failed(peripheral.identifier) }
+            disconnect(action: .search)
             viewState.connection = .failed(failure)
         }
         publish()
@@ -453,6 +496,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
 
     private func rejectCandidate(_ message: String) {
         diagnostic("candidate rejected during identity verification")
+        if let peripheral { recovery.reject(peripheral.identifier) }
         if let peripheral, peripheral === rememberedPeripheral || peripheral.identifier == viewState.target?.peripheralID {
             rememberedTargetRejected = true
             rememberedPeripheral = nil
@@ -486,18 +530,21 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
         viewState.issue = nil
         if newAvailabilityRound {
             centralManager.stopScan()
-            candidates.removeAll()
         }
+        deferredAdvertisements.removeAll()
+        cancelOtherConnections()
         if shouldConnect { disconnect(action: .advertisement) }
         else { disconnect(action: .halt) }
         publish()
     }
 
     private func rediscoverServices(_ peripheral: CBPeripheral, trigger: String) {
+        guard !expireInitializationIfNeeded() else { return }
         diagnostic("service recovery trigger=\(trigger) pending=\(discoveryOperation != nil)")
         discardAuthentication(message: "服务发生变化，本次认证已取消，请在 Windows 发起新请求")
         clearCharacteristics()
         viewState.issue = nil
+        recovery.restartInitialization(peripheral.identifier)
         let discover = policy.invalidateServices(now: now, discoveryPending: discoveryOperation != nil)
         viewState.connection = .recovering
         startInitializationTimeout()
@@ -508,12 +555,21 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
     private func startInitializationTimeout() {
         initializationTimeout?.cancel()
         guard let deadline = policy.deadline, let current = peripheral else { return }
+        let generation = policy.generation
         initializationTimeout = Task { [weak self] in
             do { try await Task.sleep(for: .seconds(max(0, deadline - ProcessInfo.processInfo.systemUptime))) }
             catch { return }
-            guard let self, self.peripheral === current, self.policy.deadline == deadline else { return }
-            self.failConnection("连接／服务初始化超过 10 秒")
+            guard let self, self.peripheral === current, self.policy.generation == generation,
+                  self.policy.deadline == deadline else { return }
+            _ = self.expireInitializationIfNeeded()
         }
+    }
+
+    @discardableResult
+    private func expireInitializationIfNeeded() -> Bool {
+        guard peripheral != nil, disconnectAction == nil, policy.initializationExpired(now: now) else { return false }
+        failConnection("连接后的服务初始化超过 10 秒")
+        return true
     }
 
     private func discoverServices(_ peripheral: CBPeripheral) {
@@ -600,6 +656,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
     }
 
     private func finishSubscriptions(_ peripheral: CBPeripheral) {
+        guard disconnectAction == nil, !expireInitializationIfNeeded() else { return }
         let challenge = challengeCharacteristic?.isNotifying == true
         let result = resultCharacteristic?.isNotifying == true
         diagnostic("subscriptions challenge=\(challenge) result=\(result)")
@@ -607,7 +664,9 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
         initializationTimeout?.cancel()
         initializationTimeout = nil
         centralManager.stopScan()
-        candidates.removeAll()
+        recovery.ready(peripheral.identifier)
+        deferredAdvertisements.removeAll()
+        cancelOtherConnections()
         viewState.connection = .ready
         viewState.issue = nil
         diagnostic("ready; computer identity verified")
@@ -651,6 +710,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         guard self.peripheral === peripheral else { return }
+        guard disconnectAction == nil, !expireInitializationIfNeeded() else { return }
         if characteristic === identityReadInDiscovery && discoveryOperation == .identity {
             discoveryOperation = nil
             guard advanceDiscovery(peripheral) else { return }
@@ -660,7 +720,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
                 rejectCandidate("Windows ComputerId 缺失或格式无效")
                 return
             }
-            guard policy.verifyComputer(id, expected: viewState.target?.computerID, enrolling: enrolling) else {
+            guard policy.verifyComputer(id, expected: viewState.target?.computerID, enrolling: enrolling, now: now) else {
                 diagnostic("candidate identity mismatch")
                 rejectCandidate("发现的电脑不是已登记目标，未发送签名")
                 return
@@ -1001,7 +1061,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
     func peripheral(_ peripheral: CBPeripheral, didModifyServices invalidatedServices: [CBService]) {
         guard self.peripheral === peripheral, peripheral.state == .connected,
               disconnectAction == nil,
-              policy.isPassiveWait || invalidatedServices.contains(where: { $0.uuid == Self.serviceUUID }) else { return }
+              invalidatedServices.contains(where: { $0.uuid == Self.serviceUUID }) else { return }
         diagnostic("GATT service invalidated; rediscovering without forced disconnect")
         discardAuthentication(message: "服务发生变化，本次认证已取消，请在 Windows 发起新请求")
         if enrolling && enrollmentSent {
@@ -1055,6 +1115,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
     }
 
     private func clearDisconnectedState() {
+        disconnectAction = nil
         writes.removeAll()
         initializationTimeout?.cancel()
         initializationTimeout = nil
@@ -1072,7 +1133,8 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
 
     private func diagnostic(_ event: String) {
         let request = pendingChallenge?.requestID ?? awaitingResultID ?? policy.readyProbe?.requestID
-        let text = "\(diagnosticClock.string(from: Date())) uptimeMs=\(Int(now * 1000)) generation=\(policy.generation) requestID=\(request?.uuidString.lowercased() ?? "none") \(event)"
+        let attempt = peripheral.flatMap { recovery.attempts[$0.identifier] }
+        let text = "\(diagnosticClock.string(from: Date())) uptimeMs=\(Int(now * 1000)) generation=\(policy.generation) requestID=\(request?.uuidString.lowercased() ?? "none") peripheralID=\(peripheral?.identifier.uuidString.lowercased() ?? "none") attempt=\(attempt?.generation ?? 0) nativeState=\(peripheral?.state.rawValue ?? -1) \(event)"
         logger.info("\(text, privacy: .public)")
         onDiagnostic?(text)
     }
@@ -1089,7 +1151,7 @@ final class BluetoothAuthenticator: NSObject, @preconcurrency CBCentralManagerDe
             "rssi_too_low", "automatic_disabled", "rssi_unavailable", "signing_failed", "transport_failed",
             "malformed_json", "unsupported_version", "invalid_request_id", "request_mismatch", "challenge_replayed",
             "key_not_enrolled", "invalid_key_id", "invalid_public_key", "key_id_mismatch", "invalid_signature_encoding",
-            "invalid_signature", "unlock_cooldown", "cryptographic_api_failure", "service_error", "service_unavailable"]
+            "invalid_signature", "cryptographic_api_failure", "service_error", "service_unavailable"]
         return allowed.contains(code) ? code : "unknown_result"
     }
 

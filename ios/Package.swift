@@ -9,7 +9,7 @@ let package = Package(
         .target(name: "BluetoothAuthenticationPolicy", path: "Core",
                 exclude: ["BluetoothAuthenticator.swift", "SecureEnclaveKeyStore.swift",
                           "UnlockError.swift", "UnlockProtocol.swift", "UnlockSetupModel.swift"],
-                sources: ["BluetoothAuthenticationState.swift"]),
+                sources: ["BluetoothAuthenticationState.swift", "BluetoothConnectionRecovery.swift"]),
         .testTarget(name: "BluetoothAuthenticationPolicyTests",
                     dependencies: ["BluetoothAuthenticationPolicy"], path: "Tests")
     ]

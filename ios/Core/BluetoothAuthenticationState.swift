@@ -90,7 +90,7 @@ struct BluetoothViewState: Equatable {
 struct BluetoothAuthenticationState {
     enum SignalDecision: Equatable { case approve, tooLow, invalid, expired }
     enum Phase: Equatable {
-        case idle, waitingComputer, connecting, services, characteristics, identity, subscriptions, ready, failed
+        case idle, waitingComputer, services, characteristics, identity, subscriptions, ready, failed
     }
     enum Completion: Equatable { case proceed, rediscover, expired }
     struct RSSIRead: Equatable {
@@ -113,34 +113,16 @@ struct BluetoothAuthenticationState {
     private(set) var generation: UInt64 = 0
     private(set) var deadline: TimeInterval?
     private(set) var rediscoveryRequested = false
-    private(set) var remainingConnectionRetries = 1
     private(set) var verifiedComputerID: UUID?
     private(set) var challengeSubscribed = false
     private(set) var resultSubscribed = false
     private(set) var rssiRead: RSSIRead?
-    private(set) var scanRound: UInt64 = 0
     private(set) var requiresAdvertisement = false
     private(set) var readyProbe: ReadyProbe?
-    private var seenCandidates: [UUID] = []
     private var rssiSequence: UInt64 = 0
 
-    var isPassiveWait: Bool {
-        deadline == nil && (phase == .waitingComputer ||
-            phase == .failed || phase == .connecting)
-    }
-
-    var candidateHistoryCount: Int { seenCandidates.count }
-
-    mutating func beginScanRound() {
-        scanRound &+= 1
-        seenCandidates.removeAll()
-    }
-
-    mutating func discoverCandidate(_ id: UUID) -> Bool {
-        guard !seenCandidates.contains(id) else { return false }
-        if seenCandidates.count == 64 { seenCandidates.removeFirst() }
-        seenCandidates.append(id)
-        return true
+    func initializationExpired(now: TimeInterval) -> Bool {
+        deadline.map { now >= $0 } ?? false
     }
 
     static func signalDecision(rssi: Int, threshold: Int, now: TimeInterval,
@@ -190,19 +172,6 @@ struct BluetoothAuthenticationState {
         return requestID == pending || requestID == awaiting
     }
 
-    mutating func resetConnectionRetries() { remainingConnectionRetries = 1 }
-    mutating func takeConnectionRetry() -> Bool {
-        guard remainingConnectionRetries > 0 else { return false }
-        remainingConnectionRetries -= 1
-        return true
-    }
-
-    mutating func connecting(now: TimeInterval, rememberedTarget: Bool = false) {
-        resetTransport()
-        phase = .connecting
-        deadline = rememberedTarget ? nil : now + Self.initializationLifetime
-    }
-
     mutating func connected(now: TimeInterval) {
         resetTransport()
         phase = .services
@@ -224,6 +193,7 @@ struct BluetoothAuthenticationState {
 
     mutating func cacheReadyProbe(_ requestID: UUID, generation: UInt64, now: TimeInterval) -> Bool {
         guard generation == self.generation,
+              !initializationExpired(now: now),
               [.services, .characteristics, .identity, .subscriptions, .ready].contains(phase),
               requestID != UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) else { return false }
         if let readyProbe, readyProbe.requestID == requestID {
@@ -257,7 +227,6 @@ struct BluetoothAuthenticationState {
     mutating func clearReadyProbe() { readyProbe = nil }
 
     mutating func invalidateServices(now: TimeInterval, discoveryPending: Bool? = nil) -> Bool {
-        if deadline == nil { resetConnectionRetries() }
         generation &+= 1
         clearReadyProbe()
         verifiedComputerID = nil
@@ -286,8 +255,9 @@ struct BluetoothAuthenticationState {
     mutating func discoveredServices() { phase = .characteristics }
     mutating func discoveredCharacteristics() { phase = .identity }
 
-    mutating func verifyComputer(_ id: UUID, expected: UUID?, enrolling: Bool) -> Bool {
-        guard phase == .identity, enrolling || id == expected else { return false }
+    mutating func verifyComputer(_ id: UUID, expected: UUID?, enrolling: Bool, now: TimeInterval) -> Bool {
+        guard phase == .identity, let deadline, now < deadline,
+              enrolling || id == expected else { return false }
         verifiedComputerID = id
         phase = .subscriptions
         return true
@@ -303,7 +273,6 @@ struct BluetoothAuthenticationState {
         phase = .ready
         self.deadline = nil
         requiresAdvertisement = false
-        resetConnectionRetries()
         return true
     }
 

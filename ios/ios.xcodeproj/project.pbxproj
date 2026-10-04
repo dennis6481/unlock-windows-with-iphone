@@ -16,6 +16,7 @@
 		D10000010000000000000004 /* UnlockSetupModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000020000000000000004 /* UnlockSetupModel.swift */; };
 		D10000010000000000000005 /* BluetoothAuthenticator.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000020000000000000005 /* BluetoothAuthenticator.swift */; };
 		D10000010000000000000006 /* BluetoothAuthenticationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000020000000000000006 /* BluetoothAuthenticationState.swift */; };
+		D10000010000000000000007 /* BluetoothConnectionRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000020000000000000007 /* BluetoothConnectionRecovery.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -29,6 +30,7 @@
 		D10000020000000000000004 /* UnlockSetupModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnlockSetupModel.swift; sourceTree = "<group>"; };
 		D10000020000000000000005 /* BluetoothAuthenticator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BluetoothAuthenticator.swift; sourceTree = "<group>"; };
 		D10000020000000000000006 /* BluetoothAuthenticationState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BluetoothAuthenticationState.swift; sourceTree = "<group>"; };
+		D10000020000000000000007 /* BluetoothConnectionRecovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BluetoothConnectionRecovery.swift; sourceTree = "<group>"; };
 		D10000030000000000000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -70,6 +72,7 @@
 				D10000020000000000000004 /* UnlockSetupModel.swift */,
 				D10000020000000000000005 /* BluetoothAuthenticator.swift */,
 				D10000020000000000000006 /* BluetoothAuthenticationState.swift */,
+				D10000020000000000000007 /* BluetoothConnectionRecovery.swift */,
 			);
 			path = Core;
 			sourceTree = "<group>";
@@ -147,6 +150,7 @@
 				D10000010000000000000004 /* UnlockSetupModel.swift in Sources */,
 				D10000010000000000000005 /* BluetoothAuthenticator.swift in Sources */,
 				D10000010000000000000006 /* BluetoothAuthenticationState.swift in Sources */,
+				D10000010000000000000007 /* BluetoothConnectionRecovery.swift in Sources */,
 			);
 		};
 /* End PBXSourcesBuildPhase section */

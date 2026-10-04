@@ -9,7 +9,7 @@ namespace unlock_windows::gatt {
 class AdvertisingLifecycle final {
 public:
     enum class Action { none, start, stop };
-    enum class Failure { none, startTimeout, startException, aborted, incomplete, stopTimeout, stopException };
+    enum class Failure { none, startTimeout, startException, aborted, incomplete, stopException };
     static constexpr std::uint64_t operationLifetime = 5000;
 
     void desire(bool enabled) noexcept {
@@ -29,29 +29,20 @@ public:
     Action advance(std::uint64_t now, int observed) noexcept {
         const bool running = observed == 2 || observed == 4;
         if (pending_ == Action::start) {
-            if (observed == 2) {
+            if (!stopAccepted_ && observed == 2) {
                 pending_ = Action::none;
                 confirmed_ = true;
                 refresh();
             } else if (now < deadline_) return Action::none;
             else fail(now, observed == 4 ? Failure::incomplete : Failure::startTimeout);
-        } else if (pending_ == Action::stop) {
-            if (!running) {
-                pending_ = Action::none;
-                confirmed_ = false;
-                stopFailed_ = false;
-            } else if (now < deadline_) return Action::none;
-            else {
-                pending_ = Action::none;
-                stopFailed_ = true;
-                note(Failure::stopTimeout);
-            }
-        }
+        } else if (pending_ == Action::stop) return Action::none;
 
         if (!desired_) {
             confirmed_ = false;
-            return running && !stopFailed_ ? begin(Action::stop, now) : Action::none;
+            return !stopAccepted_ && running && !stopFailed_ ? begin(Action::stop, now) : Action::none;
         }
+        if (stopAccepted_)
+            return exhausted_ || now < retryAt_ ? Action::none : begin(Action::start, now);
         if (stopFailed_ && running) return Action::none;
         if (!running) stopFailed_ = false;
         if (observed == 2) {
@@ -68,6 +59,16 @@ public:
         return begin(Action::start, now);
     }
 
+    void commandSucceeded(Action action) noexcept {
+        if (action == Action::start) stopAccepted_ = false;
+        else if (action == Action::stop) {
+            pending_ = Action::none;
+            stopAccepted_ = true;
+            confirmed_ = false;
+            stopFailed_ = false;
+        }
+    }
+
     void commandFailed(std::uint64_t now, Action action) noexcept {
         if (action == Action::start) fail(now, Failure::startException);
         else {
@@ -78,6 +79,8 @@ public:
     }
 
     bool desired() const noexcept { return desired_; }
+    bool started() const noexcept { return !stopAccepted_ && confirmed_ && pending_ == Action::none; }
+    bool stopped() const noexcept { return stopAccepted_ && pending_ == Action::none; }
     Action pending() const noexcept { return pending_; }
     Failure failure() const noexcept { return failure_; }
     bool exhausted() const noexcept { return exhausted_ || stopFailed_; }
@@ -104,6 +107,7 @@ private:
     bool confirmed_ = false;
     bool exhausted_ = false;
     bool stopFailed_ = false;
+    bool stopAccepted_ = true;
     Action pending_ = Action::none;
     Failure failure_ = Failure::none;
     unsigned retries_ = 0;

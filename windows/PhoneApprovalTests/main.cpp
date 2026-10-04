@@ -335,32 +335,33 @@ void run() {
         "pending approval could be consumed more than once"
     );
 
-    const auto cooldownIssued = service.issueChallenge(2'003);
-    const auto cooldownPayload = unlock_windows::protocol::buildSigningPayload(cooldownIssued.challenge);
-    require(cooldownPayload.succeeded(), "cooldown test payload did not build");
-    const auto cooldownSignature = sign(*signingKey, cooldownPayload.bytes);
-    const auto cooldownAssertion = makeAssertion(service, cooldownIssued, cooldownSignature);
+    const auto nextIssued = service.issueChallenge(2'004);
+    const auto nextPayload = unlock_windows::protocol::buildSigningPayload(nextIssued.challenge);
+    require(nextPayload.succeeded(), "immediate next request payload did not build");
+    const auto nextSignature = sign(*signingKey, nextPayload.bytes);
+    const auto nextAssertion = makeAssertion(service, nextIssued, nextSignature);
     require(
-        service.verifyAssertion(cooldownAssertion, 2'004).code == AssertionCode::unlock_cooldown,
-        "a second approval inside the cooldown was accepted"
+        service.verifyAssertion(assertion, 2'005).code == AssertionCode::request_mismatch,
+        "the previous assertion was accepted for the next request"
+    );
+    const auto nextValid = service.verifyAssertion(nextAssertion, 2'005);
+    require(
+        nextValid.unlockApproved() && nextValid.accountSid == valid.accountSid,
+        "an immediate fresh approval was rejected or returned the wrong identity"
     );
     require(
-        service.verifyAssertion(cooldownAssertion, 2'005).code == AssertionCode::challenge_replayed,
-        "a cooldown challenge was not consumed"
+        service.verifyAssertion(nextAssertion, 2'006).code == AssertionCode::challenge_replayed,
+        "the immediate fresh assertion could be replayed"
     );
-
-    const auto afterCooldownIssued = service.issueChallenge(7'004);
-    const auto afterCooldownPayload = unlock_windows::protocol::buildSigningPayload(afterCooldownIssued.challenge);
-    require(afterCooldownPayload.succeeded(), "post-cooldown test payload did not build");
-    const auto afterCooldownSignature = sign(*signingKey, afterCooldownPayload.bytes);
-    const auto afterCooldownAssertion = makeAssertion(service, afterCooldownIssued, afterCooldownSignature);
+    const auto nextApproval = service.consumeUnlockApproval(2'006);
     require(
-        service.verifyAssertion(afterCooldownAssertion, 7'005).unlockApproved(),
-        "approval after the cooldown was rejected"
+        nextApproval && nextApproval->issuedAtMilliseconds == nextIssued.challenge.issuedAtMilliseconds &&
+            nextApproval->accountSid == valid.accountSid,
+        "the immediate fresh approval was unavailable or had the wrong identity"
     );
     require(
-        service.consumeUnlockApproval(7'006).has_value(),
-        "approval after the cooldown was not available to consume"
+        !service.consumeUnlockApproval(2'007).has_value(),
+        "the immediate fresh approval could be consumed more than once"
     );
 
     const auto expiredIssued = service.issueChallenge(13'000);

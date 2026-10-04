@@ -205,14 +205,12 @@ constexpr std::size_t kRequestIdSize = 16;
 
 PhoneApprovalCore::PhoneApprovalCore(
     std::string audience,
-    const std::int64_t challengeLifetimeMilliseconds,
-    const std::int64_t unlockCooldownMilliseconds
+    const std::int64_t challengeLifetimeMilliseconds
 )
     : audience_(std::move(audience)),
-      challengeLifetimeMilliseconds_(challengeLifetimeMilliseconds),
-      unlockCooldownMilliseconds_(unlockCooldownMilliseconds) {
+      challengeLifetimeMilliseconds_(challengeLifetimeMilliseconds) {
     if (audience_.empty() || audience_.size() > 64 ||
-        challengeLifetimeMilliseconds_ <= 0 || unlockCooldownMilliseconds_ <= 0) {
+        challengeLifetimeMilliseconds_ <= 0) {
         throw std::invalid_argument("invalid PhoneApprovalCore configuration");
     }
 }
@@ -253,7 +251,6 @@ void PhoneApprovalCore::setEnrolledPublicKey(std::vector<std::uint8_t> rawPublic
     enrolledPublicKey_ = std::move(rawPublicKey);
     enrolledAccountSid_.reset();
     pendingUnlockApproval_.reset();
-    lastUnlockApprovalMilliseconds_.reset();
 }
 
 void PhoneApprovalCore::setEnrolledAccountSid(std::string accountSid) {
@@ -263,7 +260,6 @@ void PhoneApprovalCore::setEnrolledAccountSid(std::string accountSid) {
     std::lock_guard lock(mutex_);
     enrolledAccountSid_ = std::move(accountSid);
     pendingUnlockApproval_.reset();
-    lastUnlockApprovalMilliseconds_.reset();
 }
 
 void PhoneApprovalCore::clearEnrolledPublicKey() noexcept {
@@ -271,7 +267,6 @@ void PhoneApprovalCore::clearEnrolledPublicKey() noexcept {
     enrolledPublicKey_.reset();
     enrolledAccountSid_.reset();
     pendingUnlockApproval_.reset();
-    lastUnlockApprovalMilliseconds_.reset();
 }
 
 std::string PhoneApprovalCore::requestIdString(const protocol::FixedChallenge& challenge) {
@@ -389,13 +384,6 @@ AssertionResult PhoneApprovalCore::verifyAssertion(
 
         outstandingChallengeConsumed_ = true;
         if (enrolledAccountSid_ && !enrolledAccountSid_->empty()) {
-            if (lastUnlockApprovalMilliseconds_ &&
-                (nowMilliseconds < *lastUnlockApprovalMilliseconds_ ||
-                 nowMilliseconds - *lastUnlockApprovalMilliseconds_ < unlockCooldownMilliseconds_)) {
-                return {AssertionCode::unlock_cooldown};
-            }
-            lastUnlockApprovalMilliseconds_ = nowMilliseconds;
-
             PendingUnlockApproval approval;
             approval.issuedAtMilliseconds = outstandingChallenge_->issuedAtMilliseconds;
             approval.accountSid = *enrolledAccountSid_;
@@ -442,7 +430,6 @@ const char* assertionCodeName(const AssertionCode code) noexcept {
         case AssertionCode::key_id_mismatch: return "key_id_mismatch";
         case AssertionCode::invalid_signature_encoding: return "invalid_signature_encoding";
         case AssertionCode::invalid_signature: return "invalid_signature";
-        case AssertionCode::unlock_cooldown: return "unlock_cooldown";
         case AssertionCode::cryptographic_api_failure: return "cryptographic_api_failure";
     }
     return "unknown";

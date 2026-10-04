@@ -27,7 +27,6 @@ enum class AssertionCode {
     key_id_mismatch,
     invalid_signature_encoding,
     invalid_signature,
-    unlock_cooldown,
     cryptographic_api_failure,
 };
 
@@ -59,8 +58,7 @@ class PhoneApprovalCore final {
 public:
     explicit PhoneApprovalCore(
         std::string audience = protocol::kUnlockAudience,
-        std::int64_t challengeLifetimeMilliseconds = protocol::kChallengeLifetimeMilliseconds,
-        std::int64_t unlockCooldownMilliseconds = 5'000
+        std::int64_t challengeLifetimeMilliseconds = protocol::kChallengeLifetimeMilliseconds
     );
 
     PhoneApprovalCore(const PhoneApprovalCore&) = delete;
@@ -95,13 +93,11 @@ public:
 private:
     std::string audience_;
     std::int64_t challengeLifetimeMilliseconds_;
-    std::int64_t unlockCooldownMilliseconds_;
     std::mutex mutex_;
     std::optional<protocol::FixedChallenge> outstandingChallenge_;
     std::optional<std::vector<std::uint8_t>> enrolledPublicKey_;
     std::optional<std::string> enrolledAccountSid_;
     std::optional<PendingUnlockApproval> pendingUnlockApproval_;
-    std::optional<std::int64_t> lastUnlockApprovalMilliseconds_;
     bool outstandingChallengeConsumed_ = false;
 };
 

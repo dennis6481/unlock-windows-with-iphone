@@ -273,6 +273,7 @@ void testAdvertisingTransitions() {
     Lifecycle lifecycle;
     lifecycle.desire(true);
     require(lifecycle.advance(0, 3) == Action::start, "old aborted state must permit a new start");
+    lifecycle.commandSucceeded(Action::start);
     require(lifecycle.advance(1, 3) == Action::none && lifecycle.failures() == 0,
         "old aborted state must not be counted as a new start failure");
     lifecycle.desire(false);
@@ -280,11 +281,14 @@ void testAdvertisingTransitions() {
     require(lifecycle.advance(3, 2) == Action::stop, "completed start must honor merged stop target");
     lifecycle.desire(true);
     require(lifecycle.advance(4, 2) == Action::none, "new start must wait for pending stop");
-    require(lifecycle.advance(5, 1) == Action::start, "completed stop must honor merged start target");
+    lifecycle.commandSucceeded(Action::stop);
+    require(lifecycle.advance(5, 2) == Action::start, "accepted stop must honor merged start target despite stale Started");
+    lifecycle.commandSucceeded(Action::start);
     require(lifecycle.advance(6, 2) == Action::none, "start confirmation must complete operation");
     require(lifecycle.advance(7, 3) == Action::none && lifecycle.retryAt() == 1007,
         "actual abort must schedule bounded recovery");
     require(lifecycle.advance(1007, 3) == Action::start, "aborted provider must restart automatically");
+    lifecycle.commandSucceeded(Action::start);
     lifecycle.desire(false);
     require(lifecycle.advance(6007, 3) == Action::none && lifecycle.retries() == 0,
         "unlock must cancel recovery after the pending operation deadline");
@@ -296,6 +300,7 @@ void testAdvertisingRetryBudgetAndDeadline() {
     Lifecycle lifecycle;
     lifecycle.desire(true);
     require(lifecycle.advance(0, 0) == Action::start, "initial start missing");
+    lifecycle.commandSucceeded(Action::start);
     require(lifecycle.advance(4999, 3) == Action::none, "start deadline shortened");
     require(lifecycle.advance(5000, 3) == Action::none && lifecycle.retryAt() == 6000, "start timeout needs one-second retry");
     require(lifecycle.advance(6000, 3) == Action::start, "first retry missing");
@@ -311,17 +316,33 @@ void testAdvertisingRetryBudgetAndDeadline() {
     require(!lifecycle.exhausted() && lifecycle.advance(90001, 3) == Action::none, "sleep/unlock must cancel retries");
     lifecycle.desire(true);
     require(lifecycle.advance(90002, 3) == Action::start && lifecycle.retries() == 0, "new lock needs fresh budget");
+    lifecycle.commandSucceeded(Action::start);
     require(lifecycle.advance(90003, 2) == Action::none && lifecycle.failure() == Lifecycle::Failure::none,
         "confirmed start must clear current failure");
 
     Lifecycle stop;
     stop.desire(true);
-    require(stop.advance(0, 2) == Action::none, "already running must be recognized");
+    require(stop.advance(0, 2) == Action::start, "raw Started without an owned publication must not skip StartAdvertising");
+    stop.commandSucceeded(Action::start);
+    require(stop.advance(0, 2) == Action::none, "accepted start must be recognized");
     stop.desire(false);
-    require(stop.advance(1, 2) == Action::stop && stop.advance(5000, 2) == Action::none, "stop operation must be serialized");
-    require(stop.advance(5001, 2) == Action::none && stop.exhausted(), "stop timeout must be explicit");
+    require(stop.advance(1, 2) == Action::stop && stop.advance(2, 2) == Action::none, "stop operation must be serialized");
+    stop.commandFailed(2, Action::stop);
+    require(stop.exhausted() && !stop.stopped(), "stop exception must not claim publication stopped");
     stop.refresh();
     require(stop.advance(5002, 2) == Action::stop, "explicit refresh must retry a failed stop");
+    stop.commandSucceeded(Action::stop);
+    require(stop.stopped() && stop.advance(10002, 2) == Action::none && !stop.exhausted(),
+        "accepted stop with stale Started must not time out or call StopAdvertising twice");
+    stop.desire(true);
+    require(stop.advance(10003, 2) == Action::start, "second lock must republish despite stale Started");
+    stop.commandFailed(10003, Action::start);
+    require(stop.advance(10004, 2) == Action::none && stop.pending() == Action::none && !stop.started(),
+        "stale Started must not falsely confirm a rejected republish");
+    require(stop.advance(11003, 2) == Action::start, "failed republish must retain bounded retry");
+    stop.commandSucceeded(Action::start);
+    require(stop.advance(11004, 2) == Action::none && stop.failure() == Lifecycle::Failure::none,
+        "accepted republish must recover the second lock");
 }
 
 void testTransportReadinessBindingAndExpiry() {

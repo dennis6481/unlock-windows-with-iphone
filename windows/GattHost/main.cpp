@@ -330,6 +330,7 @@ public:
             invalidateTransport(action == Action::start ? L"publication starting" : L"publication stopping");
             LogLine(state_, false) << "[GattHost] publication command=" << (action == Action::start ? "start" : "stop")
                 << " generation=" << transportGeneration_ << " retry=" << advertising_.retries();
+            bool accepted = false;
             try {
                 if (action == Action::stop) serviceProvider_.StopAdvertising();
                 else {
@@ -338,10 +339,15 @@ public:
                     parameters.IsConnectable(true);
                     serviceProvider_.StartAdvertising(parameters);
                 }
+                advertising_.commandSucceeded(action);
+                accepted = true;
             } catch (...) {
                 advertising_.commandFailed(now, action);
                 state_->record(L"Publication command: " + exceptionText(), true);
             }
+            if (accepted) LogLine(state_, false) << "[GattHost] publication command accepted="
+                << (action == Action::start ? "start" : "stop") << " generation=" << transportGeneration_
+                << " rawStatus=" << static_cast<int>(status());
         }
         if (advertising_.failures() != loggedAdvertisingFailures_) {
             loggedAdvertisingFailures_ = advertising_.failures();
@@ -353,11 +359,12 @@ public:
     void retryAdvertising() { advertising_.refresh(); }
 
     bool advertisingReady() const {
-        return advertising_.desired() && advertising_.pending() == unlock_windows::gatt::AdvertisingLifecycle::Action::none &&
+        return advertising_.desired() && advertising_.started() &&
             status() == GattServiceProviderAdvertisementStatus::Started;
     }
 
     bool advertisingExhausted() const { return advertising_.exhausted(); }
+    bool advertisingStopped() const { return advertising_.stopped(); }
 
     std::wstring advertisingError() const {
         using Failure = unlock_windows::gatt::AdvertisingLifecycle::Failure;
@@ -367,7 +374,6 @@ public:
         case Failure::startException: text = L"Bluetooth publication start failed; see the original error in history"; break;
         case Failure::aborted: text = L"Bluetooth publication was interrupted"; break;
         case Failure::incomplete: text = L"Bluetooth publication is missing advertisement data"; break;
-        case Failure::stopTimeout: text = L"Bluetooth publication did not stop within 5 seconds"; break;
         case Failure::stopException: text = L"Bluetooth publication stop failed; see the original error in history"; break;
         case Failure::none: return {};
         }
@@ -404,7 +410,7 @@ public:
             cleanup([this] {
                 invalidateTransport(L"exit");
                 advertising_.desire(false);
-                if (status() != GattServiceProviderAdvertisementStatus::Created &&
+                if (!advertising_.stopped() && status() != GattServiceProviderAdvertisementStatus::Created &&
                     status() != GattServiceProviderAdvertisementStatus::Stopped) serviceProvider_.StopAdvertising();
             });
             if (advertisementStatusToken_.value) cleanup([this] { serviceProvider_.AdvertisementStatusChanged(advertisementStatusToken_); });
@@ -1153,15 +1159,15 @@ private:
                     ? host_.advertisingReady()
                     : status == GattServiceProviderAdvertisementStatus::Stopped ||
                         status == GattServiceProviderAdvertisementStatus::Created ||
-                        status == GattServiceProviderAdvertisementStatus::Aborted);
+                        status == GattServiceProviderAdvertisementStatus::Aborted || host_.advertisingStopped());
                 if (advertising) {
                     if (host_.advertisingReady()) {
                         if (!pairing_) condition_ = L"This PC is locked and discoverable by your iPhone.";
                     }
                     else if (host_.advertisingExhausted()) condition_ = L"Bluetooth discovery needs attention.";
                     else condition_ += L" Starting or recovering Bluetooth discovery...";
-                } else if (status == GattServiceProviderAdvertisementStatus::Started ||
-                    status == GattServiceProviderAdvertisementStatus::StartedWithoutAllAdvertisementData)
+                } else if (!host_.advertisingStopped() && (status == GattServiceProviderAdvertisementStatus::Started ||
+                    status == GattServiceProviderAdvertisementStatus::StartedWithoutAllAdvertisementData))
                     condition_ += L" Bluetooth discovery is stopping.";
             } else currentError += L" GATT initialization failed; restart the EXE: " + initializationError_;
         } catch (...) {
@@ -1229,6 +1235,10 @@ private:
             L"\r\nConsole session: " + std::to_wstring(WTSGetActiveConsoleSessionId()) +
             L"\r\nCurrent lifecycle error: " + (lastError_.empty() ? L"none" : lastError_) +
             L"\r\nLast registration result: " + (pairingOutcome_.empty() ? L"none" : pairingOutcome_);
+        if (host_.initialized()) details += L"\r\nWinRT publication status (raw): " +
+            std::to_wstring(static_cast<int>(host_.status())) + L"\r\nApplication publication state: " +
+            (host_.advertisingStopped() ? L"no active publication request" :
+                host_.advertisingReady() ? L"started" : L"pending or failed; see history");
         std::lock_guard lock(state_->mutex);
         return details + L"\r\nLast communication error (history): " + state_->transportError +
             L"\r\n\r\nDiagnostic history:\r\n" + state_->diagnostics;

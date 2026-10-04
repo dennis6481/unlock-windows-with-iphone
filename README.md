@@ -12,11 +12,24 @@
 
 ## 当前边界
 
+2026-10-04 发布前安装整理（源码待验收）：Windows 产品版本从 `0.1.0` 开始。CP 和凭据服务保留 System32；托盘、配对工具、密码管理器及正式 `setup.exe` 放 Program Files 产品目录。准备前记录事务，暂存位于受保护 ProgramData，独立退出收尾核验后释放，不积累正式副本或历史目录。较高版本更新、同版本明确重新安装、较低版本拒绝；更新保留凭据与登记，完整卸载清除 Windows 密码副本、公钥登记、安装用户 ComputerId 和产品记录，iPhone 记录由用户自行删除。Windows 设置保留单个带版本卸载入口，不创建开始菜单项。当前无版本测试安装先用旧工具卸载，不增加迁移兼容。[当前流程与验收](windows/ComponentsWizard/README.md)。未构建、运行安装器回归或部署新源码；解锁与连接功能继续冻结。
+
+同日独立清理已删除本机 16 个旧暂存目录、90 个文件（约 24 MB），正式六组件 SHA-256 未改变，没有修改登记与密码。没有落地清理脚本；此实机清理不等于新安装器收尾验收通过。
+
+Windows 安装包构建命名为 `UnlockWithIPhone_<版本号>_setup.exe`，当前版本对应 `UnlockWithIPhone_0.1.0_setup.exe`。版本自动读取 `windows/ProductVersion.h`，修改版本后构建名称同步更新；暂存及安装后的维护程序仍名 `setup.exe`。这次只调整产物命名、只读诊断文件查找及说明，没有修改业务代码或执行构建。
+
+2026-10-04 本次清理：先在 [AGENTS.md](AGENTS.md) 加入新增定义前查找复用、同一职责唯一真相源和替代旧实现时确认兼容需求的规则。本版明确未部署且不兼容历史实现。iOS 删除偏好／目标记录迁移及无调用代码；安装与更新合并完成步骤，删除不再产生的阶段。安装共享契约集中到 [SetupContract.h](windows/ComponentsWizard/SetupContract.h)，内嵌 PowerShell 与只读诊断消费同源定义，组件清单、版本、服务名和 GUID 继续复用原来源。文档与用例源码已同步；仅做静态验证，未构建、执行编译型测试、安装或验收运行行为。
+
+2026-10-04 iOS 隔夜恢复修正：用户日志确认 App 已在后台收到恢复／发现事件，旧待连接随后约 61 秒才执行原十秒超时，并优先重试旧候选。现将系统待连接与已连接 GATT 初始化分开管理，新广播可建立独立待连接请求，只有实际连上的候选占用初始化位置；连接等待不设 App 超时，连接后的十秒期限仍保留，并在恢复运行及回调时直接核对。已补按设备重试、取消隔离及挂起后期限用例，尚未构建、运行测试或实机验收；原生连接为何停滞仍待日志确认。本轮仅改 iOS 和说明，已有 ComputerId／公钥、就绪握手、30 秒认证期限和 Windows 行为保持原合同。[恢复与验收步骤](ios/README.md#connection-and-recovery)。
+
+2026-10-04 用户更新并重启后，首次锁屏解锁成功，第二次等待 iPhone。日志定位 Windows 停止后的旧 Started 属性阻止重新发布；调用结果与原始属性分离的修正及回归源码已完成，仅静态检查，尚未构建或实测。需更新 Windows 再验证连续锁屏，匹配的 iOS 和已有登记保持有效；[观察与待验收项](windows/Validation.md#待验收)。
+
 2026-10-03 锁屏蓝牙恢复修复已写入源码：Windows 区分广播目标、实际状态和在途启停，限时操作并最多三次重试；iPhone 确认服务缺失后释放连接，等待指定服务广播。新增手机就绪握手，Windows 仅在收到本次请求的有效回执后领取 challenge，准备阶段不消耗或延长原有 30 秒请求。回归用例已补，本轮仅静态检查，未构建、运行测试或完成双端实测；需 Windows／iOS 匹配版本一起更新，已有有效 ComputerId 和公钥无需重新登记。用户日志已观察到解锁后服务失效并长期等待，广播中止底层原因与此前完整时序仍未确认。
 
 2026-10-02 用户补充实测：重启后首次登录不显示自定义磁贴，使用原生密码进入 Windows。这符合预期，是保留的行为边界，不是缺失功能或待实现的首次登录路径。
 
 - BLE 只运输 challenge、assertion 和结果，不把“附近存在设备”当作认证。
+- 成功批准之间不设固定冷却期；快速再次锁屏仍须新的请求和有效手机签名，防重放、一次性批准及会话校验保持有效。2026-10-04 已移除原 5 秒限制并更新专项用例，仅静态检查，尚未构建或实测。
 - iPhone 私钥不可导出；Windows 只保存登记后的 P-256 公钥和账户 SID。
 - Windows 密码由专用 LocalSystem 服务使用自身 user scope 的 DPAPI 保存，不使用 `CRYPTPROTECT_LOCAL_MACHINE`；Credential Provider 只能在有效手机授权窗口内领取一次。
 - Credential Provider 不提供手输密码输入框，也没有绕过手机批准的测试开关。
@@ -112,11 +125,11 @@ This project is licensed under the MIT License. See [LICENSE.md](LICENSE.md).
 
 用户已确认 Windows 方面的交互符合预期。本记录覆盖用户对当前 Windows 交互的总体反馈，不将首次登记后解锁、更换后旧手机失效、移除后的实际效力、密码副本不变、另一管理员凭据通信及取消／超时／失败专项分别记为通过。iOS 改动及完整两端蓝牙登记仍待验证，用户明确暂缓后续测试；原子保存回归用例也未由代理编译或执行。
 
-安装器当前部署 System32 工具并注册目标用户 Run；用户确认新版本 Update 和自启项注册成功。实际重新登录自启与完整卸载等专项未单独确认；完整蓝牙登记仍未最终验收。
+该阶段使用旧 System32 工具布局并注册目标用户 Run，用户确认 Update 和自启项注册成功。此历史结果不适用于本轮 Program Files 布局与退出收尾；实际重新登录自启、完整卸载和完整蓝牙登记仍需专项验收。
 
 ## 安装器与登录自启（2026-10-02，代码接入，待验收）
 
-独立 Win32 页面取代 Wizard97 导航和更新复选框，六个预编译组件统一部署到 System32。蓝牙只通过目标用户 Run 登录自启，以普通权限运行；密码服务保持开机自动启动。重启续办由 SYSTEM 无窗口完成，结果由目标用户普通权限提示，详见 [安装流程](windows/ComponentsWizard/README.md)。用户已确认 Update 和自启项注册成功；结构清理后的代码仍需回归。本轮未更改认证协议、密码格式或 iOS，原有 iOS 工作区改动保留。
+该阶段独立 Win32 页面取代 Wizard97，采用六组件 System32 布局。蓝牙通过目标用户 Run 以普通权限登录自启，密码服务保持开机自动启动。用户已确认当时的 Update 和自启项注册成功；当前部署布局及退出收尾以 [安装流程](windows/ComponentsWizard/README.md) 为准，不将历史结果计入新代码验收。
 
 参考：[Task Scheduler schema](https://learn.microsoft.com/en-us/windows/win32/taskschd/task-scheduler-schema)、[ITaskFolder::DeleteTask](https://learn.microsoft.com/en-us/windows/win32/api/taskschd/nf-taskschd-itaskfolder-deletetask)。
 
@@ -142,7 +155,7 @@ This project is licensed under the MIT License. See [LICENSE.md](LICENSE.md).
 
 ## Windows 部署清理与冻结边界（2026-10-02）
 
-ComponentFiles.h 唯一定义六个部署文件及工具属性，暂存、替换、路径核对和工具移除复用同一清单；DesktopDeployment.cpp 统一管理任务、Run、快捷方式和托盘交接，移除重复 COM/任务封装及转调接口。Run 是唯一持续 GATT 自启入口，旧任务名仅用于迁移移除和诊断。事务 TargetSid 是目标身份来源，观察快照与完成结果不另行选择用户。
+ComponentFiles.h 唯一定义六个部署文件及工具属性，暂存、替换、路径核对和工具移除复用同一清单；DesktopDeployment.cpp 统一管理任务、Run、快捷方式和托盘交接。Run 是唯一持续 GATT 自启入口。当前三个短期任务分别负责事务续办、结果显示和最终收尾。目标身份优先取进行中事务的 TargetSid，事务不存在时取正式安装记录，观察快照与完成结果不另行选择用户。
 
 可冻结已观察的 Update 与自启项注册成果，不扩大为全部部署测试通过。此次结构清理仅静态检查，新增清单用例未编译或执行；清理后的二进制仍需一次 Update/登录自启及手机解锁回归。具体当前流程与待验收项集中在 [安装器文档](windows/ComponentsWizard/README.md)。
 
@@ -167,13 +180,15 @@ iOS 对系统恢复的候选设备读取 ComputerId 并重新核实订阅；长�
 
 ## iOS 连接回归、长期等待与界面（2026-10-03，代码完成／待验收）
 
+本节保留历史实现记录。服务缺失时保留连接的方案已由就绪握手修复替代；未知候选十秒连接等待、单个待连接位置及扫描轮次去重已由 2026-10-04 的隔夜恢复修正替代。当前合同与验收以 [iOS 文档](ios/README.md#connection-and-recovery) 为准，历史源码或实测结果不能视为新路径已通过。
+
 用户报告 `70ca5eb` 后出现服务失效／主动断连循环和无法解锁；此前修复已改为原连接重新发现。随后用户确认：重新登记后电脑处于未锁屏桌面时，iOS 未发现服务或初始化超时；后续电脑锁屏无法恢复，但手动重试或返回前台可恢复并成功解锁。已确认代码会在重试耗尽后停止扫描；具体 Windows 服务回调时序仍待双端日志核对，不宣称所有错误均由停止广播直接造成。
 
 本轮仅修复 iOS 等待生命周期：已登记目标的系统待连接请求无十秒期限，未知候选探测与实际初始化仍限制十秒；每轮最多一次主动重连，耗尽后保持被动等待而非全局停用扫描。服务发现为空保留物理连接并等待服务变化，当前身份资格、旧特征和未完成认证失效；服务恢复后重新核对 ComputerId 与双订阅。设备去重限定于扫描轮次并使用有界最近历史，新 UUID 可串行替换旧待连接。返回前台仅协调缺失操作，不重置正常等待；无无限定时轮询。连接、登记和认证保持独立状态，旧 RSSI／发现／写入回调不能直接推进新请求。
 
-复用 Windows `cd11511` 已有 ComputerId 只读特征，将 peripheral UUID 降为连接缓存、名称仅作显示。旧 iPhone 登记需显式重新登记一次，沿用 Secure Enclave 密钥；取消、失败与服务重新加载失败不替换有效目标。自动响应首次升级静默开启一次，之后仅由用户主动改变，断连不关闭开关。删除常驻连接／停止、手动准备密钥和本地签名自测按钮，登记独立流程，失败才出现连接重试。
+复用 Windows `cd11511` 已有 ComputerId 只读特征，将 peripheral UUID 降为连接缓存、名称仅作显示。iPhone 仅保存 registeredWindowsComputer，沿用 Secure Enclave 密钥；取消、失败与服务重新加载失败不替换有效目标。自动响应读取现有设置，未保存时默认开启，已保存的关闭保持关闭；读取不写设置或迁移标记，断连不关闭开关。删除常驻连接／停止、手动准备密钥和本地签名自测按钮，登记独立流程，失败才出现连接重试。
 
-现有 ComputerId 登记无需再次迁移或重新登记。本轮仅修改 iOS 及公共说明，没有修改现有 Windows 工作区改动；已补长期等待、事件恢复、扫描去重及旧数据隔离用例，未构建、执行测试、安装或实机验收。详见 [iOS 状态合同、迁移与验收](ios/README.md)。先验收桌面等待至少一分钟、手机保持后台且不点击重试，随后 Windows 锁屏／Enter 解锁及连续五轮循环，再测托盘重启、新 UUID 与整夜待机。若服务重新发布不能触发系统恢复事件，保留证据并报告，不增加无限轮询或私自修改 Windows 广播；完整配对取消／失败专项继续单列。
+已补长期等待、事件恢复和扫描去重用例源码，未构建、执行测试、安装或实机验收。详见 [iOS 状态合同与验收](ios/README.md)。先验收桌面等待至少一分钟、手机保持后台且不点击重试，随后 Windows 锁屏／Enter 解锁及连续五轮循环，再测托盘重启、新 UUID 与整夜待机。若服务重新发布不能触发系统恢复事件，保留证据并报告，不增加无限轮询或私自修改 Windows 广播；完整配对取消／失败专项继续单列。
 
 参考：[Apple 服务失效与重新发现](https://developer.apple.com/documentation/corebluetooth/cbperipheraldelegate/peripheral(_:didmodifyservices:))、[Apple 指定服务扫描](https://developer.apple.com/documentation/corebluetooth/cbcentralmanager/scanforperipherals(withservices:options:))、[Apple 后台蓝牙与长期待连接](https://developer.apple.com/library/archive/documentation/NetworkingInternetWeb/Conceptual/CoreBluetooth_concepts/CoreBluetoothBackgroundProcessingForIOSApps/PerformingTasksWhileYourAppIsInTheBackground.html)。
 
@@ -187,6 +202,8 @@ iOS 对系统恢复的候选设备读取 ComputerId 并重新核实订阅；长�
 
 代码及测试源码已更新，仅静态检查，未构建、执行测试、安装或提交。新界面待验收；详细操作与 DPI／登记／维护／解锁回归清单集中在 [Windows UI 验收](windows/README.md#windows-ui-验收2026-10-03)。
 
-本轮追加将安装器默认页收紧，展开详情才增加高度，打开时在活动显示器居中，调整大小保持中心。Windows 可见完整产品名统一为 **Unlock Windows with iPhone®**，已安装页标题为 **Unlock Windows with iPhone® installed**。对外安装产物为 `setup.exe`；系统内部维护文件名与注册标识保留，避免破坏既有续办记录。未构建或运行，新布局仍待验收。
+本轮追加将安装器默认页收紧，展开详情才增加高度，打开时在活动显示器居中，调整大小保持中心。Windows 可见完整产品名统一为 **Unlock Windows with iPhone®**，已安装页标题为 **Unlock Windows with iPhone® installed**。此为历史 UI 记录；当时仅对外安装产物叫 `setup.exe`，内部旧维护文件名现已由本轮正式布局替代，不迁移旧续办记录。未构建或运行，新布局仍待验收。
 
 参考：[Microsoft 高 DPI 桌面开发指南](https://learn.microsoft.com/en-us/windows/win32/hidpi/high-dpi-desktop-application-development-on-windows)。
+
+参考：[Microsoft 应用卸载注册项](https://learn.microsoft.com/en-us/windows/win32/msi/uninstall-registry-key)、[Windows 文件关闭与删除](https://learn.microsoft.com/en-us/windows/win32/fileio/closing-and-deleting-files)、[MoveFileEx 延迟删除及返回值限制](https://learn.microsoft.com/windows/win32/api/winbase/nf-winbase-movefileexa)、[Task Scheduler 主动启动](https://learn.microsoft.com/en-us/windows/win32/api/taskschd/nf-taskschd-iregisteredtask-run)、[Task Scheduler 结果码](https://learn.microsoft.com/en-us/windows/win32/taskschd/task-scheduler-error-and-success-constants)。

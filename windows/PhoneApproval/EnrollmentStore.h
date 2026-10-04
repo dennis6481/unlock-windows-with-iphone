@@ -10,6 +10,11 @@
 
 namespace unlock_windows::phone_approval {
 
+inline constexpr wchar_t kEnrollmentDataDirectoryName[] = L"UnlockWindowsWithIPhone";
+inline constexpr wchar_t kEnrollmentFileName[] = L"enrollment.dat";
+inline constexpr wchar_t kEnrollmentPendingSuffix[] = L".pending-";
+inline constexpr wchar_t kEnrollmentWriterMutex[] = L"Global\\UnlockWindowsWithIPhone-EnrollmentWriter";
+
 struct EnrollmentRecord final {
     std::vector<std::uint8_t> publicKey;
     std::wstring accountSid;

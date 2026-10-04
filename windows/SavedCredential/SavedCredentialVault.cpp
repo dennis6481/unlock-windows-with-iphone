@@ -241,7 +241,7 @@ bool sameIdentity(const Identity& left, const Identity& right) noexcept {
 
 Vault::Vault() {
     requireSystemContext();
-    directory_ = programData() / L"UnlockWindowsSavedCredential";
+    directory_ = programData() / kVaultDirectoryName;
     file_ = directory_ / L"saved-credential.dat";
     SecurityDescriptor security;
     auto attributes = security.attributes();

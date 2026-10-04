@@ -5,9 +5,15 @@
 #define SECURITY_WIN32
 
 #include "WindowsAdapter.h"
+#include "InstallationPaths.h"
+#include "SetupFinalization.h"
 #include "SavedCredentialIpc.h"
+#include "../CredentialProvider/UnlockCredentialProvider.h"
 
 #include <Windows.h>
+#include <aclapi.h>
+#include <shlobj.h>
+#include <winver.h>
 #include <security.h>
 #include <shellapi.h>
 #include <sddl.h>
@@ -25,20 +31,17 @@ namespace unlock::components {
 namespace {
 
 constexpr wchar_t kCredentialProviderName[] = L"Unlock Windows with iPhone\u00ae";
-constexpr wchar_t kCredentialProviderRegistryPath[] =
-    L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Authentication\\Credential Providers\\"
-    L"{2F7A2DF4-75B4-4D8E-8A3B-0DA46C6E9112}";
-constexpr wchar_t kCredentialProviderClsidRegistryPath[] =
-    L"SOFTWARE\\Classes\\CLSID\\{2F7A2DF4-75B4-4D8E-8A3B-0DA46C6E9112}";
-constexpr wchar_t kWizardStateRegistryPath[] = L"SOFTWARE\\UnlockWindowsWithIPhone\\ComponentsWizard";
-constexpr wchar_t kSchemaVersionValueName[] = L"SchemaVersion";
-constexpr wchar_t kStatePhaseValueName[] = L"Phase";
-constexpr wchar_t kStateTransactionIdValueName[] = L"TransactionId";
-constexpr wchar_t kStateWizardPathValueName[] = L"WizardPath";
-constexpr wchar_t kStateCreatedAtValueName[] = L"CreatedAtUtc";
-constexpr wchar_t kStateLastErrorValueName[] = L"LastError";
-constexpr wchar_t kCredentialCleanupValueName[] = L"CredentialCleanupConfirmed";
-constexpr wchar_t kUpdateRebootGuard[] = L"SOFTWARE\\UnlockWindowsWithIPhone\\ComponentsWizard\\UpdateRebootGuard";
+const std::wstring kCredentialProviderClsidText = [] {
+    std::array<wchar_t, 39> text{};
+    if (!StringFromGUID2(unlock_windows::credential_provider::kUnlockCredentialProviderClsid,
+            text.data(), static_cast<int>(text.size())))
+        throw ComponentError(L"Cannot format Credential Provider CLSID.");
+    return std::wstring(text.data());
+}();
+const std::wstring kCredentialProviderRegistryPath =
+    std::wstring(kCredentialProviderRegistryRoot) + L"\\" + kCredentialProviderClsidText;
+const std::wstring kCredentialProviderClsidRegistryPath =
+    std::wstring(kClsidRegistryRoot) + L"\\" + kCredentialProviderClsidText;
 
 [[noreturn]] void fail(const std::wstring& message) {
     throw ComponentError(message);
@@ -270,10 +273,6 @@ bool registryKeyExists(const wchar_t* subkey) {
     return true;
 }
 
-bool isKnownPhase(const DWORD phase) {
-    return phase <= static_cast<DWORD>(WizardPhase::installPendingReboot);
-}
-
 std::filesystem::path system32Directory() {
     std::vector<wchar_t> directory(MAX_PATH);
     const auto length = GetSystemDirectoryW(directory.data(), static_cast<UINT>(directory.size()));
@@ -299,6 +298,45 @@ bool fileExists(const std::filesystem::path& path) {
     const bool regular = std::filesystem::is_regular_file(path, error);
     if (error || !regular) fail(L"Component path is not a regular file: " + path.wstring());
     return true;
+}
+
+void protectedDirectory(const std::filesystem::path& path, bool create) {
+    if (create) {
+        PSECURITY_DESCRIPTOR descriptor = nullptr;
+        checkWin32(ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            L"D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FRFX;;;BU)", SDDL_REVISION_1,
+            &descriptor, nullptr), L"Create deployment directory security");
+        SECURITY_ATTRIBUTES security{sizeof(security), descriptor, FALSE};
+        const BOOL made = CreateDirectoryW(path.c_str(), &security);
+        const DWORD error = GetLastError(); LocalFree(descriptor);
+        if (!made && error != ERROR_ALREADY_EXISTS) fail(L"Could not create " + path.wstring() + L": " + win32ErrorMessage(error));
+    }
+    const DWORD attributes = GetFileAttributesW(path.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_DIRECTORY) ||
+        (attributes & FILE_ATTRIBUTE_REPARSE_POINT)) fail(L"Unsafe deployment directory: " + path.wstring());
+    PSECURITY_DESCRIPTOR raw = nullptr; PACL acl = nullptr; PSID owner = nullptr;
+    const DWORD result = GetNamedSecurityInfoW(const_cast<wchar_t*>(path.c_str()), SE_FILE_OBJECT,
+        OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION, &owner, nullptr, &acl, nullptr, &raw);
+    if (result != ERROR_SUCCESS) fail(L"Cannot inspect deployment ACL: " + win32ErrorMessage(result));
+    struct Descriptor { PSECURITY_DESCRIPTOR p; ~Descriptor() { LocalFree(p); } } descriptor{raw};
+    BYTE system[SECURITY_MAX_SID_SIZE]{}, administrators[SECURITY_MAX_SID_SIZE]{};
+    DWORD systemSize = sizeof(system), adminSize = sizeof(administrators);
+    checkWin32(CreateWellKnownSid(WinLocalSystemSid, nullptr, system, &systemSize), L"Resolve SYSTEM SID");
+    checkWin32(CreateWellKnownSid(WinBuiltinAdministratorsSid, nullptr, administrators, &adminSize), L"Resolve administrator SID");
+    if (!acl || !owner || (!EqualSid(owner, system) && !EqualSid(owner, administrators)))
+        fail(L"Deployment directory is not administrator-owned: " + path.wstring());
+    constexpr DWORD writes = FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA | FILE_WRITE_ATTRIBUTES |
+        FILE_DELETE_CHILD | DELETE | WRITE_DAC | WRITE_OWNER | GENERIC_WRITE | GENERIC_ALL;
+    for (DWORD i = 0; i < acl->AceCount; ++i) {
+        LPVOID entry = nullptr; checkWin32(GetAce(acl, i, &entry), L"Read deployment ACL entry");
+        const auto header = static_cast<ACE_HEADER*>(entry);
+        if (header->AceFlags & INHERIT_ONLY_ACE) continue;
+        if (header->AceType == ACCESS_DENIED_ACE_TYPE) continue;
+        if (header->AceType != ACCESS_ALLOWED_ACE_TYPE) fail(L"Unsupported deployment ACL entry.");
+        const auto ace = static_cast<ACCESS_ALLOWED_ACE*>(entry);
+        if ((ace->Mask & writes) && !EqualSid(&ace->SidStart, system) && !EqualSid(&ace->SidStart, administrators))
+            fail(L"Deployment directory is writable by another identity: " + path.wstring());
+    }
 }
 
 Architecture nativeArchitecture() {
@@ -455,6 +493,46 @@ std::filesystem::path WindowsAdapter::savedCredentialServiceTarget() const {
     return system32Directory() / kSavedCredentialServiceFile;
 }
 
+std::filesystem::path WindowsAdapter::componentTarget(const ComponentFile& component) const {
+    return (component.desktopTool ? desktopDirectory() : system32Directory()) / component.name;
+}
+ProductVersion WindowsAdapter::binaryVersion(const std::filesystem::path& file) const {
+    DWORD ignored = 0;
+    const DWORD size = GetFileVersionInfoSizeW(file.c_str(), &ignored);
+    if (!size) fail(L"Missing product version: " + file.wstring());
+    std::vector<BYTE> data(size);
+    checkWin32(GetFileVersionInfoW(file.c_str(), 0, size, data.data()), L"Read component product version");
+    VS_FIXEDFILEINFO* info = nullptr; UINT bytes = 0;
+    checkWin32(VerQueryValueW(data.data(), L"\\", reinterpret_cast<void**>(&info), &bytes), L"Read fixed product version");
+    if (bytes < sizeof(*info) || info->dwSignature != 0xFEEF04BD || LOWORD(info->dwProductVersionLS) != 0 ||
+        info->dwProductVersionMS != info->dwFileVersionMS || info->dwProductVersionLS != info->dwFileVersionLS)
+        fail(L"Invalid or inconsistent component version: " + file.wstring());
+    return {HIWORD(info->dwProductVersionMS), LOWORD(info->dwProductVersionMS), HIWORD(info->dwProductVersionLS)};
+}
+ProductVersion WindowsAdapter::validatePackage(const WizardState& state) const {
+    const auto version = parseProductVersion(state.packageVersion);
+    if (!version) fail(L"Invalid recorded package version.");
+    for (const auto& component : kComponentFiles) {
+        const auto source = wcscmp(component.name, kInstallerFile) == 0
+            ? std::filesystem::path(state.sourcePath) : std::filesystem::path(state.sourcePath).parent_path() / component.name;
+        if (!fileExists(source) || executableArchitecture(source) != environment().nativeArchitecture || binaryVersion(source) != *version)
+            fail(L"Missing, wrong-architecture or mixed-version package component: " + source.wstring());
+    }
+    return *version;
+}
+void WindowsAdapter::validateInstalledVersions(const WizardState& state) const {
+    const auto version = parseProductVersion(state.installedVersion);
+    if (!version) fail(L"Installed product version is missing or invalid. No migration will run.");
+    for (const auto& component : kComponentFiles)
+        if (binaryVersion(componentTarget(component)) != *version)
+            fail(L"Installed component version disagrees with the product record: " + componentTarget(component).wstring());
+}
+void WindowsAdapter::ensureDeploymentDirectories() const {
+    protectedDirectory(desktopDirectory(), true);
+    for (const auto& path : {productDataDirectory(), productDataDirectory() / kSetupDirectoryName, transactionRoot()})
+        protectedDirectory(path, true);
+}
+
 EnvironmentStatus WindowsAdapter::environment() const {
     EnvironmentStatus result;
     result.elevated = isElevated();
@@ -466,37 +544,58 @@ EnvironmentStatus WindowsAdapter::environment() const {
 void WindowsAdapter::assertSupportedAdministratorEnvironment() const {
     const auto status = environment();
     if (!status.elevated) {
-        fail(L"Run the Components Wizard as an administrator.");
+        fail(L"Run Windows Setup as an administrator.");
     }
     if (status.nativeArchitecture != Architecture::x64 && status.nativeArchitecture != Architecture::arm64) {
         fail(L"Only x64 and ARM64 Windows are supported.");
     }
     if (status.wizardArchitecture != status.nativeArchitecture) {
         fail(
-            L"This wizard is " + std::wstring(architectureName(status.wizardArchitecture)) +
-            L", but Windows is " + architectureName(status.nativeArchitecture) + L". Rebuild the wizard for the native architecture."
+            L"This installer is " + std::wstring(architectureName(status.wizardArchitecture)) +
+            L", but Windows is " + architectureName(status.nativeArchitecture) + L". Rebuild the installer for the native architecture."
         );
     }
 }
 
 std::optional<WizardState> WindowsAdapter::readState() const {
-    const auto phase = readRegistryDword(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStatePhaseValueName);
+    const auto phase = readRegistryDword(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath.c_str(), kStatePhaseValueName);
     if (!phase) {
-        if (registryKeyExists(kWizardStateRegistryPath)) {
+        if (registryKeyExists(kWizardStateRegistryPath.c_str())) {
             fail(L"The Components Wizard state key exists but has no phase value.");
         }
-        return std::nullopt;
+        if (!registryKeyExists(kInstalledProductRegistryPath.c_str())) return std::nullopt;
+        WizardState installed;
+        installed.schemaVersion = readRegistryDword(HKEY_LOCAL_MACHINE, kInstalledProductRegistryPath.c_str(), kSchemaVersionValueName).value_or(0);
+        installed.phase = WizardPhase::installed;
+        installed.targetSid = readRegistryString(HKEY_LOCAL_MACHINE, kInstalledProductRegistryPath.c_str(), kTargetSidValueName).value_or(L"");
+        installed.installedVersion = readRegistryString(HKEY_LOCAL_MACHINE, kInstalledProductRegistryPath.c_str(), kInstalledVersionValueName).value_or(L"");
+        installed.packageVersion = installed.installedVersion;
+        installed.wizardPath = readRegistryString(HKEY_LOCAL_MACHINE, kInstalledProductRegistryPath.c_str(), kStateWizardPathValueName).value_or(L"");
+        installed.transactionId = readRegistryString(HKEY_LOCAL_MACHINE, kInstalledProductRegistryPath.c_str(), kLastOperationIdValueName).value_or(L"");
+        if (installed.schemaVersion != kWizardStateSchemaVersion || !parseProductVersion(installed.installedVersion) ||
+            installed.targetSid.empty() || installed.wizardPath != (desktopDirectory() / kInstallerFile).wstring())
+            fail(L"Installed product record is incomplete or unsupported. No migration will run.");
+        PSID sid = nullptr;
+        if (!ConvertStringSidToSidW(installed.targetSid.c_str(), &sid)) fail(L"Invalid installed product user SID.");
+        const bool valid = IsValidSid(sid) != FALSE; LocalFree(sid);
+        if (!valid || installed.targetSid == L"S-1-5-18") fail(L"Invalid installed product user SID.");
+        return installed;
     }
     WizardState state;
-    state.schemaVersion = readRegistryDword(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kSchemaVersionValueName).value_or(0);
+    state.schemaVersion = readRegistryDword(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath.c_str(), kSchemaVersionValueName).value_or(0);
     state.phase = static_cast<WizardPhase>(*phase);
-    state.transactionId = readRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStateTransactionIdValueName).value_or(L"");
-    state.wizardPath = readRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStateWizardPathValueName).value_or(L"");
-    state.createdAtUtc = readRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStateCreatedAtValueName).value_or(L"");
-    state.lastError = readRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStateLastErrorValueName).value_or(L"");
-    state.targetSid = readRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, L"TargetSid").value_or(L"");
+    state.transactionId = readRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath.c_str(), kStateTransactionIdValueName).value_or(L"");
+    state.wizardPath = readRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath.c_str(), kStateWizardPathValueName).value_or(L"");
+    state.createdAtUtc = readRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath.c_str(), kStateCreatedAtValueName).value_or(L"");
+    state.lastError = readRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath.c_str(), kStateLastErrorValueName).value_or(L"");
+    state.targetSid = readRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath.c_str(), kTargetSidValueName).value_or(L"");
     state.credentialCleanupConfirmed = readRegistryDword(
-        HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kCredentialCleanupValueName).value_or(0) == 1;
+        HKEY_LOCAL_MACHINE, kWizardStateRegistryPath.c_str(), kCredentialCleanupValueName).value_or(0) == 1;
+    state.operation = static_cast<SetupOperation>(readRegistryDword(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath.c_str(), kOperationValueName).value_or(99));
+    state.sourcePath = readRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath.c_str(), kSourcePathValueName).value_or(L"");
+    state.installedVersion = readRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath.c_str(), kInstalledVersionValueName).value_or(L"");
+    state.packageVersion = readRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath.c_str(), kPackageVersionValueName).value_or(L"");
+    state.payloadReady = readRegistryDword(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath.c_str(), kPayloadReadyValueName).value_or(0) == 1;
     if (state.schemaVersion != kWizardStateSchemaVersion || !isKnownPhase(*phase) || state.targetSid.empty())
         fail(L"Unsupported or incomplete installation record. No migration will run.");
     PSID target = nullptr;
@@ -504,24 +603,63 @@ std::optional<WizardState> WindowsAdapter::readState() const {
         fail(L"The recorded startup account SID is invalid.");
     const bool valid = IsValidSid(target) != FALSE;
     LocalFree(target);
-    if (!valid) fail(L"The recorded startup account SID is invalid.");
+    if (!valid || state.targetSid == L"S-1-5-18") fail(L"The recorded startup account SID is invalid.");
+    if (state.operation > SetupOperation::uninstall || !parseProductVersion(state.packageVersion) ||
+        (state.phase == WizardPhase::installed && !parseProductVersion(state.installedVersion)))
+        fail(L"Unsupported product version or operation record. No migration will run.");
     return state;
 }
 
 void WindowsAdapter::writeState(const WizardState& state) const {
-    writeRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, L"TargetSid", state.targetSid);
-    writeRegistryDword(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kSchemaVersionValueName, state.schemaVersion);
-    writeRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStateTransactionIdValueName, state.transactionId);
-    writeRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStateWizardPathValueName, state.wizardPath);
-    writeRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStateCreatedAtValueName, state.createdAtUtc);
-    writeRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStateLastErrorValueName, state.lastError);
-    writeRegistryDword(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath,
+    writeRegistryDword(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath.c_str(), kOperationValueName, static_cast<DWORD>(state.operation));
+    writeRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath.c_str(), kSourcePathValueName, state.sourcePath);
+    writeRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath.c_str(), kInstalledVersionValueName, state.installedVersion);
+    writeRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath.c_str(), kPackageVersionValueName, state.packageVersion);
+    writeRegistryDword(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath.c_str(), kPayloadReadyValueName, state.payloadReady ? 1 : 0);
+    writeRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath.c_str(), kTargetSidValueName, state.targetSid);
+    writeRegistryDword(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath.c_str(), kSchemaVersionValueName, state.schemaVersion);
+    writeRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath.c_str(), kStateTransactionIdValueName, state.transactionId);
+    writeRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath.c_str(), kStateWizardPathValueName, state.wizardPath);
+    writeRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath.c_str(), kStateCreatedAtValueName, state.createdAtUtc);
+    writeRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath.c_str(), kStateLastErrorValueName, state.lastError);
+    writeRegistryDword(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath.c_str(),
         kCredentialCleanupValueName, state.credentialCleanupConfirmed ? 1 : 0);
-    writeRegistryDword(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath, kStatePhaseValueName, static_cast<DWORD>(state.phase));
+    writeRegistryDword(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath.c_str(), kStatePhaseValueName, static_cast<DWORD>(state.phase));
 }
 
-void WindowsAdapter::clearState() const {
-    deleteRegistryTree(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath);
+void WindowsAdapter::registerApplicationUninstall(const std::filesystem::path& executable) const {
+    const auto command = L"\"" + executable.wstring() + L"\" --uninstall";
+    const auto icon = L"\"" + executable.wstring() + L"\",0";
+    const auto state = readState();
+    if (!state) fail(L"Application registration requires a product record.");
+    const std::array<std::pair<const wchar_t*, std::wstring>, 6> values{{
+        {kUninstallStringValueName, command},
+        {kDisplayIconValueName, icon},
+        {L"Publisher", L"Rui MA"},
+        {L"InstallLocation", desktopDirectory().wstring()},
+        {kDisplayVersionValueName, state->installedVersion.empty() ? state->packageVersion : state->installedVersion},
+        {L"DisplayName", L"Unlock Windows with iPhone\u00ae"},
+    }};
+    logOperation(L"Register Installed apps uninstall entry: " + command);
+    for (const auto& value : values)
+        writeRegistryString(HKEY_LOCAL_MACHINE, kApplicationUninstallRegistryPath, value.first, value.second);
+    writeRegistryDword(HKEY_LOCAL_MACHINE, kApplicationUninstallRegistryPath, L"NoModify", 1);
+    writeRegistryDword(HKEY_LOCAL_MACHINE, kApplicationUninstallRegistryPath, L"NoRepair", 1);
+    for (const auto& value : values) {
+        if (readRegistryString(HKEY_LOCAL_MACHINE, kApplicationUninstallRegistryPath, value.first) != value.second)
+            fail(L"Installed apps registration verification failed: " + std::wstring(value.first));
+    }
+    if (readRegistryDword(HKEY_LOCAL_MACHINE, kApplicationUninstallRegistryPath, L"NoModify") != 1 ||
+        readRegistryDword(HKEY_LOCAL_MACHINE, kApplicationUninstallRegistryPath, L"NoRepair") != 1)
+        fail(L"Installed apps action registration verification failed.");
+}
+
+void WindowsAdapter::registerFinalizationUninstall(const WizardState& state) const {
+    const auto executable = system32Directory() / L"WindowsPowerShell" / L"v1.0" / L"powershell.exe";
+    if (!fileExists(executable)) fail(L"System Windows PowerShell is missing; finalization cannot start.");
+    registerApplicationUninstall(executable);
+    writeRegistryString(HKEY_LOCAL_MACHINE, kApplicationUninstallRegistryPath, kUninstallStringValueName,
+        L"\"" + executable.wstring() + L"\" " + encodedPowerShell(finalizationRecoveryScript(*this, state)));
 }
 
 void WindowsAdapter::copyNativeBinary(const std::filesystem::path& source, const std::filesystem::path& target,
@@ -604,25 +742,27 @@ std::filesystem::path WindowsAdapter::updateDirectory(const WizardState& state) 
     if (state.transactionId.empty() || state.transactionId.find_first_not_of(L"0123456789-") != std::wstring::npos) {
         fail(L"The update transaction identifier is invalid.");
     }
-    return system32Directory() / (L"UnlockWindowsUpdate-" + state.transactionId);
+    return transactionRoot() / state.transactionId;
 }
 
 bool WindowsAdapter::updateRebootRequired() const {
-    return registryKeyExists(kUpdateRebootGuard);
+    return registryKeyExists(kUpdateRebootGuard.c_str());
 }
 
 void WindowsAdapter::markUpdateRequiresReboot() const {
     HKEY key = nullptr;
-    const auto result = RegCreateKeyExW(HKEY_LOCAL_MACHINE, kUpdateRebootGuard, 0, nullptr,
+    const auto result = RegCreateKeyExW(HKEY_LOCAL_MACHINE, kUpdateRebootGuard.c_str(), 0, nullptr,
         REG_OPTION_VOLATILE, KEY_READ | KEY_WOW64_64KEY, nullptr, &key, nullptr);
     if (result != ERROR_SUCCESS) fail(L"Could not establish update reboot boundary: " + win32ErrorMessage(result));
     ScopedRegistryKey guard(key);
 }
 
 void WindowsAdapter::stageUpdate(WizardState& state) const {
+    validatePackage(state);
+    ensureDeploymentDirectories();
     const auto native = environment().nativeArchitecture;
     for (const auto& component : kComponentFiles) {
-        const auto source = wcscmp(component.name, kInstallerFile) == 0 ? wizardPath_ : wizardPath_.parent_path() / component.buildName;
+        const auto source = wcscmp(component.name, kInstallerFile) == 0 ? std::filesystem::path(state.sourcePath) : std::filesystem::path(state.sourcePath).parent_path() / component.name;
         if (!fileExists(source) || executableArchitecture(source) != native)
             fail(L"Missing or wrong-architecture precompiled component: " + source.wstring());
     }
@@ -634,16 +774,18 @@ void WindowsAdapter::stageUpdate(WizardState& state) const {
     SECURITY_ATTRIBUTES security{sizeof(security), descriptor, FALSE};
     const BOOL created = CreateDirectoryW(directory.c_str(), &security);
     const DWORD error = GetLastError(); LocalFree(descriptor); SetLastError(error);
-    checkWin32(created, L"Could not create protected update staging directory");
+    if (!created && error != ERROR_ALREADY_EXISTS) checkWin32(created, L"Could not create protected update staging directory");
+    protectedDirectory(directory, false);
     logOperation(L"Create protected staging directory: " + directory.wstring());
     for (const auto& component : kComponentFiles) {
-        const auto source = wcscmp(component.name, kInstallerFile) == 0 ? wizardPath_ : wizardPath_.parent_path() / component.buildName;
-        copyNativeBinary(source, directory / component.name);
+        const auto source = wcscmp(component.name, kInstallerFile) == 0 ? std::filesystem::path(state.sourcePath) : std::filesystem::path(state.sourcePath).parent_path() / component.name;
+        copyNativeBinary(source, directory / component.name, true);
     }
     state.wizardPath = (directory / kInstallerFile).wstring();
 }
 
 void WindowsAdapter::stageContinuation(WizardState& state) const {
+    ensureDeploymentDirectories();
     const auto directory = updateDirectory(state);
     PSECURITY_DESCRIPTOR descriptor = nullptr;
     checkWin32(ConvertStringSecurityDescriptorToSecurityDescriptorW(
@@ -652,14 +794,17 @@ void WindowsAdapter::stageContinuation(WizardState& state) const {
     SECURITY_ATTRIBUTES security{sizeof(security), descriptor, FALSE};
     const BOOL created = CreateDirectoryW(directory.c_str(), &security);
     const DWORD error = GetLastError(); LocalFree(descriptor); SetLastError(error);
-    checkWin32(created, L"Could not create protected continuation directory");
+    if (!created && error != ERROR_ALREADY_EXISTS) checkWin32(created, L"Could not create protected continuation directory");
+    protectedDirectory(directory, false);
     logOperation(L"Create protected continuation directory: " + directory.wstring());
     const auto wizard = directory / kInstallerFile;
-    copyNativeBinary(wizardPath_, wizard);
+    if (binaryVersion(state.sourcePath).text() != state.packageVersion) fail(L"Maintenance installer version changed.");
+    copyNativeBinary(state.sourcePath, wizard, true);
     state.wizardPath = wizard.wstring();
 }
 
 void WindowsAdapter::applyStagedUpdate(const WizardState& state) const {
+    ensureDeploymentDirectories();
     const auto directory = updateDirectory(state);
     const auto attributes = GetFileAttributesW(directory.c_str());
     if (attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_DIRECTORY) ||
@@ -669,7 +814,8 @@ void WindowsAdapter::applyStagedUpdate(const WizardState& state) const {
     }
     for (const auto& component : kComponentFiles) {
         const auto source = directory / component.name;
-        const auto target = system32Directory() / component.name;
+        if (binaryVersion(source).text() != state.packageVersion) fail(L"Staged component version mismatch: " + source.wstring());
+        const auto target = componentTarget(component);
         auto temporary = target;
         temporary += L".update";
         copyNativeBinary(source, temporary, true);
@@ -744,16 +890,16 @@ void WindowsAdapter::deleteBinaryIfPresent(const std::filesystem::path& target) 
 }
 
 void WindowsAdapter::createCredentialProviderRegistration(const std::filesystem::path& target) const {
-    writeRegistryString(HKEY_LOCAL_MACHINE, kCredentialProviderRegistryPath, nullptr, kCredentialProviderName);
-    writeRegistryString(HKEY_LOCAL_MACHINE, kCredentialProviderClsidRegistryPath, nullptr, kCredentialProviderName);
-    const auto inprocPath = std::wstring(kCredentialProviderClsidRegistryPath) + L"\\InprocServer32";
+    writeRegistryString(HKEY_LOCAL_MACHINE, kCredentialProviderRegistryPath.c_str(), nullptr, kCredentialProviderName);
+    writeRegistryString(HKEY_LOCAL_MACHINE, kCredentialProviderClsidRegistryPath.c_str(), nullptr, kCredentialProviderName);
+    const auto inprocPath = std::wstring(kCredentialProviderClsidRegistryPath.c_str()) + L"\\InprocServer32";
     writeRegistryString(HKEY_LOCAL_MACHINE, inprocPath.c_str(), nullptr, target.wstring());
     writeRegistryString(HKEY_LOCAL_MACHINE, inprocPath.c_str(), L"ThreadingModel", L"Apartment");
 }
 
 void WindowsAdapter::removeCredentialProviderRegistration() const {
-    deleteRegistryTree(HKEY_LOCAL_MACHINE, kCredentialProviderRegistryPath);
-    deleteRegistryTree(HKEY_LOCAL_MACHINE, kCredentialProviderClsidRegistryPath);
+    deleteRegistryTree(HKEY_LOCAL_MACHINE, kCredentialProviderRegistryPath.c_str());
+    deleteRegistryTree(HKEY_LOCAL_MACHINE, kCredentialProviderClsidRegistryPath.c_str());
 }
 
 void WindowsAdapter::createSavedCredentialService() const {
@@ -870,8 +1016,8 @@ ComponentSnapshot WindowsAdapter::inspect() const {
     try {
         snapshot.credentialProviderDllPresent = fileExists(credentialProviderTarget());
         snapshot.savedCredentialServiceExePresent = fileExists(savedCredentialServiceTarget());
-        snapshot.credentialProviderRegistered = registryKeyExists(kCredentialProviderRegistryPath);
-        snapshot.credentialProviderClsidRegistered = registryKeyExists(kCredentialProviderClsidRegistryPath);
+        snapshot.credentialProviderRegistered = registryKeyExists(kCredentialProviderRegistryPath.c_str());
+        snapshot.credentialProviderClsidRegistered = registryKeyExists(kCredentialProviderClsidRegistryPath.c_str());
         ScopedServiceHandle manager(OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT));
         if (manager.get() == nullptr) fail(L"Could not inspect the Service Control Manager.");
         ScopedServiceHandle service(OpenServiceW(manager.get(),
@@ -911,8 +1057,19 @@ ComponentSnapshot WindowsAdapter::inspect() const {
         snapshot.userStartupPresent = userStartupPresent();
         snapshot.toolsPresent = toolsPresent();
         snapshot.desktopArtifactsPresent = desktopArtifactsPresent();
-        snapshot.shortcutsPresent = shortcutsPresent();
+        snapshot.applicationUninstallPresent = registryKeyExists(kApplicationUninstallRegistryPath);
         snapshot.trayRunning = trayRunning();
+        const auto state = readState();
+        if (state && !state->installedVersion.empty() && snapshot.toolsPresent &&
+            snapshot.credentialProviderDllPresent && snapshot.savedCredentialServiceExePresent) {
+            try {
+                validateInstalledVersions(*state);
+                snapshot.versionsMatch = true;
+            } catch (const ComponentError& error) {
+                snapshot.versionError = error.wideWhat();
+            }
+        }
+        snapshot.continuationTaskPresent = snapshot.continuationTaskPresent || finalizationTaskExists();
     } catch (const ComponentError& error) {
         snapshot.observationValid = false;
         snapshot.observationError = error.wideWhat();

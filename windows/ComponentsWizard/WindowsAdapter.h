@@ -46,6 +46,18 @@ public:
     [[nodiscard]] const std::filesystem::path& wizardPath() const noexcept;
     [[nodiscard]] std::filesystem::path credentialProviderTarget() const;
     [[nodiscard]] std::filesystem::path savedCredentialServiceTarget() const;
+    [[nodiscard]] std::filesystem::path componentTarget(const ComponentFile& component) const;
+    [[nodiscard]] ProductVersion binaryVersion(const std::filesystem::path& file) const;
+    [[nodiscard]] ProductVersion validatePackage(const WizardState& state) const;
+    void validateInstalledVersions(const WizardState& state) const;
+    void ensureDeploymentDirectories() const;
+    void removeProductData(const WizardState& state) const;
+    void startFinalization(const WizardState& state) const;
+    void registerResultTask(const WizardState& state) const;
+    [[nodiscard]] bool finalizationTaskExists() const;
+    void retryFinalization(const WizardState& state) const;
+    void runContinuation(const WizardState& state) const;
+    void registerFinalizationUninstall(const WizardState& state) const;
 
     [[nodiscard]] EnvironmentStatus environment() const;
     void assertSupportedAdministratorEnvironment() const;
@@ -55,7 +67,6 @@ public:
     [[nodiscard]] ComponentSnapshot inspect() const;
     [[nodiscard]] std::optional<WizardState> readState() const;
     void writeState(const WizardState& state) const;
-    void clearState() const;
 
     void copyNativeBinary(const std::filesystem::path& source, const std::filesystem::path& target,
         bool replace = false) const;
@@ -76,7 +87,6 @@ public:
 
     [[nodiscard]] bool continuationTaskExists() const;
     void registerContinuationTask(const WizardState& state) const;
-    void removeContinuationTask() const;
 
     [[nodiscard]] std::wstring consoleUserSid() const;
     [[nodiscard]] bool isSystem() const;
@@ -84,11 +94,11 @@ public:
     void stopTray(const WizardState& state) const;
     void removeDesktopIntegration() const;
     void installDesktopIntegration(const WizardState& state) const;
+    void registerApplicationUninstall(const std::filesystem::path& executable) const;
     void removeTools() const;
     [[nodiscard]] bool userStartupPresent() const;
     [[nodiscard]] bool toolsPresent() const;
     [[nodiscard]] bool desktopArtifactsPresent() const;
-    [[nodiscard]] bool shortcutsPresent() const;
     [[nodiscard]] bool trayRunning() const;
     void writeCompletion(const CompletionRecord& result) const;
     [[nodiscard]] std::optional<CompletionRecord> readCompletion() const;

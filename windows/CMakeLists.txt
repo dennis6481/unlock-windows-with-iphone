@@ -165,6 +165,7 @@ add_executable(unlock_windows_components_wizard WIN32
     ComponentsWizard/ComponentTransaction.cpp
     ComponentsWizard/WindowsAdapter.cpp
     ComponentsWizard/DesktopDeployment.cpp
+    ComponentsWizard/SetupFinalization.cpp
     ComponentsWizard/ComponentsWizard.rc
 )
 
@@ -191,6 +192,7 @@ target_link_libraries(
         uuid
         wtsapi32
         user32
+        version
         unlock_saved_credential_ipc
 )
 
@@ -260,6 +262,17 @@ if(BUILD_TESTING)
 endif()
 
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/ComponentFiles.h" unlock_component_manifest)
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/ProductVersion.h" unlock_product_version)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/ProductVersion.h")
+string(REGEX MATCH "kProductVersion\\{([0-9]+), ([0-9]+), ([0-9]+)\\}" unlock_version_match "${unlock_product_version}")
+if(NOT unlock_version_match)
+    message(FATAL_ERROR "Missing Windows product version")
+endif()
+set(UNLOCK_VERSION_MAJOR "${CMAKE_MATCH_1}")
+set(UNLOCK_VERSION_MINOR "${CMAKE_MATCH_2}")
+set(UNLOCK_VERSION_PATCH "${CMAKE_MATCH_3}")
+set(UNLOCK_VERSION_TEXT "${UNLOCK_VERSION_MAJOR}.${UNLOCK_VERSION_MINOR}.${UNLOCK_VERSION_PATCH}")
+set(UNLOCK_SETUP_OUTPUT_NAME "UnlockWithIPhone_${UNLOCK_VERSION_TEXT}_setup")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/ComponentFiles.h")
 foreach(unlock_component IN ITEMS
     "unlock_credential_provider|kCredentialProviderFile"
@@ -267,7 +280,7 @@ foreach(unlock_component IN ITEMS
     "unlock_saved_credential_manager|kCredentialManagerFile"
     "unlock_gatt_host|kGattHostFile"
     "unlock_pairing_tool|kPairingToolFile"
-    "unlock_windows_components_wizard|kInstallerBuildFile"
+    "unlock_windows_components_wizard|kInstallerFile"
 )
     string(REPLACE "|" ";" unlock_component_parts "${unlock_component}")
     list(GET unlock_component_parts 0 unlock_component_target)
@@ -276,8 +289,20 @@ foreach(unlock_component IN ITEMS
     if(NOT unlock_component_match)
         message(FATAL_ERROR "Missing shared component filename: ${unlock_component_key}")
     endif()
-    get_filename_component(unlock_component_output "${CMAKE_MATCH_1}" NAME_WE)
+    set(UNLOCK_VERSION_FILENAME "${CMAKE_MATCH_1}")
+    get_filename_component(unlock_component_output "${UNLOCK_VERSION_FILENAME}" NAME_WE)
+    if(unlock_component_target STREQUAL "unlock_windows_components_wizard")
+        set(unlock_component_output "${UNLOCK_SETUP_OUTPUT_NAME}")
+        set(UNLOCK_VERSION_FILENAME "${UNLOCK_SETUP_OUTPUT_NAME}.exe")
+    endif()
     set_target_properties(${unlock_component_target} PROPERTIES OUTPUT_NAME "${unlock_component_output}")
+    if(unlock_component_target STREQUAL "unlock_credential_provider")
+        set(UNLOCK_VERSION_FILE_TYPE "VFT_DLL")
+    else()
+        set(UNLOCK_VERSION_FILE_TYPE "VFT_APP")
+    endif()
+    configure_file(Resources/ProductVersion.rc.in "${unlock_component_target}-version.rc" @ONLY)
+    target_sources(${unlock_component_target} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/${unlock_component_target}-version.rc")
 endforeach()
 
 set(UNLOCK_APP_ICON_ASSET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../ios/Assets.xcassets/AppIcon.appiconset")

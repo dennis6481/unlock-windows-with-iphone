@@ -33,12 +33,16 @@ ctest --test-dir '.\windows\build' -C Release --output-on-failure
 ## 安装、更新与卸载
 
 ```powershell
-& '.\windows\build\setup.exe'
+& '.\windows\build\UnlockWithIPhone_0.1.0_setup.exe'
 ```
 
-六个部署组件及 build／安装文件名映射由 [ComponentFiles.h](ComponentFiles.h) 唯一定义。对外安装器是 `setup.exe`；System32／受保护暂存目录维护文件为 `unlock_windows_components_wizard.exe`。这是同一程序的部署映射，不是两套安装逻辑。
+安装包构建名称统一为 `UnlockWithIPhone_<版本号>_setup.exe`，Debug／Release 及支持的架构共用规则。版本从 [ProductVersion.h](ProductVersion.h) 自动读取，当前产物为 `UnlockWithIPhone_0.1.0_setup.exe`；修改版本后重新构建即自动使用新名称，无需另改文件名。示例命令中的版本应使用实际产物版本。
 
-安装器自行请求 UAC。目标为实际物理控制台用户，不是另一管理员的提权账户。System32 安装组件与工具；开始菜单提供密码管理及安装维护入口。
+六个正式组件名称由 [ComponentFiles.h](ComponentFiles.h) 定义，暂存和安装后的维护程序仍为 `setup.exe`；CP 与凭据服务在 System32，四个桌面工具在 Program Files 的 `Unlock Windows with iPhone` 目录。此次仅修改构建产物名称、诊断路径及说明，未改业务代码或执行构建。
+
+安装器自行请求 UAC，目标仍为实际物理控制台用户。Windows 设置“已安装的应用”（Windows 10“应用和功能”）显示单个带产品版本的 **Unlock Windows with iPhone®** 条目；密码管理从托盘打开，不创建开始菜单项。较高版本 Update，同版本明确 Reinstall，较低版本拒绝。当前无版本／旧布局安装先卸载，不增加旧版迁移路径。
+
+设置卸载入口以 `--uninstall` 请求 UAC 并直达确认页，默认 Cancel。准备期间指向本事务暂存 setup，收尾期间使用系统 PowerShell 的受限续办命令。事务先于目录登记；部署验证和退出收尾分开，成功后释放暂存、恢复正式入口或移除卸载条目。结果页不继续占用暂存 EXE；无人登录时卸载保留待交接状态，登录交接后才清除最后记录。2026-10-04 仅源码与静态检查，未构建或运行安装器回归，详见 [Windows Setup](ComponentsWizard/README.md)。
 
 - 未安装：Install / Cancel；已安装：Update / Uninstall / Cancel。
 - 确认页：Back、明确操作按钮和 Cancel。执行页展示实际滚动日志，禁止取消和关闭。
@@ -49,7 +53,7 @@ ctest --test-dir '.\windows\build' -C Release --output-on-failure
 
 Update 保留密码、公钥及目标用户；先移除 Run，核实托盘／配对进程后请求正常退出，超时暂停，不强杀。真正重启后统一替换和验证文件，再恢复组件；失败保留事务及日志，不自动回滚或假报成功。
 
-正常卸载先取得服务密码清除确认，再移除当前 Run、工具、快捷方式、CP 和服务；手机公钥保留。删除文件不代表 SSD、备份或快照历史数据被物理擦除。
+正常卸载先取得服务密码清除确认，再移除 Run、程序、CP、服务、公钥登记及安装用户 ComputerId；最后核验暂存、任务、产品记录和应用条目已清除。iPhone 数据须在手机端删除。文件删除不代表 SSD、备份或快照历史数据被物理擦除。旧二进制仍按旧约定保留登记，切换到新布局时须独立核验旧卸载后的残留。
 
 ## 登录自启与解锁
 
@@ -75,3 +79,4 @@ Win32 主题控件、紧凑按钮、英文用户文案及桌面 PerMonitorV2；�
 
 - [RegCreateKeyExW](https://learn.microsoft.com/en-us/windows/win32/api/winreg/nf-winreg-regcreatekeyexw)
 - [ChangeServiceConfigW](https://learn.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-changeserviceconfigw)
+- [Windows uninstall registry values](https://learn.microsoft.com/en-us/windows/win32/msi/uninstall-registry-key)

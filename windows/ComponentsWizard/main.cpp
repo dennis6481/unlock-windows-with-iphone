@@ -59,7 +59,7 @@ struct OperationLock {
             L"D:P(A;;GA;;;SY)(A;;GA;;;BA)", SDDL_REVISION_1, &descriptor, nullptr))
             throw ComponentError(L"Cannot create operation lock security.");
         SECURITY_ATTRIBUTES attributes{sizeof(attributes), descriptor, FALSE};
-        value = CreateMutexW(&attributes, FALSE, L"Global\\UnlockWindowsWithIPhone-ComponentOperation");
+        value = CreateMutexW(&attributes, FALSE, kOperationMutex);
         DWORD error = GetLastError(); LocalFree(descriptor);
         if (!value) throw ComponentError(L"Cannot open operation lock (Win32=" + std::to_wstring(error) + L").");
         const DWORD wait = WaitForSingleObject(value, 0);
@@ -84,6 +84,9 @@ OperationResult continueOperation(WindowsAdapter& adapter, const ProgressCallbac
         case WizardPhase::updating: return transaction.completeUpdate(progress);
         case WizardPhase::uninstallPendingReboot:
         case WizardPhase::cleaningUp: return transaction.completeUninstall(progress);
+        case WizardPhase::preparing: return transaction.continuePreparation(progress);
+        case WizardPhase::finalizing:
+            return {true, false, true, L"Finalization is pending.", true};
         default: return {false, false, true, L"This transaction is not eligible for reboot continuation."};
     }
 }
@@ -105,14 +108,16 @@ int resume(WindowsAdapter& adapter, const std::wstring& id) {
         });
         adapter.setOperationLog({});
         record.message = result.message;
-        record.success = result.success && !result.rebootRequired;
-        if (record.success) {
-            adapter.removeContinuationTask();
+        record.success = result.success && !result.rebootRequired && !result.finalizationPending;
+        if (result.finalizationPending) {
+            record.finished = false; adapter.writeCompletion(record);
+            const auto current = adapter.readState();
+            if (!current) throw ComponentError(L"Finalization transaction disappeared.");
+            adapter.startFinalization(*current);
+            return 0;
         }
         record.finished = true;
         adapter.writeCompletion(record);
-        if (record.success && (state->phase == WizardPhase::uninstallPendingReboot || state->phase == WizardPhase::cleaningUp))
-            adapter.clearState();
         return record.success ? 0 : ERROR_INSTALL_FAILURE;
     } catch (const std::exception& error) {
         adapter.setOperationLog({});
@@ -126,7 +131,9 @@ struct Window {
     Page page = Page::home;
     std::thread worker;
     std::wstring log, resultId;
-    bool resultMode = false, busy = false, installed = false, pending = false;
+    bool resultMode = false, uninstallMode = false, busy = false, installed = false, pending = false;
+    bool reinstall = false;
+    std::function<void()> releaseOperation;
     unlock_windows::desktop_ui::DialogAppearance appearance;
     explicit Window(std::filesystem::path path) : adapter(std::move(path)) {}
     ~Window() { if (worker.joinable()) worker.join(); }
@@ -189,7 +196,14 @@ struct Window {
         ShowWindow(GetDlgItem(hwnd, IDC_PROGRESS), next == Page::progress ? SW_SHOW : SW_HIDE);
         layout();
     }
-    void home() {
+    void showUninstallConfirmation() {
+        setPage(Page::uninstall, L"Uninstall Unlock Windows with iPhone\u00ae",
+            L"Remove phone connectivity, login startup, lock-screen unlock and saved password management.\r\n\r\n"
+            L"The saved Windows password copy, paired iPhone registration and computer identity will be deleted. "
+            L"Remove this computer from the iPhone app separately. Reinstallation requires setup and pairing again. A restart is required.");
+        buttons(L"Back", L"Uninstall", L"Cancel");
+    }
+    void home(bool requestUninstall = false) {
         const auto status = adapter.inspect();
         const auto state = adapter.readState();
         const auto completion = adapter.readCompletion();
@@ -208,14 +222,26 @@ struct Window {
             }
             return;
         }
+        if (requestUninstall && !installed)
+            throw ComponentError(L"The application is not installed. No removal was started.");
         if (installed) {
             log.clear();
+            const auto incoming = adapter.binaryVersion(adapter.wizardPath());
+            const auto existing = parseProductVersion(state->installedVersion);
+            if (!existing) throw ComponentError(L"Installed product version is invalid.");
+            const auto action = packageAction(incoming, *existing);
+            reinstall = action == PackageAction::reinstall;
             const auto account = startupAccountLabel(state->targetSid, log);
-            setPage(Page::home, L"Unlock Windows with iPhone\u00ae installed", L"Startup account: " + account +
-                L"\r\nBluetooth tray: " + (status.trayRunning ? L"running" : L"not running") +
-                L"\r\n\r\nUpdate keeps your saved password and paired iPhone. Uninstall removes the saved password copy.");
+            if (requestUninstall) showUninstallConfirmation();
+            else {
+                setPage(Page::home, L"Unlock Windows with iPhone\u00ae installed", L"Installed version: " + state->installedVersion +
+                    L"\r\nPackage version: " + incoming.text() + L"\r\nStartup account: " + account +
+                    L"\r\nBluetooth tray: " + (status.trayRunning ? L"running" : L"not running") +
+                    L"\r\n\r\nUpdate and reinstall preserve credentials and pairing. Uninstall removes Windows product data.");
+                buttons(L"Uninstall", action == PackageAction::rejectDowngrade ? nullptr : reinstall ? L"Reinstall" : L"Update", L"Cancel");
+                if (action == PackageAction::rejectDowngrade) log += L"\r\nThis package is older than the installed product. Downgrade is refused.";
+            }
             text(IDC_LOG_TOGGLE, L"Technical details");
-            buttons(L"Uninstall", L"Update", L"Cancel");
         } else {
             log.clear();
             setPage(Page::home, L"Install Unlock Windows with iPhone\u00ae",
@@ -233,6 +259,16 @@ struct Window {
         if (progress.percent >= 0) SendDlgItemMessageW(hwnd, IDC_PROGRESS, PBM_SETPOS, progress.percent, 0);
     }
     void start(WizardAction action, bool continuation = false) {
+        if (continuation) {
+            const auto state = adapter.readState();
+            if (state && state->phase != WizardPhase::preparing) {
+                if (releaseOperation) releaseOperation();
+                if (state->phase == WizardPhase::finalizing) adapter.retryFinalization(*state);
+                else adapter.runContinuation(*state);
+                DestroyWindow(hwnd);
+                return;
+            }
+        }
         busy = true; log.clear();
         text(IDC_LOG_TOGGLE, L"Operation details");
         setPage(Page::progress, L"Working — please wait", L"");
@@ -255,13 +291,7 @@ struct Window {
                 else if (action == WizardAction::install) result = transaction.install(progress);
                 else if (action == WizardAction::update) result = transaction.beginUpdate(progress);
                 else result = transaction.beginUninstall(progress);
-                if (continuation && result.success && !result.rebootRequired) {
-                    auto state = adapter.readState();
-                    if (!state) throw ComponentError(L"Completion transaction disappeared.");
-                    adapter.removeContinuationTask();
-                    adapter.writeCompletion({state->transactionId, state->targetSid, result.message, operationLog, true, true});
-                    if (state->phase == WizardPhase::cleaningUp) adapter.clearState();
-                } else {
+                {
                     auto state = adapter.readState();
                     if (state && state->phase != WizardPhase::installed)
                         adapter.writeCompletion({state->transactionId, state->targetSid, result.message, operationLog,
@@ -300,7 +330,7 @@ struct Window {
         }
         log = record->log;
         KillTimer(hwnd, 1);
-        if (record->success) adapter.startTrayForCompletedOperation(resultId);
+        if (record->success && !adapter.environment().elevated) adapter.startTrayForCompletedOperation(resultId);
         setPage(record->success ? Page::result : Page::failure,
             record->success ? L"Operation completed and verified" : L"Operation failed",
             record->message);
@@ -318,12 +348,8 @@ struct Window {
             DestroyWindow(hwnd); return;
         }
         if (id == IDC_BACK) {
-            if (page == Page::home && installed) {
-                setPage(Page::uninstall, L"Uninstall Unlock Windows with iPhone\u00ae",
-                    L"Remove phone connectivity, login startup, lock-screen unlock, credential manager and maintenance shortcuts.\r\n\r\n"
-                    L"The saved Windows password copy will be cleared before removal. Phone public-key registration will be retained. A restart is required.");
-                buttons(L"Back", L"Uninstall", L"Cancel");
-            } else home();
+            if (page == Page::home && installed) showUninstallConfirmation();
+            else home();
             return;
         }
         if (id != IDC_ACTION) return;
@@ -331,10 +357,10 @@ struct Window {
         if (page == Page::home) {
             if (!installed) start(WizardAction::install);
             else {
-                setPage(Page::update, L"Update Unlock Windows with iPhone\u00ae",
+                setPage(Page::update, reinstall ? L"Reinstall Unlock Windows with iPhone\u00ae" : L"Update Unlock Windows with iPhone\u00ae",
                     L"Replace installed program files with the precompiled files supplied beside this installer. "
                     L"Your saved password, phone registration and startup target account will be preserved.\r\n\r\nA restart is required.");
-                buttons(L"Back", L"Update", L"Cancel");
+                buttons(L"Back", reinstall ? L"Reinstall" : L"Update", L"Cancel");
             }
         } else if (page == Page::update) start(WizardAction::update);
         else if (page == Page::uninstall) start(WizardAction::uninstall);
@@ -360,7 +386,7 @@ INT_PTR CALLBACK procedure(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
                     window->appearance.apply(hwnd, IDC_MAIN_INSTRUCTION);
                 }
                 if (window->resultMode) { SetTimer(hwnd, 1, 500, nullptr); window->pollResult(); }
-                else window->home();
+                else window->home(window->uninstallMode);
                 return FALSE;
             case WM_CTLCOLORSTATIC:
                 if (reinterpret_cast<HWND>(lParam) == GetDlgItem(hwnd, IDC_DETAILS) ||
@@ -416,11 +442,14 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
         if (mode == L"--resume-operation") return transaction.empty() ? ERROR_INVALID_PARAMETER : resume(window.adapter, transaction);
         if (sessionZero) return ERROR_INVALID_PARAMETER;
         window.resultMode = mode == L"--show-result"; window.resultId = transaction;
-        if ((!mode.empty() && !window.resultMode) || (window.resultMode && transaction.empty()))
+        window.uninstallMode = mode == L"--uninstall";
+        if ((!mode.empty() && !window.resultMode && !window.uninstallMode) ||
+            (window.resultMode && transaction.empty()) || (window.uninstallMode && count != 2))
             throw ComponentError(L"Unsupported installer command line.");
         if (!window.resultMode && !window.adapter.environment().elevated) {
             SHELLEXECUTEINFOW request{sizeof(request)};
             request.lpVerb = L"runas"; request.lpFile = window.adapter.wizardPath().c_str(); request.nShow = SW_SHOWNORMAL;
+            request.lpParameters = window.uninstallMode ? L"--uninstall" : nullptr;
             if (!ShellExecuteExW(&request)) {
                 DWORD error = GetLastError();
                 if (error == ERROR_CANCELLED) return 0;
@@ -430,6 +459,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
         }
         std::unique_ptr<OperationLock> lock;
         if (!window.resultMode) lock = std::make_unique<OperationLock>();
+        window.releaseOperation = [&lock] { lock.reset(); };
         INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_PROGRESS_CLASS}; InitCommonControlsEx(&controls);
         HWND hwnd = CreateDialogParamW(instance, MAKEINTRESOURCEW(IDD_WIZARD_PAGE), nullptr,
             procedure, reinterpret_cast<LPARAM>(&window));

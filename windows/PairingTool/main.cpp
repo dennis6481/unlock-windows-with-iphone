@@ -95,7 +95,7 @@ public:
         require(ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(A;;GA;;;SY)(A;;GA;;;BA)",
             SDDL_REVISION_1, &descriptor, nullptr), "Enrollment writer mutex ACL");
         SECURITY_ATTRIBUTES attributes{sizeof(attributes), descriptor, FALSE};
-        mutex_.value = CreateMutexW(&attributes, TRUE, L"Global\\UnlockWindowsWithIPhone-EnrollmentWriter");
+        mutex_.value = CreateMutexW(&attributes, TRUE, unlock_windows::phone_approval::kEnrollmentWriterMutex);
         const DWORD error = GetLastError();
         LocalFree(descriptor);
         if (!mutex_.value) { SetLastError(error); require(FALSE, "CreateMutexW(enrollment writer)"); }

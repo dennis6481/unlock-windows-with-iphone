@@ -16,6 +16,7 @@ struct OperationResult final {
     bool rebootRequired = false;
     bool statePreserved = false;
     std::wstring message;
+    bool finalizationPending = false;
 };
 
 class ComponentTransaction final {
@@ -28,9 +29,12 @@ public:
     [[nodiscard]] OperationResult completeUpdate(const ProgressCallback& progress = {});
     [[nodiscard]] OperationResult beginUninstall(const ProgressCallback& progress = {});
     [[nodiscard]] OperationResult completeUninstall(const ProgressCallback& progress = {});
+    [[nodiscard]] OperationResult continuePreparation(const ProgressCallback& progress = {});
 
 private:
     [[nodiscard]] WizardState newState(WizardPhase phase, std::wstring targetSid) const;
+    [[nodiscard]] OperationResult prepare(WizardState& state, const ProgressCallback& progress);
+    void finishDeployment(WizardState& state) const;
     [[nodiscard]] OperationResult failure(const std::wstring& message, bool statePreserved) const;
     void report(const ProgressCallback& progress, int percent, const std::wstring& message) const;
     [[nodiscard]] std::wstring errorText(const std::exception& error) const;

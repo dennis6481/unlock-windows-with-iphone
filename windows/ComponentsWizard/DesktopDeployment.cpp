@@ -3,13 +3,15 @@
 #define UNICODE
 #define _UNICODE
 #include "WindowsAdapter.h"
+#include "InstallationPaths.h"
+#include "SetupFinalization.h"
+#include "../PhoneApproval/EnrollmentStore.h"
 #include <Windows.h>
 #include <shellapi.h>
 #include <sddl.h>
 #include <wtsapi32.h>
 #include <taskschd.h>
 #include <shlobj.h>
-#include <shobjidl.h>
 #include <wrl/client.h>
 #include <array>
 #include <cstring>
@@ -19,11 +21,6 @@
 namespace unlock::components {
 namespace {
 using Microsoft::WRL::ComPtr;
-constexpr wchar_t startupKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
-constexpr wchar_t startupName[] = L"Unlock Windows with iPhone";
-constexpr wchar_t bootName[] = L"UnlockWindowsWithIPhone-CompleteOperation";
-constexpr wchar_t resultName[] = L"UnlockWindowsWithIPhone-ComponentResult";
-constexpr wchar_t resultKey[] = L"SOFTWARE\\UnlockWindowsWithIPhone\\ComponentResult";
 
 void win(BOOL ok, const std::wstring& text) {
     if (!ok) throw ComponentError(text + L" (Win32=" + std::to_wstring(GetLastError()) + L")");
@@ -73,6 +70,19 @@ struct Scheduler {
         if (result != HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)) hr(result, L"Delete task " + std::wstring(name));
     }
 };
+
+void startResultTask(const WindowsAdapter& adapter) {
+    Scheduler scheduler;
+    const auto task = scheduler.get(kResultTask);
+    if (!task) throw ComponentError(L"The registered user-result task is missing.");
+    VARIANT empty{}; VariantInit(&empty); ComPtr<IRunningTask> running;
+    const HRESULT result = task->Run(empty, &running);
+    if (result == SCHED_E_USER_NOT_LOGGED_ON) {
+        adapter.logOperation(L"The target user is not signed in; the result task waits for that user's next sign-in.");
+        return;
+    }
+    hr(result, L"Start the registered ordinary-user result task");
+}
 
 std::filesystem::path systemDirectory() {
     std::array<wchar_t, 32768> path{};
@@ -125,7 +135,7 @@ void registerTask(const wchar_t* name, const std::wstring& sid,
     hr(settings->put_DisallowStartIfOnBatteries(VARIANT_FALSE), L"Allow battery start");
     hr(settings->put_StopIfGoingOnBatteries(VARIANT_FALSE), L"Allow battery running");
     hr(settings->put_StartWhenAvailable(VARIANT_TRUE), L"Set start availability");
-    hr(settings->put_MultipleInstances(TASK_INSTANCES_IGNORE_NEW), L"Set single task instance");
+    hr(settings->put_MultipleInstances(wcscmp(name, kFinalizeTask) == 0 ? TASK_INSTANCES_QUEUE : TASK_INSTANCES_IGNORE_NEW), L"Set serialized task execution");
     hr(settings->put_AllowDemandStart(VARIANT_TRUE), L"Allow explicit scheduler startup");
     hr(settings->put_Enabled(VARIANT_TRUE), L"Enable registered task");
     ComPtr<IActionCollection> actions; hr(definition->get_Actions(&actions), L"Get actions");
@@ -136,7 +146,9 @@ void registerTask(const wchar_t* name, const std::wstring& sid,
     hr(execution->put_Arguments(args.value), L"Set arguments");
     hr(execution->put_WorkingDirectory(directory.value), L"Set working directory");
     Bstr taskName(name);
-    Bstr security(notification
+    Bstr security(wcscmp(name, kFinalizeTask) == 0
+        ? L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGX;;;" + sid + L")"
+        : notification
         ? L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGXSD;;;" + sid + L")"
         : L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGX;;;" + (system ? L"SY" : sid) + L")");
     VARIANT account{}, empty{}, acl{};
@@ -146,25 +158,6 @@ void registerTask(const wchar_t* name, const std::wstring& sid,
     ComPtr<IRegisteredTask> registered;
     hr(scheduler.root->RegisterTaskDefinition(taskName.value, definition.Get(),
         TASK_CREATE_OR_UPDATE, account, empty, logon, acl, &registered), L"Register task " + std::wstring(name));
-}
-
-std::filesystem::path menuDirectory() {
-    PWSTR raw = nullptr;
-    hr(SHGetKnownFolderPath(FOLDERID_CommonPrograms, KF_FLAG_DEFAULT, nullptr, &raw), L"Find Start menu");
-    std::filesystem::path directory(raw); CoTaskMemFree(raw);
-    return directory / L"Unlock Windows with iPhone";
-}
-void shortcut(const std::filesystem::path& path, const std::filesystem::path& target, bool elevate = false) {
-    ComPtr<IShellLinkW> link;
-    hr(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&link)), L"Create shortcut");
-    hr(link->SetPath(target.c_str()), L"Set shortcut target");
-    if (elevate) {
-        ComPtr<IShellLinkDataList> data; hr(link.As(&data), L"Configure administrative credential-manager shortcut");
-        DWORD flags = 0; hr(data->GetFlags(&flags), L"Read shortcut flags");
-        hr(data->SetFlags(flags | SLDF_RUNAS_USER), L"Set credential-manager Run as administrator shortcut");
-    }
-    ComPtr<IPersistFile> file; hr(link.As(&file), L"Get shortcut storage");
-    hr(file->Save(path.c_str(), TRUE), L"Save shortcut " + path.wstring());
 }
 
 struct TraySearch {
@@ -293,14 +286,14 @@ void withUserHive(const std::wstring& sid, const std::function<void(HKEY)>& oper
     regCheck(RegUnLoadKeyW(HKEY_USERS, mount.c_str()), L"Unload target user registry hive");
     restore.restore(); backup.restore();
 }
-std::wstring startupCommand() { return L"\"" + (systemDirectory() / kGattHostFile).wstring() + L"\""; }
+std::wstring startupCommand() { return L"\"" + (desktopDirectory() / kGattHostFile).wstring() + L"\""; }
 void removeUserStartup(const std::wstring& sid) {
     withUserHive(sid, [](HKEY hive) {
         Registry key;
-        LSTATUS status = RegOpenKeyExW(hive, startupKey, 0, KEY_SET_VALUE, &key.value);
+        LSTATUS status = RegOpenKeyExW(hive, kStartupRegistryPath, 0, KEY_SET_VALUE, &key.value);
         if (status == ERROR_FILE_NOT_FOUND) return;
         regCheck(status, L"Open Bluetooth startup key for removal");
-        status = RegDeleteValueW(key.value, startupName);
+        status = RegDeleteValueW(key.value, kDesktopDirectoryName);
         if (status != ERROR_FILE_NOT_FOUND) regCheck(status, L"Remove Bluetooth Run startup value");
         regCheck(RegFlushKey(key.value), L"Flush Bluetooth startup removal");
     });
@@ -328,29 +321,73 @@ bool WindowsAdapter::isSystem() const { return processSid(GetCurrentProcess()) =
 
 bool WindowsAdapter::continuationTaskExists() const {
     Scheduler scheduler;
-    return scheduler.get(bootName).Get() != nullptr;
-}
-void WindowsAdapter::removeContinuationTask() const {
-    Scheduler scheduler; scheduler.remove(bootName);
+    return scheduler.get(kBootTask).Get() != nullptr;
 }
 void WindowsAdapter::registerContinuationTask(const WizardState& state) const {
     logOperation(L"Register SYSTEM boot task and ordinary-user result task for SID " + state.targetSid);
     validSid(state.targetSid);
     if (std::filesystem::path(state.wizardPath) != updateDirectory(state) / kInstallerFile)
         throw ComponentError(L"Reboot continuation must use this transaction's protected staged installer.");
-    registerTask(bootName, state.targetSid, state.wizardPath,
+    registerTask(kBootTask, state.targetSid, state.wizardPath,
         L"--resume-operation " + state.transactionId, true, false);
-    registerTask(resultName, state.targetSid, state.wizardPath,
-        L"--show-result " + state.transactionId, false, true);
+    registerResultTask(state);
+}
+void WindowsAdapter::registerResultTask(const WizardState& state) const {
+    registerTask(kResultTask, state.targetSid, systemDirectory() / L"WindowsPowerShell" / L"v1.0" / L"powershell.exe",
+        encodedPowerShell(resultObserverScript(*this, state)), false, true);
+}
+void WindowsAdapter::startFinalization(const WizardState& state) const {
+    assertSupportedAdministratorEnvironment();
+    const auto current = readState();
+    if (!current || current->phase != WizardPhase::finalizing || current->transactionId != state.transactionId ||
+        current->targetSid != state.targetSid || current->packageVersion != state.packageVersion)
+        throw ComponentError(L"Finalization requires the matching verified deployment transaction.");
+    registerTask(kFinalizeTask, state.targetSid, systemDirectory() / L"WindowsPowerShell" / L"v1.0" / L"powershell.exe",
+        encodedPowerShell(finalizationScript(*this, state)), true, false);
+    registerResultTask(state);
+    registerFinalizationUninstall(state);
+    retryFinalization(state);
+}
+void WindowsAdapter::runContinuation(const WizardState& state) const {
+    const auto current = readState();
+    if (!current || current->transactionId != state.transactionId || updateRebootRequired())
+        throw ComponentError(L"Continuation does not match a reboot-completed transaction.");
+    Scheduler scheduler; const auto task = scheduler.get(kBootTask);
+    if (!task) throw ComponentError(L"SYSTEM continuation task is missing. No new transaction was started.");
+    auto record = readCompletion();
+    if (!record || record->transactionId != state.transactionId) throw ComponentError(L"Continuation result record is missing or belongs to another transaction.");
+    record->finished = record->success = false;
+    record->message = L"Continuing the registered operation..."; writeCompletion(*record);
+    registerResultTask(state); startResultTask(*this);
+    VARIANT empty{}; VariantInit(&empty); ComPtr<IRunningTask> running;
+    hr(task->Run(empty, &running), L"Continue the registered SYSTEM operation");
+}
+bool WindowsAdapter::finalizationTaskExists() const {
+    Scheduler scheduler; return scheduler.get(kFinalizeTask).Get() != nullptr;
+}
+void WindowsAdapter::retryFinalization(const WizardState& state) const {
+    const auto current = readState();
+    if (!current || current->transactionId != state.transactionId || current->phase != WizardPhase::finalizing)
+        throw ComponentError(L"Finalization does not match the registered transaction.");
+    Scheduler scheduler; const auto task = scheduler.get(kFinalizeTask);
+    if (!task) { startFinalization(state); return; }
+    registerResultTask(state);
+    auto record = readCompletion();
+    if (!record || record->transactionId != state.transactionId) throw ComponentError(L"Finalization result record is missing or belongs to another transaction.");
+    record->finished = record->success = false;
+    record->message = L"Continuing finalization..."; writeCompletion(*record);
+    startResultTask(*this);
+    VARIANT empty{}; VariantInit(&empty); ComPtr<IRunningTask> running;
+    hr(task->Run(empty, &running), L"Run this transaction's finalization task");
 }
 void WindowsAdapter::registerUserStartup(const WizardState& state) const {
-    logOperation(L"Register target-user Run startup: " + std::wstring(startupName) + L"; target SID=" + state.targetSid);
+    logOperation(L"Register target-user Run startup: " + std::wstring(kDesktopDirectoryName) + L"; target SID=" + state.targetSid);
     withUserHive(state.targetSid, [](HKEY hive) {
         Registry key;
-        regCheck(RegCreateKeyExW(hive, startupKey, 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key.value, nullptr), L"Create target-user startup key");
+        regCheck(RegCreateKeyExW(hive, kStartupRegistryPath, 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key.value, nullptr), L"Create target-user startup key");
         const auto command = startupCommand();
         if (command.size() >= 260) throw ComponentError(L"Bluetooth startup command exceeds the Run key length limit.");
-        regCheck(RegSetValueExW(key.value, startupName, 0, REG_SZ, reinterpret_cast<const BYTE*>(command.c_str()),
+        regCheck(RegSetValueExW(key.value, kDesktopDirectoryName, 0, REG_SZ, reinterpret_cast<const BYTE*>(command.c_str()),
             static_cast<DWORD>((command.size() + 1) * sizeof(wchar_t))), L"Write Bluetooth Run startup value");
         regCheck(RegFlushKey(key.value), L"Flush Bluetooth startup registration");
     });
@@ -361,7 +398,7 @@ bool WindowsAdapter::userStartupPresent() const {
     bool present = false;
     withUserHive(state->targetSid, [&present](HKEY hive) {
         std::array<wchar_t, 260> command{}; DWORD bytes = sizeof(command);
-        const auto status = RegGetValueW(hive, startupKey, startupName, RRF_RT_REG_SZ, nullptr, command.data(), &bytes);
+        const auto status = RegGetValueW(hive, kStartupRegistryPath, kDesktopDirectoryName, RRF_RT_REG_SZ, nullptr, command.data(), &bytes);
         if (status == ERROR_FILE_NOT_FOUND) return;
         regCheck(status, L"Read target-user Run startup");
         if (_wcsicmp(command.data(), startupCommand().c_str()) != 0)
@@ -372,39 +409,18 @@ bool WindowsAdapter::userStartupPresent() const {
 }
 bool WindowsAdapter::toolsPresent() const {
     for (const auto& component : kComponentFiles)
-        if (component.desktopTool && !std::filesystem::is_regular_file(systemDirectory() / component.name)) return false;
+        if (component.desktopTool && !std::filesystem::is_regular_file(componentTarget(component))) return false;
     return true;
 }
 bool WindowsAdapter::desktopArtifactsPresent() const {
     for (const auto& component : kComponentFiles)
-        if (component.desktopTool && std::filesystem::exists(systemDirectory() / component.name)) return true;
-    return std::filesystem::exists(menuDirectory());
-}
-bool WindowsAdapter::shortcutsPresent() const {
-    Com apartment;
-    const std::array<const wchar_t*, 2> names{L"Saved Windows credential.lnk", L"Install or maintain.lnk"};
-    for (size_t i = 0; i < names.size(); ++i) {
-        auto path = menuDirectory() / names[i];
-        if (!std::filesystem::is_regular_file(path)) return false;
-        ComPtr<IShellLinkW> link;
-        hr(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&link)), L"Read installed shortcut");
-        ComPtr<IPersistFile> file; hr(link.As(&file), L"Read shortcut storage");
-        hr(file->Load(path.c_str(), STGM_READ), L"Load installed shortcut");
-        std::array<wchar_t, 32768> target{};
-        hr(link->GetPath(target.data(), static_cast<int>(target.size()), nullptr, SLGP_RAWPATH), L"Read shortcut target");
-        if (_wcsicmp(target.data(), (systemDirectory() / (i == 0 ? kCredentialManagerFile : kInstallerFile)).c_str()) != 0) return false;
-        if (i == 0) {
-            ComPtr<IShellLinkDataList> data; hr(link.As(&data), L"Verify administrative credential-manager shortcut");
-            DWORD flags = 0; hr(data->GetFlags(&flags), L"Read credential-manager shortcut flags");
-            if (!(flags & SLDF_RUNAS_USER)) return false;
-        }
-    }
-    return true;
+        if (component.desktopTool && std::filesystem::exists(componentTarget(component))) return true;
+    return std::filesystem::exists(desktopDirectory()) && !std::filesystem::is_empty(desktopDirectory());
 }
 bool WindowsAdapter::trayRunning() const {
     const auto state = readState();
     if (!state || state->targetSid.empty()) return false;
-    TraySearch search{systemDirectory() / kGattHostFile, state->targetSid, WTSGetActiveConsoleSessionId()};
+    TraySearch search{desktopDirectory() / kGattHostFile, state->targetSid, WTSGetActiveConsoleSessionId()};
     EnumWindows(visitTray, reinterpret_cast<LPARAM>(&search));
     if (!search.error.empty()) throw ComponentError(search.error);
     return search.found;
@@ -412,7 +428,7 @@ bool WindowsAdapter::trayRunning() const {
 void WindowsAdapter::stopTray(const WizardState& state) const {
     logOperation(L"Remove target-user Run startup before component maintenance.");
     removeUserStartup(state.targetSid);
-    TraySearch search{systemDirectory() / kGattHostFile, state.targetSid, WTSGetActiveConsoleSessionId(), true};
+    TraySearch search{desktopDirectory() / kGattHostFile, state.targetSid, WTSGetActiveConsoleSessionId(), true};
     EnumWindows(pinPairingHelper, reinterpret_cast<LPARAM>(&search));
     if (!search.error.empty()) throw ComponentError(search.error);
     EnumWindows(visitTray, reinterpret_cast<LPARAM>(&search));
@@ -424,89 +440,136 @@ void WindowsAdapter::stopTray(const WizardState& state) const {
 }
 void WindowsAdapter::removeTools() const {
     for (const auto& component : kComponentFiles)
-        if (component.desktopTool) deleteBinaryIfPresent(systemDirectory() / component.name);
+        if (component.desktopTool) deleteBinaryIfPresent(componentTarget(component));
 }
 void WindowsAdapter::installDesktopIntegration(const WizardState& state) const {
     registerUserStartup(state);
-    Com apartment;
-    auto directory = menuDirectory();
-    std::filesystem::create_directories(directory);
-    shortcut(directory / L"Saved Windows credential.lnk", systemDirectory() / kCredentialManagerFile, true);
-    shortcut(directory / L"Install or maintain.lnk", systemDirectory() / kInstallerFile);
+    registerApplicationUninstall(desktopDirectory() / kInstallerFile);
     logOperation(L"Bluetooth Run startup registered; the ordinary completion UI starts the tray once, then Windows starts it at later sign-ins.");
 }
 void WindowsAdapter::removeDesktopIntegration() const {
-    logOperation(L"Delete target-user Run startup and Start menu shortcuts.");
+    logOperation(L"Delete target-user Run startup.");
     const auto state = readState();
     if (state && !state->targetSid.empty()) removeUserStartup(state->targetSid);
-    auto directory = menuDirectory();
-    for (const auto* name : {L"Saved Windows credential.lnk", L"Install or maintain.lnk"}) {
-        auto link = directory / name;
-        if (!DeleteFileW(link.c_str()) && GetLastError() != ERROR_FILE_NOT_FOUND && GetLastError() != ERROR_PATH_NOT_FOUND)
-            win(FALSE, L"Delete shortcut " + link.wstring());
+}
+void WindowsAdapter::removeProductData(const WizardState& state) const {
+    ensureDeploymentDirectories();
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    win(ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(A;;GA;;;SY)(A;;GA;;;BA)",
+        SDDL_REVISION_1, &descriptor, nullptr), L"Protect enrollment removal lock");
+    SECURITY_ATTRIBUTES attributes{sizeof(attributes), descriptor, FALSE};
+    const HANDLE raw = CreateMutexW(&attributes, FALSE, unlock_windows::phone_approval::kEnrollmentWriterMutex);
+    const DWORD error = GetLastError(); LocalFree(descriptor); SetLastError(error);
+    Handle writer(raw); win(raw != nullptr, L"Open enrollment writer lock");
+    const DWORD waited = WaitForSingleObject(raw, 0);
+    if (waited != WAIT_OBJECT_0 && waited != WAIT_ABANDONED) throw ComponentError(L"Phone enrollment is being modified. Uninstall paused.");
+    struct Lock { HANDLE h; ~Lock() { ReleaseMutex(h); } } lock{raw};
+    const auto directory = productDataDirectory();
+    if (std::filesystem::exists(directory)) {
+        for (const auto& entry : std::filesystem::directory_iterator(directory)) {
+            const auto name = entry.path().filename().wstring();
+            const std::wstring prefix = std::wstring(unlock_windows::phone_approval::kEnrollmentFileName) +
+                unlock_windows::phone_approval::kEnrollmentPendingSuffix;
+            const bool temporary = name.size() == prefix.size() + 32 && name.starts_with(prefix) &&
+                name.find_first_not_of(L"0123456789abcdef", prefix.size()) == std::wstring::npos;
+            if (name != unlock_windows::phone_approval::kEnrollmentFileName && !temporary) continue;
+            const DWORD flags = GetFileAttributesW(entry.path().c_str());
+            if (flags == INVALID_FILE_ATTRIBUTES || (flags & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)))
+                throw ComponentError(L"Unsafe enrollment file; removal paused.");
+            deleteBinaryIfPresent(entry.path());
+        }
     }
-    if (!RemoveDirectoryW(directory.c_str()) && GetLastError() != ERROR_FILE_NOT_FOUND &&
-        GetLastError() != ERROR_PATH_NOT_FOUND) win(FALSE, L"Remove Start menu directory");
+    withUserHive(state.targetSid, [](HKEY hive) {
+        auto status = RegDeleteTreeW(hive, L"Software\\UnlockWindowsWithIPhone\\GattHost");
+        if (status != ERROR_FILE_NOT_FOUND && status != ERROR_PATH_NOT_FOUND) regCheck(status, L"Remove target-user ComputerId");
+        Registry key;
+        status = RegOpenKeyExW(hive, L"Software\\UnlockWindowsWithIPhone", 0, KEY_READ, &key.value);
+        if (status == ERROR_FILE_NOT_FOUND) return;
+        regCheck(status, L"Inspect target-user product registry");
+        DWORD subkeys = 0, values = 0;
+        regCheck(RegQueryInfoKeyW(key.value, nullptr, nullptr, nullptr, &subkeys, nullptr, nullptr,
+            &values, nullptr, nullptr, nullptr, nullptr), L"Inspect target-user remaining data");
+        if (subkeys || values) throw ComponentError(L"Unknown target-user product registry data remains.");
+        RegCloseKey(key.value); key.value = nullptr;
+        regCheck(RegDeleteKeyW(hive, L"Software\\UnlockWindowsWithIPhone"), L"Remove empty target-user product key");
+        regCheck(RegFlushKey(hive), L"Flush target-user data removal");
+    });
 }
 void WindowsAdapter::writeCompletion(const CompletionRecord& record) const {
-    constexpr size_t maximumBytes = 1024 * 1024;
-    const std::array<std::wstring, 4> strings{record.transactionId, record.targetSid, record.message, record.log};
-    size_t bytes = 6 * sizeof(DWORD);
-    for (const auto& text : strings) {
-        if (text.size() > maximumBytes / sizeof(wchar_t)) throw ComponentError(L"Completion log exceeds its storage limit.");
-        bytes += text.size() * sizeof(wchar_t);
+    size_t bytes = kCompletionHeaderWords * kCompletionWordBytes;
+    for (const auto& field : kCompletionTextFields) {
+        const auto& text = record.*field.member;
+        if (text.size() > kCompletionMaximumBytes / kCompletionCharacterBytes)
+            throw ComponentError(L"Completion log exceeds its storage limit.");
+        bytes += text.size() * kCompletionCharacterBytes;
     }
-    if (bytes > maximumBytes) throw ComponentError(L"Completion record exceeds its storage limit.");
-    std::array<DWORD, 6> header{1, (record.finished ? 1UL : 0UL) | (record.success ? 2UL : 0UL),
-        static_cast<DWORD>(strings[0].size()), static_cast<DWORD>(strings[1].size()),
-        static_cast<DWORD>(strings[2].size()), static_cast<DWORD>(strings[3].size())};
+    if (bytes > kCompletionMaximumBytes) throw ComponentError(L"Completion record exceeds its storage limit.");
+    std::array<std::uint32_t, kCompletionHeaderWords> header{};
+    header[kCompletionVersionWord] = kCompletionVersion;
+    header[kCompletionFlagsWord] = (record.finished ? kCompletionFinishedFlag : 0) |
+        (record.success ? kCompletionSuccessFlag : 0);
+    for (size_t i = 0; i < kCompletionTextFields.size(); ++i)
+        header[kCompletionLengthsWord + i] = static_cast<std::uint32_t>((record.*kCompletionTextFields[i].member).size());
     std::vector<BYTE> snapshot(bytes);
     std::memcpy(snapshot.data(), header.data(), sizeof(header));
     size_t offset = sizeof(header);
-    for (const auto& text : strings) {
-        const size_t n = text.size() * sizeof(wchar_t);
+    for (const auto& field : kCompletionTextFields) {
+        const auto& text = record.*field.member;
+        const size_t n = text.size() * kCompletionCharacterBytes;
         if (n) std::memcpy(snapshot.data() + offset, text.data(), n);
         offset += n;
     }
     Registry key;
-    regCheck(RegCreateKeyExW(HKEY_LOCAL_MACHINE, resultKey, 0, nullptr, 0,
-        KEY_WRITE | KEY_WOW64_64KEY, nullptr, &key.value, nullptr), L"Create completion record");
-    regCheck(RegSetValueExW(key.value, L"Snapshot", 0, REG_BINARY, snapshot.data(),
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    const auto acl = L"D:P(A;;KA;;;SY)(A;;KA;;;BA)(A;;KRSD;;;" + record.targetSid + L")";
+    win(ConvertStringSecurityDescriptorToSecurityDescriptorW(acl.c_str(), SDDL_REVISION_1, &descriptor, nullptr), L"Create result registry security");
+    struct Security { PSECURITY_DESCRIPTOR p; ~Security() { LocalFree(p); } } security{descriptor};
+    SECURITY_ATTRIBUTES attributes{sizeof(attributes), descriptor, FALSE};
+    regCheck(RegCreateKeyExW(HKEY_LOCAL_MACHINE, kResultRegistryPath.c_str(), 0, nullptr, 0,
+        KEY_WRITE | WRITE_DAC | KEY_WOW64_64KEY, &attributes, &key.value, nullptr), L"Create completion record");
+    regCheck(RegSetKeySecurity(key.value, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, descriptor), L"Protect completion record");
+    regCheck(RegSetValueExW(key.value, kSnapshotValueName, 0, REG_BINARY, snapshot.data(),
         static_cast<DWORD>(snapshot.size())), L"Commit atomic completion snapshot");
     regCheck(RegFlushKey(key.value), L"Flush completion record");
 }
 std::optional<CompletionRecord> WindowsAdapter::readCompletion() const {
     Registry key;
-    auto status = RegOpenKeyExW(HKEY_LOCAL_MACHINE, resultKey, 0, KEY_READ | KEY_WOW64_64KEY, &key.value);
+    auto status = RegOpenKeyExW(HKEY_LOCAL_MACHINE, kResultRegistryPath.c_str(), 0, KEY_READ | KEY_WOW64_64KEY, &key.value);
     if (status == ERROR_FILE_NOT_FOUND) return {};
     regCheck(status, L"Open completion record");
-    std::vector<BYTE> snapshot(1024 * 1024);
+    std::vector<BYTE> snapshot(kCompletionMaximumBytes);
     DWORD bytes = static_cast<DWORD>(snapshot.size());
-    const auto read = RegGetValueW(key.value, nullptr, L"Snapshot", RRF_RT_REG_BINARY, nullptr, snapshot.data(), &bytes);
+    const auto read = RegGetValueW(key.value, nullptr, kSnapshotValueName, RRF_RT_REG_BINARY, nullptr, snapshot.data(), &bytes);
     if (read == ERROR_FILE_NOT_FOUND) return {};
     regCheck(read, L"Read atomic completion snapshot");
-    std::array<DWORD, 6> header{};
+    std::array<std::uint32_t, kCompletionHeaderWords> header{};
     if (bytes < sizeof(header)) throw ComponentError(L"Truncated completion snapshot.");
     std::memcpy(header.data(), snapshot.data(), sizeof(header));
-    if (header[0] != 1 || header[1] > 3) throw ComponentError(L"Unsupported completion snapshot.");
-    std::array<std::wstring, 4> strings;
+    if (header[kCompletionVersionWord] != kCompletionVersion ||
+        (header[kCompletionFlagsWord] & ~kCompletionFlags) != 0)
+        throw ComponentError(L"Unsupported completion snapshot.");
+    CompletionRecord record;
     size_t offset = sizeof(header);
-    for (size_t i = 0; i < strings.size(); ++i) {
-        const size_t n = static_cast<size_t>(header[i + 2]) * sizeof(wchar_t);
+    for (size_t i = 0; i < kCompletionTextFields.size(); ++i) {
+        const auto characters = header[kCompletionLengthsWord + i];
+        const size_t n = static_cast<size_t>(characters) * kCompletionCharacterBytes;
         if (n > bytes - offset) throw ComponentError(L"Invalid completion snapshot string length.");
-        strings[i].assign(reinterpret_cast<const wchar_t*>(snapshot.data() + offset), header[i + 2]);
+        (record.*kCompletionTextFields[i].member).assign(
+            reinterpret_cast<const wchar_t*>(snapshot.data() + offset), characters);
         offset += n;
     }
     if (offset != bytes) throw ComponentError(L"Unexpected trailing completion snapshot data.");
-    return CompletionRecord{strings[0], strings[1], strings[2], strings[3],
-        (header[1] & 1) != 0, (header[1] & 2) != 0};
+    record.finished = (header[kCompletionFlagsWord] & kCompletionFinishedFlag) != 0;
+    record.success = (header[kCompletionFlagsWord] & kCompletionSuccessFlag) != 0;
+    return record;
 }
 void WindowsAdapter::acknowledgeCompletion(const std::wstring& transaction) const {
     const auto result = readCompletion();
     if (!result || !result->finished || result->transactionId != transaction ||
         result->targetSid != processSid(GetCurrentProcess()))
         throw ComponentError(L"Only the target user can dismiss the matching completed result.");
-    Scheduler scheduler; scheduler.remove(resultName);
+    Scheduler scheduler; scheduler.remove(kResultTask);
+    regCheck(RegDeleteKeyExW(HKEY_LOCAL_MACHINE, kResultRegistryPath.c_str(), KEY_WOW64_64KEY, 0), L"Remove acknowledged result record");
 }
 void WindowsAdapter::startTrayForCompletedOperation(const std::wstring& transaction) const {
     const auto result = readCompletion();
@@ -514,9 +577,7 @@ void WindowsAdapter::startTrayForCompletedOperation(const std::wstring& transact
     if (!result || !result->finished || !result->success || result->transactionId != transaction)
         throw ComponentError(L"Bluetooth startup requires the matching successful completion result.");
     if (!state) return;
-    if (state->phase == WizardPhase::cleaningUp && state->credentialCleanupConfirmed &&
-        state->transactionId == transaction && state->targetSid == result->targetSid) return;
-    if (state->phase != WizardPhase::installed || state->transactionId != transaction || state->targetSid != result->targetSid)
+    if (state->phase != WizardPhase::installed || state->targetSid != result->targetSid)
         throw ComponentError(L"Bluetooth startup does not match the completed installation.");
     DWORD session = 0;
     win(ProcessIdToSessionId(GetCurrentProcessId(), &session), L"Read result process session");
@@ -526,8 +587,8 @@ void WindowsAdapter::startTrayForCompletedOperation(const std::wstring& transact
     if (!userStartupPresent()) throw ComponentError(L"Bluetooth Run startup is not registered.");
     if (trayRunning()) return;
     SHELLEXECUTEINFOW launch{}; launch.cbSize = sizeof(launch);
-    const auto executable = systemDirectory() / kGattHostFile;
-    const auto directory = systemDirectory();
+    const auto executable = desktopDirectory() / kGattHostFile;
+    const auto directory = desktopDirectory();
     launch.fMask = SEE_MASK_FLAG_NO_UI;
     launch.lpVerb = L"open"; launch.lpFile = executable.c_str(); launch.lpDirectory = directory.c_str();
     launch.nShow = SW_SHOWNORMAL;

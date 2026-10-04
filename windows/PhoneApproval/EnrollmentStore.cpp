@@ -316,7 +316,7 @@ std::wstring EnrollmentStore::defaultPath() {
         throw std::runtime_error(win32Error("GetEnvironmentVariableW(ProgramData)"));
     }
     programData.resize(length);
-    return programData + L"\\UnlockWindowsWithIPhone\\enrollment.dat";
+    return programData + L"\\" + kEnrollmentDataDirectoryName + L"\\" + kEnrollmentFileName;
 }
 
 EnrollmentStore::EnrollmentStore(std::wstring path) : path_(std::move(path)) {
@@ -391,7 +391,7 @@ void EnrollmentStore::save(const EnrollmentRecord& record, const std::function<v
     std::array<std::uint8_t, 16> nonce{};
     requireNtStatus(BCryptGenRandom(nullptr, nonce.data(), static_cast<ULONG>(nonce.size()),
         BCRYPT_USE_SYSTEM_PREFERRED_RNG), "BCryptGenRandom(enrollment temporary file)");
-    std::wstring temporary = path_ + L".pending-";
+    std::wstring temporary = path_ + kEnrollmentPendingSuffix;
     constexpr wchar_t alphabet[] = L"0123456789abcdef";
     for (const auto value : nonce) {
         temporary += alphabet[value >> 4];

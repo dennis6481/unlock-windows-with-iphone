@@ -4,22 +4,10 @@
 
 #include <cstdint>
 #include <string>
+#include "../ProductVersion.h"
+#include "SetupContract.h"
 
 namespace unlock::components {
-
-inline constexpr std::uint32_t kWizardStateSchemaVersion = 3;
-
-enum class WizardPhase : std::uint32_t {
-    none = 0,
-    installing = 1,
-    installed = 2,
-    uninstallPendingReboot = 3,
-    cleaningUp = 4,
-    recoveryRequired = 5,
-    updatePendingReboot = 6,
-    updating = 7,
-    installPendingReboot = 8,
-};
 
 enum class WizardAction {
     install,
@@ -37,6 +25,11 @@ struct WizardState final {
     std::wstring lastError;
     std::wstring targetSid;
     bool credentialCleanupConfirmed = false;
+    SetupOperation operation = SetupOperation::install;
+    std::wstring sourcePath;
+    std::wstring installedVersion;
+    std::wstring packageVersion;
+    bool payloadReady = false;
 };
 
 struct ComponentSnapshot final {
@@ -55,8 +48,10 @@ struct ComponentSnapshot final {
     bool userStartupPresent = false;
     bool toolsPresent = false;
     bool desktopArtifactsPresent = false;
-    bool shortcutsPresent = false;
+    bool applicationUninstallPresent = false;
     bool trayRunning = false;
+    bool versionsMatch = false;
+    std::wstring versionError;
     std::wstring targetSid;
 
     bool observationValid = true;
@@ -64,15 +59,6 @@ struct ComponentSnapshot final {
 
     [[nodiscard]] bool hasAnyArtifacts() const noexcept;
     [[nodiscard]] bool isFullInstallation() const noexcept;
-};
-
-struct CompletionRecord final {
-    std::wstring transactionId;
-    std::wstring targetSid;
-    std::wstring message;
-    std::wstring log;
-    bool finished = false;
-    bool success = false;
 };
 
 enum class MaintenanceAction { install, maintain, restart, resume, blocked };

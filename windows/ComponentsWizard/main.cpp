@@ -20,6 +20,22 @@ using namespace unlock::components;
 constexpr UINT progressMessage = WM_APP + 1;
 constexpr UINT completeMessage = WM_APP + 2;
 enum class Page { home, update, uninstall, progress, restart, result, failure };
+int alert(HWND parent, const wchar_t* title, const wchar_t* content,
+          int buttons, PCWSTR icon) {
+    TASKDIALOGCONFIG config{sizeof(config)};
+    config.hwndParent = parent;
+    config.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_POSITION_RELATIVE_TO_WINDOW | TDF_SIZE_TO_CONTENT;
+    config.pszWindowTitle = title;
+    config.pszContent = content;
+    config.pszMainIcon = icon;
+    config.dwCommonButtons = static_cast<TASKDIALOG_COMMON_BUTTON_FLAGS>(buttons);
+    config.nDefaultButton = IDOK;
+    int selected = 0;
+    const auto result = TaskDialogIndirect(&config, &selected, nullptr, nullptr);
+    if (FAILED(result)) throw ComponentError(L"Installer notification could not be displayed (HRESULT=" +
+        std::to_wstring(static_cast<unsigned long>(result)) + L").");
+    return selected;
+}
 struct Progress { int percent; std::wstring message; };
 std::wstring errorText(const std::exception& error) {
     if (auto component = dynamic_cast<const ComponentError*>(&error)) return component->wideWhat();
@@ -49,7 +65,7 @@ std::wstring startupAccountLabel(const std::wstring& sid, std::wstring& details)
         error = GetLastError();
     }
     details += L"\r\nAccount name lookup failed (Win32=" + std::to_wstring(error) + L").";
-    return L"Name unavailable; see Technical details";
+    return L"Name unavailable (Win32=" + std::to_wstring(error) + L").";
 }
 struct OperationLock {
     HANDLE value = nullptr;
@@ -135,8 +151,29 @@ struct Window {
     bool reinstall = false;
     std::function<void()> releaseOperation;
     unlock_windows::desktop_ui::DialogAppearance appearance;
+    HFONT contentFont = nullptr;
+    int footerTop = 0;
     explicit Window(std::filesystem::path path) : adapter(std::move(path)) {}
-    ~Window() { if (worker.joinable()) worker.join(); }
+    ~Window() { if (worker.joinable()) worker.join(); if (contentFont) DeleteObject(contentFont); }
+    void applyAppearance(UINT dpi = 0) {
+        if (!dpi) dpi = GetDpiForWindow(hwnd);
+        appearance.apply(hwnd, IDC_MAIN_INSTRUCTION, dpi);
+        NONCLIENTMETRICSW metrics{sizeof(metrics)};
+        if (!SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(metrics), &metrics, 0, dpi))
+            throw ComponentError(L"Could not read installer display font.");
+        const auto font = CreateFontIndirectW(&metrics.lfMessageFont);
+        if (!font) throw ComponentError(L"Could not create installer display font.");
+        for (int id : {IDC_PAGE_DESCRIPTION, IDC_DETAILS, IDC_BACK, IDC_ACTION, IDC_CANCEL_ACTION})
+            SendDlgItemMessageW(hwnd, id, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+        if (contentFont) DeleteObject(contentFont);
+        contentFont = font;
+        const int iconId = page == Page::failure ? 32513 :
+            page == Page::uninstall || page == Page::restart ? 32515 : 32516;
+        const auto icon = LoadImageW(nullptr, MAKEINTRESOURCEW(iconId), IMAGE_ICON,
+            MulDiv(32, dpi, 96), MulDiv(32, dpi, 96), LR_SHARED);
+        if (!icon) throw ComponentError(L"Could not load installer status icon.");
+        SendDlgItemMessageW(hwnd, IDC_STATUS_ICON, STM_SETICON, reinterpret_cast<WPARAM>(icon), 0);
+    }
     void text(int id, const std::wstring& value) { SetDlgItemTextW(hwnd, id, value.c_str()); }
     void button(int id, const wchar_t* label, bool enabled = true, bool primary = false) {
         ShowWindow(GetDlgItem(hwnd, id), label ? SW_SHOW : SW_HIDE);
@@ -153,46 +190,91 @@ struct Window {
         if (cancel && preferCancel) unlock_windows::desktop_ui::defaultButton(hwnd, IDC_CANCEL_ACTION);
         else if (action) unlock_windows::desktop_ui::defaultButton(hwnd, IDC_ACTION);
         else if (cancel) unlock_windows::desktop_ui::defaultButton(hwnd, IDC_CANCEL_ACTION);
+        layout();
     }
     void layout() {
         const bool progress = page == Page::progress;
-        const bool expanded = !progress && !log.empty() && IsDlgButtonChecked(hwnd, IDC_LOG_TOGGLE) == BST_CHECKED;
-        const LONG height = progress ? 218 : expanded ? 242 : 172;
-        const auto place = [&](int id, RECT area) {
-            if (!MapDialogRect(hwnd, &area) || !SetWindowPos(GetDlgItem(hwnd, id), nullptr,
-                area.left, area.top, area.right - area.left, area.bottom - area.top, SWP_NOZORDER | SWP_NOACTIVATE))
-                throw ComponentError(L"Could not lay out installer controls.");
-        };
-        place(IDC_DETAILS, {14, progress ? 42 : 134, 306, progress ? 160 : 198});
-        place(IDC_PROGRESS, {14, 170, 306, 177});
-        place(IDC_BACK, {124, height - 28, 182, height - 12});
-        place(IDC_ACTION, {190, height - 28, 252, height - 12});
-        place(IDC_CANCEL_ACTION, {260, height - 28, 306, height - 12});
-        ShowWindow(GetDlgItem(hwnd, IDC_DETAILS), progress || expanded ? SW_SHOW : SW_HIDE);
-        RECT size{0, 0, 320, height}, previous{};
-        if (!MapDialogRect(hwnd, &size) || !AdjustWindowRectExForDpi(&size,
-            static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_STYLE)), FALSE,
-            static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_EXSTYLE)), GetDpiForWindow(hwnd)) ||
-            !GetWindowRect(hwnd, &previous)) throw ComponentError(L"Could not measure installer window.");
-        const LONG width = size.right - size.left, outerHeight = size.bottom - size.top;
+        const auto dpi = GetDpiForWindow(hwnd);
+        const auto scaled = [dpi](int value) { return MulDiv(value, dpi, 96); };
         MONITORINFO monitor{sizeof(monitor)};
         if (!GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &monitor))
             throw ComponentError(L"Could not find installer display bounds.");
+        const int margin = scaled(24), gap = scaled(12), iconSize = scaled(32);
+        const int width = std::min(scaled(600), static_cast<int>(monitor.rcWork.right - monitor.rcWork.left) - margin * 2);
+        const int left = margin + iconSize + scaled(20), textWidth = width - left - margin;
+        const auto place = [&](int id, int x, int y, int w, int h) {
+            if (!SetWindowPos(GetDlgItem(hwnd, id), nullptr, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE))
+                throw ComponentError(L"Could not lay out installer controls.");
+        };
+        const auto measure = [&](int id, int availableWidth) {
+            const auto control = GetDlgItem(hwnd, id);
+            const int length = GetWindowTextLengthW(control);
+            std::vector<wchar_t> value(static_cast<size_t>(length) + 1);
+            GetWindowTextW(control, value.data(), length + 1);
+            const auto dc = GetDC(control);
+            if (!dc) throw ComponentError(L"Could not measure installer text.");
+            const auto old = SelectObject(dc, reinterpret_cast<HFONT>(SendMessageW(control, WM_GETFONT, 0, 0)));
+            RECT rect{0, 0, availableWidth, 0};
+            DrawTextW(dc, value.data(), length, &rect, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+            SelectObject(dc, old); ReleaseDC(control, dc);
+            return std::max(scaled(20), static_cast<int>(rect.bottom));
+        };
+        const int titleHeight = measure(IDC_MAIN_INSTRUCTION, textWidth);
+        const int footerHeight = scaled(52);
+        RECT frame{0, 0, width, 0};
+        if (!AdjustWindowRectExForDpi(&frame, static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_STYLE)), FALSE,
+            static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_EXSTYLE)), dpi))
+            throw ComponentError(L"Could not measure installer frame.");
+        const int maxHeight = monitor.rcWork.bottom - monitor.rcWork.top - (frame.bottom - frame.top) - margin * 2;
+        int y = margin + titleHeight + gap;
+        place(IDC_STATUS_ICON, margin, margin, iconSize, iconSize);
+        place(IDC_MAIN_INSTRUCTION, left, margin, textWidth, titleHeight);
+        if (!progress) {
+            const int height = measure(IDC_PAGE_DESCRIPTION, textWidth);
+            place(IDC_PAGE_DESCRIPTION, left, y, textWidth, height); y += height + gap;
+        }
+        if (progress) {
+            const int height = std::max(scaled(60), std::min(scaled(180), maxHeight - y - footerHeight - margin - scaled(24)));
+            place(IDC_DETAILS, left, y, textWidth, height); y += height + gap;
+        }
+        if (progress) { place(IDC_PROGRESS, left, y, textWidth, scaled(8)); y += scaled(20); }
+        footerTop = y + scaled(12);
+        const int height = footerTop + footerHeight;
+        int right = width - margin;
+        for (int id : {IDC_CANCEL_ACTION, IDC_ACTION, IDC_BACK}) {
+            if (!(GetWindowLongPtrW(GetDlgItem(hwnd, id), GWL_STYLE) & WS_VISIBLE)) continue;
+            const auto dc = GetDC(GetDlgItem(hwnd, id));
+            if (!dc) throw ComponentError(L"Could not measure installer button.");
+            const auto old = SelectObject(dc, contentFont);
+            wchar_t label[128]{}; GetDlgItemTextW(hwnd, id, label, 128);
+            RECT bounds{}; DrawTextW(dc, label, -1, &bounds, DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
+            SelectObject(dc, old); ReleaseDC(GetDlgItem(hwnd, id), dc);
+            const int buttonWidth = std::max(scaled(88), static_cast<int>(bounds.right) + scaled(32));
+            right -= buttonWidth;
+            place(id, right, footerTop + scaled(10), buttonWidth, scaled(32)); right -= scaled(8);
+        }
+        ShowWindow(GetDlgItem(hwnd, IDC_DETAILS), progress ? SW_SHOW : SW_HIDE);
+        RECT size{0, 0, width, height}, previous{};
+        if (!AdjustWindowRectExForDpi(&size,
+            static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_STYLE)), FALSE,
+            static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_EXSTYLE)), GetDpiForWindow(hwnd)) ||
+            !GetWindowRect(hwnd, &previous)) throw ComponentError(L"Could not measure installer window.");
+        const LONG outerWidth = size.right - size.left, outerHeight = size.bottom - size.top;
         const LONG x = std::max(monitor.rcWork.left, std::min(
-            previous.left + ((previous.right - previous.left) - width) / 2, monitor.rcWork.right - width));
-        const LONG y = std::max(monitor.rcWork.top, std::min(
+            previous.left + ((previous.right - previous.left) - outerWidth) / 2, monitor.rcWork.right - outerWidth));
+        const LONG windowY = std::max(monitor.rcWork.top, std::min(
             previous.top + ((previous.bottom - previous.top) - outerHeight) / 2, monitor.rcWork.bottom - outerHeight));
-        if (!SetWindowPos(hwnd, nullptr, x, y, width, outerHeight, SWP_NOZORDER | SWP_NOACTIVATE))
+        if (!SetWindowPos(hwnd, nullptr, x, windowY, outerWidth, outerHeight, SWP_NOZORDER | SWP_NOACTIVATE))
             throw ComponentError(L"Could not resize installer window.");
+        InvalidateRect(hwnd, nullptr, TRUE);
     }
     void setPage(Page next, const std::wstring& title, const std::wstring& details) {
         page = next; text(IDC_MAIN_INSTRUCTION, title); text(IDC_PAGE_DESCRIPTION, details);
+        applyAppearance();
         if (!SetWindowTextW(hwnd, next == Page::home && installed ? title.c_str() : (std::wstring(UNLOCK_PRODUCT_DISPLAY_NAME) + L" Setup").c_str()))
             throw ComponentError(L"Could not set installer window title.");
-        text(IDC_DETAILS, next == Page::progress ? details : log);
+        text(IDC_DETAILS, next == Page::progress ? details : L"");
         ShowWindow(GetDlgItem(hwnd, IDC_PAGE_DESCRIPTION), next == Page::progress ? SW_HIDE : SW_SHOW);
-        ShowWindow(GetDlgItem(hwnd, IDC_LOG_TOGGLE), next != Page::progress && !log.empty() ? SW_SHOW : SW_HIDE);
-        CheckDlgButton(hwnd, IDC_LOG_TOGGLE, next == Page::failure ? BST_CHECKED : BST_UNCHECKED);
         ShowWindow(GetDlgItem(hwnd, IDC_PROGRESS), next == Page::progress ? SW_SHOW : SW_HIDE);
         layout();
     }
@@ -237,11 +319,11 @@ struct Window {
                 setPage(Page::home, std::wstring(UNLOCK_PRODUCT_DISPLAY_NAME) + L" installed", L"Installed version: " + state->installedVersion +
                     L"\r\nPackage version: " + incoming.text() + L"\r\nStartup account: " + account +
                     L"\r\nBluetooth tray: " + (status.trayRunning ? L"running" : L"not running") +
-                    L"\r\n\r\nUpdate and reinstall preserve credentials and pairing. Uninstall removes Windows product data.");
+                    L"\r\n\r\nUpdate and reinstall preserve credentials and pairing. Uninstall removes Windows product data." +
+                    (action == PackageAction::rejectDowngrade ?
+                        L"\r\nThis package is older than the installed product. Downgrade is refused." : L""));
                 buttons(L"Uninstall", action == PackageAction::rejectDowngrade ? nullptr : reinstall ? L"Reinstall" : L"Update", L"Cancel");
-                if (action == PackageAction::rejectDowngrade) log += L"\r\nThis package is older than the installed product. Downgrade is refused.";
             }
-            text(IDC_LOG_TOGGLE, L"Technical details");
         } else {
             log.clear();
             setPage(Page::home, L"Install " + std::wstring(UNLOCK_PRODUCT_DISPLAY_NAME),
@@ -270,7 +352,6 @@ struct Window {
             }
         }
         busy = true; log.clear();
-        text(IDC_LOG_TOGGLE, L"Operation details");
         setPage(Page::progress, L"Working — please wait", L"");
         button(IDC_BACK, nullptr); button(IDC_ACTION, nullptr); button(IDC_CANCEL_ACTION, L"Cancel", false);
         EnableMenuItem(GetSystemMenu(hwnd, FALSE), SC_CLOSE, MF_BYCOMMAND | MF_GRAYED);
@@ -338,10 +419,6 @@ struct Window {
     }
     void command(int id) {
         if (busy) return;
-        if (id == IDC_LOG_TOGGLE) {
-            layout();
-            return;
-        }
         if (id == IDC_CANCEL_ACTION) { DestroyWindow(hwnd); return; }
         if (id == IDCANCEL) {
             if (resultMode && (page == Page::result || page == Page::failure)) adapter.acknowledgeCompletion(resultId);
@@ -365,8 +442,8 @@ struct Window {
         } else if (page == Page::update) start(WizardAction::update);
         else if (page == Page::uninstall) start(WizardAction::uninstall);
         else if (page == Page::restart || (page == Page::failure && pending && adapter.updateRebootRequired())) {
-            if (MessageBoxW(hwnd, L"Restart Windows now? Save your work first. Applications will not be forcibly closed.",
-                L"Restart Windows", MB_OKCANCEL | MB_ICONQUESTION) == IDOK) { adapter.restartWindows(); DestroyWindow(hwnd); }
+            if (alert(hwnd, L"Restart Windows", L"Restart Windows now? Save your work first. Applications will not be forcibly closed.",
+                TDCBF_OK_BUTTON | TDCBF_CANCEL_BUTTON, TD_WARNING_ICON) == IDOK) { adapter.restartWindows(); DestroyWindow(hwnd); }
         } else if (page == Page::failure && pending) start(WizardAction::blocked, true);
         else DestroyWindow(hwnd);
     }
@@ -383,16 +460,24 @@ INT_PTR CALLBACK procedure(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
         switch (message) {
             case WM_INITDIALOG:
                 {
-                    window->appearance.apply(hwnd, IDC_MAIN_INSTRUCTION);
+                    window->applyAppearance();
                 }
                 if (window->resultMode) { SetTimer(hwnd, 1, 500, nullptr); window->pollResult(); }
                 else window->home(window->uninstallMode);
                 return FALSE;
             case WM_CTLCOLORSTATIC:
-                if (reinterpret_cast<HWND>(lParam) == GetDlgItem(hwnd, IDC_DETAILS) ||
-                    reinterpret_cast<HWND>(lParam) == GetDlgItem(hwnd, IDC_PAGE_DESCRIPTION))
-                    return unlock_windows::desktop_ui::readOnlyBackground(wParam);
-                return FALSE;
+                return unlock_windows::desktop_ui::readOnlyBackground(wParam);
+            case WM_ERASEBKGND: return TRUE;
+            case WM_PAINT: {
+                PAINTSTRUCT paint{}; const auto dc = BeginPaint(hwnd, &paint);
+                RECT area{}; GetClientRect(hwnd, &area);
+                FillRect(dc, &area, GetSysColorBrush(COLOR_WINDOW));
+                area.top = window->footerTop;
+                FillRect(dc, &area, GetSysColorBrush(COLOR_3DFACE));
+                area.bottom = area.top + 1;
+                FillRect(dc, &area, GetSysColorBrush(COLOR_3DSHADOW));
+                EndPaint(hwnd, &paint); return TRUE;
+            }
             case WM_COMMAND: window->command(LOWORD(wParam)); return TRUE;
             case WM_TIMER: window->pollResult(); return TRUE;
             case progressMessage: {
@@ -411,10 +496,16 @@ INT_PTR CALLBACK procedure(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
                 }
                 return TRUE;
             case WM_DPICHANGED:
+                {
+                    const auto bounds = reinterpret_cast<RECT*>(lParam);
+                    if (!SetWindowPos(hwnd, nullptr, bounds->left, bounds->top,
+                        bounds->right - bounds->left, bounds->bottom - bounds->top, SWP_NOZORDER | SWP_NOACTIVATE))
+                        throw ComponentError(L"Could not apply installer monitor bounds.");
+                }
                 unlock_windows::desktop_ui::scheduleDpiAppearance(hwnd, HIWORD(wParam));
                 return FALSE;
             case unlock_windows::desktop_ui::kApplyDpiAppearance:
-                window->appearance.apply(hwnd, IDC_MAIN_INSTRUCTION, static_cast<UINT>(wParam));
+                window->applyAppearance(static_cast<UINT>(wParam));
                 window->layout();
                 return TRUE;
             case WM_DESTROY: PostQuitMessage(0); return TRUE;
@@ -470,7 +561,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
             if (!IsDialogMessageW(hwnd, &message)) { TranslateMessage(&message); DispatchMessageW(&message); }
         return 0;
     } catch (const std::exception& error) {
-        if (!headless) MessageBoxW(nullptr, errorText(error).c_str(), UNLOCK_PRODUCT_DISPLAY_NAME, MB_OK | MB_ICONERROR);
+        if (!headless) {
+            try { alert(nullptr, UNLOCK_PRODUCT_DISPLAY_NAME, errorText(error).c_str(), TDCBF_OK_BUTTON, TD_ERROR_ICON); }
+            catch (const std::exception& displayError) {
+                OutputDebugStringW((errorText(error) + L"\nUI display failure: " + errorText(displayError)).c_str());
+            }
+        }
         else OutputDebugStringW(errorText(error).c_str());
         return ERROR_INSTALL_FAILURE;
     }

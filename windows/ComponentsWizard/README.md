@@ -6,6 +6,10 @@
 
 ## 正式部署与维护入口
 
+安装器页面统一采用原生 Task Dialog 风格：白色正文区、系统状态图标、紧凑的底部灰色按钮区和系统按钮。普通页面直接显示自动换行文字，不使用滚动文本框或详情复选框；只有进度页面保留可滚动操作日志。按钮区高 52 个逻辑像素，32 像素按钮上下各留 10 像素，全部随 DPI 缩放。确认／错误弹窗使用 TaskDialogIndirect；卸载后的短期结果进程调用原生 TaskDialog，以不可见的 WinForms 主题宿主启用 Common Controls v6。按钮名称、默认焦点和业务操作保持原行为；账户名查询失败与拒绝降级的说明直接显示在正文中，不再引用已删除的详情入口。不调整托盘、配对、密码管理或系统 UAC。
+
+主窗口继续使用 PerMonitorV2，按当前 DPI 测量文字、图标和按钮，在屏幕工作区内布局；结果进程在创建窗口前设置线程 DPI 上下文。显示失败独立报告 UI 错误，不改写事务成功／失败结果。短期命令以 UTF-8 Base64 封装，经系统 PowerShell 解码执行，避免新增 UI 定义导致续办命令超过长度限制；没有新增部署文件。完整命令语法、编码往返、长度及原有文案保留已静态检查；尚未构建或运行 UI，高 DPI、跨屏和卸载结果显示须实机验收。
+
 | 位置 | 内容 |
 |---|---|
 | System32 | Credential Provider DLL、自动 LocalSystem 凭据服务 |
@@ -82,3 +86,5 @@ Update／Uninstall 先移除 Run，按已安装主程序的实际路径固定所
 - [IRegisteredTask::Run](https://learn.microsoft.com/en-us/windows/win32/api/taskschd/nf-taskschd-iregisteredtask-run)
 - [Task Scheduler result codes](https://learn.microsoft.com/en-us/windows/win32/taskschd/task-scheduler-error-and-success-constants)
 - [EventWaitHandle.GetAccessControl 所需句柄权限](https://learn.microsoft.com/en-us/dotnet/api/system.threading.eventwaithandle.getaccesscontrol?view=netframework-4.8.1)
+- [原生 Task Dialog 组成](https://learn.microsoft.com/en-us/windows/win32/controls/task-dialogs-overview)
+- [TaskDialog 与 Common Controls v6](https://learn.microsoft.com/en-us/windows/win32/api/commctrl/nf-commctrl-taskdialog)

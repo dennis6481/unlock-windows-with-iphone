@@ -1,96 +1,123 @@
 <!-- Created by Rui MA on 26 Sep 2026 -->
 
-# Windows
+# Windows developer guide
 
-当前只有一条认证链：**Windows 手机磁贴发起 → 普通用户 GATT 托盘传输 → iPhone 签名 → LocalSystem 服务验证 → 一次性批准 → CP 自动提交保存的 MSA 密码给原生 Negotiate**。仅解锁已有物理控制台会话；首次登录使用原生 PIN／密码。
+The Windows side contains four installed components: the desktop app, LocalSystem credential service, Credential Provider DLL and maintenance installer. [Protocol.md](../Protocol.md) defines authentication; [SECURITY.md](../SECURITY.md) explains credential protection.
 
-## 组件
+## Compatibility
 
-- [Components Wizard](ComponentsWizard/README.md)：四组件安装、更新、卸载及重启续办。
-- [主应用](#主应用运行角色)：唯一用户态产物 `UnlockWithIPhone.exe`，包含普通托盘后台与临时提权操作角色。
-- [GattHost](GattHost/README.md)：主应用内的普通用户托盘、锁屏广播及配对传输。
-- [登记模块](Enrollment/README.md)：主应用内的短期提权登记，一台电脑一份手机公钥登记。
-- [SavedCredential](SavedCredential/README.md)：密码服务、受限 IPC 及本机密码副本管理。
-- [CredentialProvider](CredentialProvider/README.md)：LogonUI 磁贴、身份核验及原生序列化。
-- [PhoneApproval](PhoneApproval/README.md)、[Protocol](Protocol/README.md)：签名验证、登记存储及共享加密实现。
-- `Diagnostics/Get-ComponentsStatus.ps1`：只读诊断，读取共享组件清单。
+The API-derived runtime minimum is **Windows 10 version 1703 (Creators Update), build 15063**. Windows 11 is also within the intended OS range. This minimum is inferred from the current API usage, not from an oldest-build device test.
 
-没有自定义 LSA 包、旧探针、独立审批 host、旧 UI 或旧 IPC 接受路径。手工配对 CLI 仍受支持。
-
-## 主应用运行角色
-
-无参数启动普通用户单实例托盘，拒绝管理员运行；托盘经一次 UAC 启动同一 EXE 的配对或密码管理角色。操作角色不初始化 BLE 或托盘，不受后台单实例限制；关闭操作窗口不退出后台。未知／冲突参数明确拒绝。
-
-| 参数 | 角色 |
+| Source dependency | Runtime floor / build requirement |
 |---|---|
-| 无参数 | 普通托盘／BLE／会话监控 |
-| `--bluetooth` 及既有内部参数 | 临时提权配对／移除，参数不授予权限 |
-| `--saved-password` | 临时提权密码管理 |
-| `--key-hex`、`--key-clipboard`、`--clear` | 管理员手工登记，连接调用方控制台 |
+| `GattServiceProvider`, local characteristics, subscribed clients and sessions in `GattHost` | Windows 10 1703, build 15063, Universal API Contract v4. |
+| Desktop `PerMonitorV2` manifests | Windows 10 1703, build 15063. |
+| `GetDpiForWindow`, `GetSystemMetricsForDpi` and `SetThreadDpiAwarenessContext` | Windows 10 1607; covered by the 1703 floor. |
+| `StartedWithoutAllAdvertisementData` enum constant | Windows SDK 10.0.18362.0 or newer for compilation. The code compares an enum value; it does not call a new 1903-only method. |
 
-角色及命令唯一来源为 [DesktopApp.h](DesktopApp/DesktopApp.h)，产品名称复用 [资源定义](Resources/resource.h)。当前没有 Dashboard／WinUI，收敛验收通过后再按真实能力设计 UI；手机自动响应与 RSSI 设置仍在 iPhone。
+The manifests declare desktop privileges and DPI awareness; CMake does not pin an exact SDK version or Windows build. Use a recent Windows SDK containing C++/WinRT headers. OS eligibility does not guarantee a working adapter: the PC must support **BLE GATT server / peripheral advertising**, including driver support.
 
-## 构建与诊断
+The build helper and installer recognize **x64 and ARM64** only. All components must match the native OS architecture; emulated x64 binaries are not the ARM64 deployment. ARM64 is an intended build target and has not been validated on physical hardware. Neither 32-bit x86 nor ARM32 is supported.
 
-最低 Windows 10，支持原生 x64／ARM64，要求 C++20、CMake 3.25+ 及对应 Visual Studio C++ 工具。目标电脑只安装预编译文件，不编译或下载开发环境。
+## Build prerequisites
 
-下列命令从仓库根目录执行，构建／测试须另行明确授权：
+- Windows and Visual Studio 2022 / Build Tools 2022 with **Desktop development with C++**, MSVC C++20 support and the target architecture's tools. ARM64 requires the ARM64 C++ tools component.
+- Windows SDK **10.0.18362.0 or newer** with C++/WinRT headers; a recent SDK is recommended.
+- **CMake 3.25 or newer**, `ctest`, and **GNU Make** available on `PATH`. `make` here is GNU Make; the CMake generator uses the separate MSVC `nmake` supplied by Visual Studio.
+- Run from a native Windows PowerShell or command prompt. The Makefile uses Windows commands and is not a WSL build workflow.
+
+From the repository root:
 
 ```powershell
+make -C windows build
+make -C windows test
 make -C windows build-release
-ctest --test-dir '.\windows\build' -C Release --output-on-failure
+```
+
+`test` builds first. `make -C windows` builds and runs tests; `build-release` builds Release targets without executing them. The helper finds Visual Studio with `vswhere`, selects native `x64` or `arm64`, and configures CMake with `NMake Makefiles`. It redirects compiler temporary files into the ignored root `.tmp/` directory.
+
+To select a target and separate build directories explicitly:
+
+```powershell
+make -C windows build-release TARGET_ARCH=x64 BUILD_DIR=build/x64
+make -C windows build-release TARGET_ARCH=arm64 BUILD_DIR=build/arm64
+```
+
+Use separate directories when changing architecture or configuration. For a nonstandard Visual Studio location, pass `VS_DEV_CMD=<absolute-path-to-VsDevCmd.bat>` as a quoted Make argument. The helper still selects the requested architecture.
+
+The output directory contains `UnlockWithIPhone.exe`, `unlock_saved_credential_service.exe`, `unlock_credential_provider.dll` and `UnlockWithIPhone_<version>_setup.exe`, alongside test binaries. The version comes from [ProductVersion.h](ProductVersion.h); filenames come from [ComponentFiles.h](ComponentFiles.h) and CMake's installer naming rule. Keep the four product files together: setup reads its companion binaries, rather than downloading or compiling them on the target machine.
+
+## Install and configure
+
+1. Build Windows and iOS from matching revisions. Keep a working native Windows password/PIN available.
+2. Sign in to the target Microsoft Account at the physical console and run the versioned setup EXE from its build directory. Setup requests UAC itself; follow its confirmation and restart instructions.
+3. After restart, sign in once with your usual native PIN/password. The service starts as LocalSystem; the ordinary-user tray starts through the target user's Run entry.
+4. On the verified installation result page choose **Start setup**, or choose **Later** and use tray **Continue setup…**. The existing password window requests UAC and verifies the installed target account without an additional lock/sign-in cycle. Save the actual MSA password, not the PIN. This stores a local copy; it does not change the account password. See [password management](SavedCredential/README.md#password-management).
+5. After the service confirms the saved copy, setup opens the existing pairing window. Allow UAC, start computer registration in the iOS app, and confirm the account and full fingerprint. Already completed steps are skipped; cancelled or failed password management cannot advance to pairing. The iOS UI currently labels registration **登记电脑**. See [pairing](GattHost/README.md#pairing).
+6. Lock Windows, select the phone tile and press **Enter / Unlock** once. With automatic response enabled and a sufficient fresh RSSI reading, the phone signs and Windows attempts native authentication.
+
+Starting Windows, signing out, or having no existing console session does not offer phone sign-in. Changing the online MSA password requires updating the saved copy. Removing phone registration does not remove the saved password; both have separate tray actions.
+
+## Update and uninstall
+
+Run a higher-version package for **Update** or the same version for explicit **Reinstall**; downgrades are rejected. Updates preserve the password copy, phone registration and ComputerId. Follow the restart boundary and finish the result page.
+
+Use Windows Settings → Apps to uninstall. Removal clears the local password copy, phone registration, target user's ComputerId, product files and integration records. Delete the computer record on the iPhone separately. Details and failure recovery are in the [installer guide](ComponentsWizard/README.md).
+
+Only the current complete installation and installation schema can be maintained. Unsupported or incomplete installations are rejected rather than guessed, migrated or silently repaired. Use the maintenance tool belonging to such an installation to remove it before a fresh install.
+
+## Desktop app roles
+
+| Arguments | Role |
+|---|---|
+| None | Ordinary-user single-instance tray, BLE and session monitoring; elevated execution is rejected. |
+| `--saved-password` | Temporary elevated password-management window. |
+| `--setup` | Ordinary-user setup request handled by the existing single-instance tray. |
+| `--saved-password --setup` | Internal elevated password step; an explicit readiness result permits the ordinary tray to continue to pairing. |
+| `--bluetooth` plus internal arguments | Temporary elevated pairing/removal role, launched by the tray. Not a public manual command. |
+| `--key-hex <public-key> [--replace]`, `--key-clipboard [--replace]`, `--clear` | Elevated manual public-key enrollment using the calling console. |
+
+Closing an operation window does not exit the tray. Role parsing is defined in [DesktopApp.h](DesktopApp/DesktopApp.h); role arguments do not grant permission.
+
+For manual enrollment, use an elevated PowerShell console on the unlocked target desktop, place the phone's 65-byte uncompressed P-256 public key as 130 hexadecimal digits on the clipboard, then run:
+
+```powershell
+$app = (Resolve-Path '.\windows\build\UnlockWithIPhone.exe').Path
+$process = Start-Process -FilePath $app -ArgumentList '--key-clipboard' -NoNewWindow -Wait -PassThru
+$process.ExitCode
+```
+
+Manual enrollment still requires fingerprint confirmation; replacement requires `--replace`, and clear requires explicit removal confirmation. It does not start BLE or provide an authentication bypass.
+
+## Module index
+
+| Directory | Responsibility |
+|---|---|
+| `DesktopApp` | Main EXE entry point and role dispatch. |
+| [GattHost](GattHost/README.md) | Ordinary-user tray, lock-aware advertising, BLE and pairing transport. |
+| `Enrollment` | Elevated enrollment, fingerprint confirmation and atomic registration writes. |
+| [SavedCredential](SavedCredential/README.md) | Service authority, restricted IPC, encrypted password storage and management UI. |
+| [CredentialProvider](CredentialProvider/README.md) | LogonUI tile, system identity capture and native credential submission. |
+| `PhoneApproval` | Challenge/signature verification and protected registration storage, consumed by the service and enrollment code. |
+| `Protocol` | Canonical signing payload and shared CNG hashing, fingerprints and verification; see [Protocol.md](../Protocol.md). |
+| [ComponentsWizard](ComponentsWizard/README.md) | Install/update/removal decisions, deployment, reboot continuation and finalization. |
+| `Resources` | Shared Win32 appearance, manifests and embedded icon/version resources. |
+| `*Tests` | C++ regression tests registered with CTest. |
+| `Diagnostics` | Read-only component and installation-state inspection. |
+
+## Troubleshooting
+
+Use tray **Status… → Technical details**, iOS Settings diagnostics and the [testing guide](../docs/Testing.md#diagnostics). From the repository root, the read-only component inspector is:
+
+```powershell
 & '.\windows\Diagnostics\Get-ComponentsStatus.ps1'
 ```
 
-`make test` 会触发构建。清理实现默认仅静态检查。
+It does not start services/tasks, repair installations or mount offline user hives. Do not run a second build-tree tray alongside the installed app. An approval status on the phone does not confirm that Windows accepted the password.
 
-## 安装、更新与卸载
+## Compatibility references
 
-```powershell
-& '.\windows\build\UnlockWithIPhone_0.1.0_setup.exe'
-```
-
-安装包构建名称统一为 `UnlockWithIPhone_<版本号>_setup.exe`，Debug／Release 及支持的架构共用规则。版本从 [ProductVersion.h](ProductVersion.h) 自动读取，当前产物为 `UnlockWithIPhone_0.1.0_setup.exe`；修改版本后重新构建即自动使用新名称，无需另改文件名。示例命令中的版本应使用实际产物版本。
-
-四个正式组件名称由 [ComponentFiles.h](ComponentFiles.h) 定义，暂存和安装后的维护程序仍为 `setup.exe`；CP 与凭据服务在 System32，主应用及 setup.exe 在 Program Files 的 `Unlock Windows with iPhone` 目录。2026-10-05 用户态产物已在源码收敛，保留现有 Win32 界面，未构建或运行验收。
-
-安装器自行请求 UAC，目标仍为实际物理控制台用户。Windows 设置“已安装的应用”（Windows 10“应用和功能”）显示单个带产品版本的 **Unlock with iPhone®** 条目；密码管理从托盘打开，不创建开始菜单项。较高版本 Update，同版本明确 Reinstall，较低版本拒绝。当前 schema 为 5，无版本／旧六组件布局／旧 schema 安装先用原工具卸载，不增加旧版迁移路径。
-
-设置卸载入口以 `--uninstall` 请求 UAC 并直达确认页，默认 Cancel。准备期间指向本事务暂存 setup，收尾期间使用系统 PowerShell 的受限续办命令。事务先于目录登记；部署验证和退出收尾分开，成功后释放暂存、恢复正式入口或移除卸载条目。结果页不继续占用暂存 EXE；无人登录时卸载保留待交接状态，登录交接后才清除最后记录。2026-10-04 仅源码与静态检查，未构建或运行安装器回归，详见 [Windows Setup](ComponentsWizard/README.md)。
-
-- 未安装：Install / Cancel；已安装：Update / Uninstall / Cancel。
-- 确认页：Back、明确操作按钮和 Cancel。执行页展示实际滚动日志，禁止取消和关闭。
-- Restart now / Later：Later 保留事务；再次打开只处理当前事务。
-- SYSTEM 开机任务完成受保护事务；目标用户普通权限结果页显示真实结果，Finish 清除一次性提示任务。
-
-只支持当前完整安装。旧两组件安装、旧版本记录、缺失目标 SID 或不完整安装明确拒绝维护，不自动迁移、修复、重绑用户或清密码。仅当前 schema 的待重启事务沿用续办，不要求维护期间已停用的组件正在运行。历史残留须另行处理，新安装器不清理旧 GATT 登录任务。
-
-Update 保留密码、公钥及目标用户；先移除 Run，固定所有已安装主程序实例句柄，核实托盘身份后请求正常退出并等待操作实例结束，超时暂停，不强杀。真正重启后统一替换和验证文件，再恢复组件；失败保留事务及日志，不自动回滚或假报成功。
-
-正常卸载先取得服务密码清除确认，再移除 Run、程序、CP、服务、公钥登记及安装用户 ComputerId；最后核验暂存、任务、产品记录和应用条目已清除。iPhone 数据须在手机端删除。文件删除不代表 SSD、备份或快照历史数据被物理擦除。旧二进制仍按旧约定保留登记，切换到新布局时须独立核验旧卸载后的残留。
-
-## 登录自启与解锁
-
-2026-10-04 二次锁屏回归：用户更新重启后首轮成功、第二轮失败。已定位停止调用返回后旧 Started 属性被当作仍在发布，导致遗漏下一次 StartAdvertising；应用层判断已修正，回归源码已补，尚未构建／执行。当前只需更新 Windows 修正版，已匹配的 iOS 与登记不变；详细证据见 [验收记录](Validation.md#待验收)。
-
-密码服务为自动 LocalSystem 服务。托盘通过目标用户 Run 项 `Unlock Windows with iPhone` 在正常登录后以普通权限启动，可由任务管理器管理；不使用 SYSTEM 蓝牙或另一套 GATT 登录任务，不写提权管理员 HKCU，不覆盖用户自启禁用选择。
-
-托盘仅在当前控制台明确锁屏或主动配对窗口广播。锁屏时按 Enter／Unlock 发起；选中磁贴或刚锁屏不发请求。服务权威请求期限 30 秒，等待唯一有效连接、双通知订阅及绑定本次请求的手机就绪回执后才投递 challenge；iPhone 按现有规则读取新鲜 RSSI 并签名。批准领取期独立为 120 秒，首次合格领取先消费再解密，失败不恢复授权。
-
-成功批准之间没有固定冷却期；快速再次锁屏仍须新的 challenge 与有效签名，旧批准不能再次使用。移除原 5 秒限制后的执行状态见 [Windows 验收记录](Validation.md)。
-
-2026-10-03 锁屏恢复修复已写入源码：广播启停串行推进、五秒操作期限及最多三次退避重试，phone-only IPC 新增不消费 challenge 的状态查询。iOS 确认服务缺失后释放连接并等待服务广播，两端新增 `transport_ready_required`／`0x04` 就绪握手。回归用例已补，未构建、执行或实机验收；需匹配版本一起更新，已有有效 ComputerId／公钥无需重新登记。验收至少 20 轮锁屏／解锁、后台 15 分钟及隔夜、睡眠／蓝牙恢复，全程无手动刷新，详见 [GATT host](GattHost/README.md)。广播中止底层原因仍未确认，该锁屏恢复任务未修改安装器。
-
-密码管理只修改本机加密副本，不修改在线 MSA 密码。移除手机登记不删除密码、ComputerId 或系统蓝牙配对。详细步骤见对应组件文档。
-
-## Windows UI 验收（2026-10-03）
-
-Win32 主题控件、紧凑按钮、英文用户文案及桌面 PerMonitorV2；桌面 DPI 设置不注入 CP／服务。图像唯一来源为 iOS AppIcon 标准 appearance，派生 ICO／CP 位图嵌入程序，部署不依赖外置图片。
-
-已确认基线与全部待验收项统一见 [验收记录](Validation.md)。本次清理仅静态检查，未自动构建、测试、安装或提交。
-
-## 参考资料
-
-- [RegCreateKeyExW](https://learn.microsoft.com/en-us/windows/win32/api/winreg/nf-winreg-regcreatekeyexw)
-- [ChangeServiceConfigW](https://learn.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-changeserviceconfigw)
-- [Windows uninstall registry values](https://learn.microsoft.com/en-us/windows/win32/msi/uninstall-registry-key)
+- [GattServiceProvider requirements](https://learn.microsoft.com/en-us/uwp/api/windows.devices.bluetooth.genericattributeprofile.gattserviceprovider)
+- [PerMonitorV2 and Windows 10 1703](https://blogs.windows.com/windowsdeveloper/2017/04/04/high-dpi-scaling-improvements-desktop-applications-windows-10-creators-update/)
+- [GetDpiForWindow requirements](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getdpiforwindow)
+- [Advertisement enum version history](https://learn.microsoft.com/en-us/uwp/api/windows.devices.bluetooth.genericattributeprofile.gattserviceprovideradvertisementstatus)

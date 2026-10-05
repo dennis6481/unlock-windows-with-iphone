@@ -1,98 +1,87 @@
 <!-- Created by Rui MA on 03 Oct 2026 -->
 
-# 跨端协议与整体架构
+# Protocol and architecture
 
-本文是 iPhone 与 Windows 当前协议的共同说明；签名协议版本为 v1。平台实现分别位于 [iOS UnlockProtocol](ios/Core/UnlockProtocol.swift) 和 [Windows Protocol](windows/Protocol/README.md)。JSON 是传输外壳，不是实际签名输入。
+This document defines the current iPhone–Windows protocol, signing version **v1**, and the overall trust boundaries. Implementations are [iOS UnlockProtocol.swift](ios/Core/UnlockProtocol.swift) and the [Windows Protocol module](windows/Protocol). JSON is the transport envelope, not the signature input.
 
-范围是**已有物理控制台会话的锁屏解锁**。重启／注销后的首次登录使用原生 PIN／密码；登录后托盘以普通用户权限运行，锁屏时才广播，桌面主动配对窗口为例外。本文描述代码职责与合同，不将后台整夜、完整配对或负面路径视为已验收；状态见 [Windows 验收记录](windows/Validation.md) 和 [iOS 验收要求](ios/README.md#acceptance-after-explicit-buildtest-authorization)。
+The scope is an existing locked physical-console session. Initial sign-in after boot or sign-out uses native Windows credentials. This specification describes behavior and contracts; [device testing](docs/Testing.md) is required to establish runtime results.
 
-## 整体架构流程图
+## Architecture
 
 ```mermaid
 flowchart TB
-    subgraph Provisioning["本机登记与密码设置 · 已解锁桌面"]
-        Pair["Pair iPhone · 管理员核对完整指纹"]
-        Registry["登记存储 · 手机公钥及目标 SID"]
-        Manager["密码管理工具 · 确认实际控制台账户"]
-        Vault["凭据保管 · LocalSystem user-scope DPAPI 密文"]
-        Pair --> Registry
-        Manager -->|"仅保存本机密码副本"| Vault
+    subgraph Provisioning["Provisioning on the unlocked desktop"]
+        Pair["Elevated pairing: console account + full fingerprint"]
+        Registration["Protected registration: phone public key + SID"]
+        Manager["Elevated saved-password management"]
+        Vault["Encrypted password: LocalSystem user-scope DPAPI"]
+        Pair --> Registration
+        Manager --> Vault
     end
-
-    subgraph Phone["iPhone · CoreBluetooth Central"]
-        Identity["服务发现 · ComputerId 核对 · 双通知订阅"]
-        Sign["自动响应开启 · 本次新鲜 RSSI · Secure Enclave 签名"]
-        Identity --> Sign
+    subgraph Phone["iPhone: CoreBluetooth central"]
+        Ready["Verify ComputerId + both notification subscriptions"]
+        Sign["Automatic response + fresh RSSI + Secure Enclave signature"]
+        Ready --> Sign
     end
-
-    subgraph Desktop["Windows · 当前控制台普通用户"]
-        Tray["GATT 托盘 · 锁屏／主动配对时广播 · 只转送消息"]
+    subgraph Desktop["Windows: ordinary console user"]
+        Tray["Tray GATT transport: no password or approval authority"]
     end
-
-    subgraph Authority["Windows · LocalSystem 服务 · 认证权威"]
-        Request["核对身份／登记／锁屏会话 · 创建 30 秒请求"]
-        Verify["核对当前 challenge · 已登记公钥验签 · 防重放"]
-        Grant["最长 120 秒内存批准 · 绑定身份／session／锁屏代际"]
-        Claim["合格 LogonUI 领取 · 先不可逆消费 · 后解密"]
-        Request -->|"保存 outstanding challenge"| Verify
-        Verify -->|"有效 assertion"| Grant
-        Grant --> Claim
+    subgraph Authority["Windows: LocalSystem credential service"]
+        Request["Check identity/session; create 30-second request"]
+        Verify["Match current challenge + registration; verify signature"]
+        Grant["One-time grant: identity + session + lock generation; 120 seconds"]
+        Claim["Eligible LogonUI claim: consume first, then decrypt"]
+        Request --> Verify --> Grant --> Claim
     end
-
-    subgraph Logon["Windows · LogonUI 交互会话"]
-        Tile["手机磁贴 · Enter／Unlock 发起"]
-        Refresh["一次 auto-submit offer · CredentialsChanged · 重新枚举"]
-        Pack["CP 内打包 · Protected + ID Provider credentials"]
-        Negotiate["Windows 原生 Negotiate 校验"]
-        Session["校验成功 · 恢复原有 SID／session"]
-        Pack --> Negotiate --> Session
+    subgraph Logon["Windows: LogonUI"]
+        Tile["Phone tile: Enter / Unlock"]
+        Offer["One auto-submit offer; CredentialsChanged"]
+        Pack["CP captures identity and packs credentials"]
+        Native["Native Negotiate checks the password"]
+        Session["Windows restores the existing session"]
+        Pack --> Native --> Session
     end
-
-    Tray <-->|"BLE · 身份发现与订阅"| Identity
-    Tile -->|"受限 IPC · beginPhoneAuthentication"| Request
-    Request -->|"phone-only IPC · peek 状态，手机回执后取 challenge"| Tray
-    Tray -->|"result · transport_ready_required"| Identity
-    Identity -->|"request · 0x04 就绪回执"| Tray
-    Tray -->|"challenge 通知"| Sign
-    Sign -->|"assertion 写入"| Tray
-    Tray -->|"phone-only IPC · 原样转送"| Verify
-    Registry -->|"信任的手机公钥／SID"| Verify
-    Vault -->|"保存身份与当前账户一致"| Request
-    Grant -->|"批准就绪 · 不含密码"| Refresh
-    Refresh -->|"CP 当次身份核对 · claimCredential"| Claim
-    Vault -->|"仅在合格领取后解密"| Claim
-    Claim -->|"明文一次 · 不经过托盘／BLE"| Pack
-    Verify -.->|"认证结果 · 批准不等于已解锁"| Tray
-    Tray -.->|"result 通知"| Sign
+    Tile -->|"Restricted IPC: beginPhoneAuthentication"| Request
+    Request -->|"Phone IPC: peek; take challenge only after readiness"| Tray
+    Tray <-->|"ComputerId + subscriptions + readiness probe/receipt"| Ready
+    Tray -->|"Challenge notification"| Sign
+    Sign -->|"Assertion write"| Tray
+    Tray -->|"Unmodified assertion over restricted IPC"| Verify
+    Registration --> Verify
+    Vault -->|"Saved identity must match"| Request
+    Grant -->|"No password in offer"| Offer
+    Offer -->|"CP verifies current capture and claims"| Claim
+    Vault --> Claim
+    Claim -->|"Password goes only to eligible CP"| Pack
+    Verify -.->|"Approval result, not proof of unlock"| Tray
+    Tray -.->|"Result notification"| Sign
 ```
 
-安装器部署服务、CP、托盘及管理工具，注册目标用户 Run，并负责更新／卸载和重启续办；不参与手机签名或密码认证。部署名称以 [共享组件清单](windows/ComponentFiles.h) 为准，操作见 [安装器文档](windows/ComponentsWizard/README.md)。
+The installer deploys the four components and manages startup, maintenance and removal. It does not verify phone signatures or perform Windows authentication. See the [Windows guide](windows/README.md).
 
-## 身份与信任边界
+## Identity and trust
 
-- Windows 只登记一份手机 P-256 公钥及目标账户 SID。登记在已解锁桌面由用户主动开启，经管理员确认完整指纹；同手机同账户不重写，不同手机必须明确确认替换。取消或失败不静默覆盖原记录。
-- iPhone 私钥保存在 Secure Enclave，采用 `AfterFirstUnlockThisDeviceOnly`。签名证明登记私钥可用，不证明用户此刻解锁了手机；手机重启后首次解锁前密钥可能不可访问。
-- `ComputerId` 是目标定位标识，不是密码学服务器身份；peripheral UUID 只是连接缓存，名称只是展示。名称相同不能替代 ComputerId 核对，ComputerId 也不能替代 Windows 的公钥验签。
-- 保存密码绑定目标 SID、系统原样的 QualifiedUserName 和 ProviderID；CP 每次重新枚举核对 PrimarySid＝SID。相同 SID 但在线身份变化不得领取旧密码。管理工具的提权管理员不是保存目标，目标来自实际物理控制台。
-- 服务是请求、期限与批准的权威。托盘无权提交一个可直接信任的 approved 字符串，不持有密码；phone pipe 不提供凭据领取。
-- IPC 按操作核对实际客户端 token、会话和账户。LogonUI 操作还核对进程映像、SYSTEM 身份及持有的进程句柄；客户端模拟结束并恢复 LocalSystem 后才执行 DPAPI。该边界不声称抵御已控制 SYSTEM 的攻击者。
+- Windows registers one valid P-256 public key and target account SID. Enrollment requires an unlocked console, explicit pairing and elevated full-fingerprint confirmation. Replacement is explicit; cancellation does not silently overwrite registration.
+- The phone private key uses Secure Enclave and `AfterFirstUnlockThisDeviceOnly` keychain accessibility. A signature demonstrates key use, not fresh biometric approval or that the phone is currently unlocked. The key may be unavailable before the first phone unlock after restart.
+- ComputerId is a persistent target locator, not an authenticated cryptographic server identity. Peripheral UUIDs route connections and names are display text. None substitutes for the service's registered-key verification.
+- Saved credentials bind SID, the system-provided QualifiedUserName and ProviderID. CP captures and checks PrimarySid against SID on enumeration. The elevated operator can differ from the target console user.
+- The service owns requests, deadlines and approval. The tray transports messages and has no password-claim operation; an arbitrary `approved` string cannot authorize credentials.
+- Restricted IPC checks the real client token, process, account and session. LogonUI operations additionally verify the SYSTEM caller and image while retaining its process handle. DPAPI runs after impersonation ends and LocalSystem is restored. This does not defend against an attacker controlling SYSTEM; see [SECURITY.md](SECURITY.md).
 
-## 请求与一次性批准
+## Request and one-time approval
 
-1. 已有锁定会话中，用户按 Enter／Unlock，CP 发起 `beginPhoneAuthentication`。选择磁贴或刚锁屏本身不创建请求。
-2. 服务核对 CP 当前身份、保存身份、登记 SID 和锁屏会话，生成随机 requestID、32 字节密码学随机 nonce 及服务时间戳。整次认证等待期限为 **30 秒**；服务的单调时钟 deadline 决定内部剩余时间。
-3. 托盘通过 `peekPhoneAuthentication = 17` 查询状态，选定唯一同时订阅 challenge／result 的连接，定向发送准备消息。手机完成 ComputerId 核对和双订阅后回执；托盘重新检查连接、当前 requestID、订阅与期限后，才调用 `takePhoneChallenge` 单次领取并投递。查询和准备消息不消费 challenge。
-4. iPhone 核对目标、自动响应偏好及 challenge，读取本次新鲜 RSSI。读数／签名窗口为 **3 秒**，默认阈值为 **−60 dBm**，用户可调；不复用历史读数，签名后的 Windows 结果等待不是 RSSI 超时。RSSI 不承诺固定距离，也不构成防中继的密码学距离证明。
-5. 服务从 outstanding challenge 重建签名字节，核对 requestID、版本、有效期、登记公钥与指纹并验签、防重放；challenge 的 audience／nonce 来自服务当前请求，而不是信任 assertion 自报。
-6. 有效结果建立最长 **120 秒**、绑定完整保存身份、console session 与锁屏代际的内存 grant。服务重启、期限届满或真实解锁／会话变化使旧请求及批准失效。管理界面的五分钟身份快照不是批准，也不决定当次 CP 领取资格。
-7. 服务只向合格 LogonUI 发出一次自动提交 offer；CP 调用 `CredentialsChanged()`，重新枚举后自动提交。首次合格 `claimCredential` **先不可逆消费 grant，再解密并释放密码**。打包失败、Windows 拒绝密码或 CP 重建不会恢复该批准；再次尝试需新手机批准。
-8. CP 在 LogonUI 会话内执行 `CRED_PACK_PROTECTED_CREDENTIALS | CRED_PACK_ID_PROVIDER_CREDENTIALS` 打包，提交原生 Negotiate。服务不在 Session 0 预打包，CP 不直接调用 `LsaLogonUser` 或构造 token；只有 Windows 校验成功才真正解锁。
+1. **Enter / Unlock** on the eligible phone tile calls `beginPhoneAuthentication`. Selecting the tile or locking the desktop alone does not start a request.
+2. The service verifies the current console, saved identity and registered SID, then creates a random requestID, 32-byte cryptographic nonce and timestamp. Its monotonic **30-second** deadline governs the entire request.
+3. The tray peeks at status, selects the unique connection subscribing to both challenge and result, and sends a readiness probe. Only a current connection/request receipt with valid subscriptions allows the tray to take and deliver the challenge once. Peeking does not consume it.
+4. The phone checks target identity, automatic response and challenge data, then obtains fresh RSSI and signs within a **three-second** RSSI/signing window. The adjustable default is **−60 dBm**. Result waiting after sending is separate.
+5. Windows reconstructs the payload from its outstanding challenge, matches the registered key/fingerprint and request/version/expiry, and verifies the signature. It does not trust assertion-supplied nonce or audience.
+6. A valid assertion creates an in-memory grant lasting at most **120 seconds**, bound to saved identity, console session and lock generation. Restarting the service, expiry, actual unlock or relevant session/identity changes invalidate outstanding state.
+7. The service offers automatic submission once to eligible LogonUI. CP re-enumerates and makes a qualified `claimCredential`: the service **irreversibly consumes the grant before decrypting and returning the password**. Packing failure or native password rejection does not restore it.
+8. CP packs credentials inside LogonUI with `CRED_PACK_PROTECTED_CREDENTIALS | CRED_PACK_ID_PROVIDER_CREDENTIALS`, then submits to native Negotiate. Only Windows' successful password verification actually unlocks the session.
 
-30 秒请求、3 秒手机处理、120 秒领取和五分钟管理快照是不同阶段，不能互相替代。原生 PIN／密码入口始终保留。
+There is no fixed cooldown between valid approvals; every new lock/request still requires a new signature. The five-minute password-management identity snapshot is separate from the request and grant lifetimes. First-sign-in provisioning records only LogonUI identity metadata; the service must verify the installed target against the signed-in physical-console token before issuing a management snapshot. Refresh can renew that snapshot within the same verified logon; provisioning never creates phone approval. Native PIN/password providers remain available.
 
-成功批准之间没有固定冷却期。快速再次锁屏仍须创建新请求并获得对应的有效手机签名；旧 assertion 不能用于新请求，同一 challenge 和 grant 仍只能消费一次。
-
-## Challenge JSON 与签名字节
+## Challenge and signing bytes
 
 ```json
 {
@@ -104,7 +93,7 @@ flowchart TB
 }
 ```
 
-`issuedAtMilliseconds` 为服务生成的时间戳。字段顺序、JSON 标点及 Base64 文本不参与签名；两端使用以下固定二进制载荷：
+The signature input is the following fixed binary sequence, independent of JSON ordering, spacing and escaping:
 
 ```text
 ASCII("unlock-windows-with-iphone/v1") || 0x00 ||
@@ -112,13 +101,12 @@ UInt32BE(version) ||
 requestID[16 bytes, RFC 4122 order] ||
 nonce[32 bytes] ||
 Int64BE(issuedAtMilliseconds) ||
-UInt16BE(audienceUTF8ByteLength) ||
-audienceUTF8
+UInt16BE(audienceUTF8ByteLength) || audienceUTF8
 ```
 
-`BE` 表示大端字节序。iOS CryptoKit 对载荷进行 SHA-256／ECDSA P-256 签名；Windows CNG 对相同载荷计算 SHA-256 后验证。上下文前缀用于区分协议用途，固定编码避免不同 JSON 库的字段顺序及转义差异。
+`BE` means big-endian. CryptoKit signs with ECDSA P-256/SHA-256; Windows CNG hashes and verifies the same payload. The context prefix separates this use from other signature protocols.
 
-## Assertion JSON
+## Assertion
 
 ```json
 {
@@ -130,63 +118,56 @@ audienceUTF8
 }
 ```
 
-公钥原始格式为 `0x04 || X[32] || Y[32]`；签名为定长 raw `r[32] || s[32]`，不是 DER。iOS 输出小写指纹，Windows 校验十六进制并规范化大小写比较。必须同时匹配本地已登记公钥，不能因为 assertion 附带公钥与签名自洽就信任它。
+The public key is `0x04 || X[32] || Y[32]`. The signature is fixed-size raw `r[32] || s[32]`, not DER. Windows validates hexadecimal fingerprints and normalizes case for comparison. A self-consistent key/signature pair is insufficient: the key must match local registration.
 
-## 当前 BLE 合同
+## BLE messages
 
-Windows 为 GATT Server，iPhone 为 CoreBluetooth Central。服务 UUID：`F1E2D3C4-B5A6-4789-8012-3456789ABCDE`。
+Windows is the GATT server and the iPhone is the central. Service UUID: `F1E2D3C4-B5A6-4789-8012-3456789ABCDE`.
 
-| 特征 | UUID 末段 | 方向／属性 | 当前用途 |
+| Characteristic | UUID suffix | Direction / properties | Purpose |
 |---|---|---|---|
-| request | `3456789ABCD1` | iPhone → Windows，Write With Response | 登记帧／就绪回执／当前请求的失败报告；不创建认证请求 |
-| challenge | `3456789ABCD2` | Windows → iPhone，Notify／Read | 完整 challenge JSON |
-| assertion | `3456789ABCD3` | iPhone → Windows，Write With Response | 完整 assertion JSON |
-| result | `3456789ABCD4` | Windows → iPhone，Notify／Read | 关联本次认证或登记的结果 |
-| ComputerId | `3456789ABCD5` | Windows → iPhone，Read | 36 字符 UTF-8 非零 UUID；核对持久目标 |
+| request | `3456789ABCD1` | Phone → Windows; Write With Response | Enrollment, readiness receipt or failure report; cannot create authentication requests. |
+| challenge | `3456789ABCD2` | Windows → phone; Notify / Read | Complete challenge JSON. |
+| assertion | `3456789ABCD3` | Phone → Windows; Write With Response | Complete assertion JSON. |
+| result | `3456789ABCD4` | Windows → phone; Notify / Read | Request-related authentication or enrollment result. |
+| ComputerId | `3456789ABCD5` | Windows → phone; Read | Exactly 36 UTF-8 characters representing a nonzero UUID. |
 
-各特征的完整 UUID 均使用前缀 `F1E2D3C4-B5A6-4789-8012-` 加表中末段。
+Full characteristic UUIDs use prefix `F1E2D3C4-B5A6-4789-8012-` plus the suffix above. Frames are:
 
-- 登记帧：`0x02 || publicKey[65 bytes]`，共 66 字节；仅主动配对窗口接收。
-- 就绪回执：`0x04 || requestID[36 lowercase ASCII bytes]`，固定 37 字节；只接受已发送准备消息的选定连接和当前未过期请求。
-- 手机失败帧：`0x03 || requestID[36 ASCII bytes] || reason[1 byte]`，共 38 字节；必须来自本次认证连接并关联当前 requestID。
-- 手机可报告的原因：`1` 距离读数不足、`2` 自动响应关闭、`3` 新读数不可用、`4` 连接／订阅失效、`6` 签名失败。`5` 为 Windows 投递失败的内部报告，不是当前手机 request 帧接受的原因。
-- 旧 `0x01` 手机请求 challenge 不再支持。认证从 CP 发起，经本地 phone-only IPC 转送，不新增另一套认证入口。
-- ComputerId 持久化在目标用户的 `HKCU\Software\UnlockWindowsWithIPhone\GattHost`。Windows 停止发布不主动断开物理连接，但远端服务可能消失；iPhone 在原连接限时重新发现，确认缺失后串行断开并等待指定服务的广播，再重新核对 ComputerId 和双订阅。已有有效 ComputerId 和公钥无需重新登记。
+- Enrollment: `0x02 || publicKey[65]`, exactly 66 bytes; accepted only during explicit pairing.
+- Readiness: `0x04 || requestID[36 lowercase ASCII bytes]`, exactly 37 bytes; current selected connection and unexpired request only.
+- Phone failure: `0x03 || requestID[36 ASCII bytes] || reason[1]`, exactly 38 bytes; bound to the current authentication connection/request.
 
-### 手机就绪确认
+Accepted phone failure reasons are `1` insufficient RSSI, `2` automatic response off, `3` fresh RSSI unavailable, `4` connection/subscription lost, and `6` signing failed. Reason `5` is an internal Windows delivery failure, not an accepted phone frame. Opcode `0x01` does not initiate authentication. Pairing excludes authentication request/assertion handling.
 
-准备消息经 result characteristic 定向发送，每秒最多一次：
+ComputerId persists in the target user's `HKCU\Software\UnlockWindowsWithIPhone\GattHost`. An invalid existing value is an error, not silently replaced. Service discovery and transport recovery do not change the signing contract or registration. Messages must be complete; truncation/parsing failures are rejected. No application-level fragmentation support is promised.
+
+## Readiness and transport lifecycle
+
+The selected result subscriber receives a probe at most once a second:
 
 ```json
 {"authenticated":false,"status":"transport_ready_required","requestID":"<current UUID>"}
 ```
 
-iPhone 初始化期间最多暂存一条准备请求，完成身份核对与双订阅后才写入 `0x04` 回执。准备消息不批准解锁、不签名、不进入登记或解锁成功逻辑；提前到达的 challenge 被拒绝并记录。断连、服务失效、停止发布、用户切换、睡眠、配对及请求结束清除准备状态；旧回执不能使新请求就绪。重复回执不会重复领取或批准。
+The phone can cache one probe during initialization, then send `0x04` only after ComputerId verification and both native subscriptions. A challenge requires its matching acknowledgment in the current generation; unsolicited/early challenges are ignored and logged. Repeated probes or receipts do not extend deadlines or create another approval.
 
-phone-only IPC 的 `peekPhoneAuthentication = 17` 接收空 payload，返回现有 `AuthenticationStatus`，不包含 challenge，也不修改投递标记；仍须通过当前控制台、SID、会话及锁屏检查，其他 IPC 端点拒绝。`takePhoneChallenge` 格式保持不变。准备、恢复与回执共用服务原始 30 秒期限，不延长请求、不自动签发新请求。两端须使用匹配版本，无旧协议兼容分支。
+Phone-only IPC `peekPhoneAuthentication = 17` has an empty payload and returns status without a challenge or delivery-state mutation. `takePhoneChallenge` consumes delivery once after readiness. Other IPC endpoints reject the peek operation. All preparation uses the original service deadline.
 
-Windows 广播分别记录目标、原始 WinRT 状态和调用结果；启动观察期限五秒，启动失败或中止最多按 1／2／4 秒重试三次。StopAdvertising 成功返回后不因旧 Started 属性重复停止或跳过下次锁屏发布；原始属性继续诊断，不伪造 Stopped 事件。解锁、睡眠和退出取消待重试；新的锁屏周期重建预算。iOS 初始化仍为十秒与一次主动重试，确认服务缺失后不立即连接缓存设备、不循环重启扫描；新的有效广播发现、前台恢复或明确重试可开启新周期。
+The tray advertises only for an explicitly locked physical console or active desktop pairing. Stopping advertising does not proactively disconnect BLE, but remote service/subscriptions can become unusable. Actual Windows unlock controls stopping; receiving phone approval alone does not.
 
-2026-10-04 iOS 恢复路径进一步分离：系统待连接按 peripheral 管理，不设 App 连接等待超时；新广告候选不排在旧待连接之后，只有实际连上的候选进入单个 GATT 初始化流程。十秒从选定已连接候选开始，恢复运行和相关回调均检查单调期限，挂起期间延迟的定时任务不能放行过期身份／订阅。一次主动重试按连接归属，缓存失败不因扫描重启而重置；同设备取消完成前不重连，旧候选结束不清除另一条连接的认证。此修正不改变 UUID、帧格式、就绪回执、服务权威 30 秒期限或 3 秒新 RSSI／签名期限，无须重新登记。源码及用例完成，未构建、执行测试或实机验收；原生待连接停滞的具体原因仍待确认。
+Windows keeps publication target, raw WinRT status and API call results separate. Startup observation is bounded to five seconds, with at most three retries at 1/2/4 seconds after failure/abort. Successful StopAdvertising is recorded independently of a stale Started property, so the next lock can start again. Unlock, sleep and exit cancel retries; a new lock starts a new budget. An API call result is not radio-level verification.
 
-2026-10-03：上述修复已写入源码并补充回归用例，尚未构建、执行测试或完成双端实机验收。用户日志已观察到解锁成功后服务失效并长期等待；广播中止的底层原因和此前后台恢复失败的完整事件顺序仍未确认。
+iOS native connection waiting is distinct from connected GATT initialization. Initialization has a ten-second monotonic limit and one active retry per route; expired callbacks cannot make it Ready. Confirmed service absence releases the connection and waits for new advertising. See [iOS recovery](ios/README.md#connection-and-recovery) for routing/cancellation responsibilities.
 
-协议层只处理完整逻辑消息；截断或解析失败必须拒绝。底层 MTU、发现及状态恢复不改变上述签名字节，也不能被宣称为已经完成的应用分片支持。
-
-## 结果与拒绝语义
-
-认证结果示例：
+## Results and rejection
 
 ```json
-{
-  "authenticated": true,
-  "status": "unlock_approved",
-  "requestID": "<current UUID>"
-}
+{"authenticated":true,"status":"unlock_approved","requestID":"<current UUID>"}
 ```
 
-`unlock_approved` 只表示服务建立了批准，不表示 Windows 已解锁。登记结果使用 `authenticated: false` 及 `enrollment_*` 状态；不能把它当作认证失败或解锁成功。保存后服务重载失败可另带 `detail: "saved_reload_failed"`，不得显示完整登记成功。
+`unlock_approved` means service approval, **not confirmed Windows unlock**. Enrollment uses `authenticated: false` and `enrollment_*` status codes; a `detail: "saved_reload_failed"` result must not appear as complete enrollment success.
 
-必须拒绝过期／重放、requestID 不匹配、无登记／错误公钥、无效签名／消息、错误账户／会话、首次登录、未锁屏及不合格调用方。距离不足、无读数、断连、等待超时、服务不可用与真实会话变化各自报告，不用同一句 session changed 掩盖全部失败。拒绝不能切换身份、恢复已消费授权或退回软件私钥。
+Expired/replayed/mismatched requests, wrong keys/signatures, malformed messages, wrong account/session, initial sign-in, unlocked consoles and ineligible callers must be rejected. Signal, connection, timeout, service and genuine identity-change failures remain distinguishable. Failure cannot switch identities, revive consumed grants or fall back to software private keys.
 
-诊断记录阶段、耗时、订阅状态和允许的结果码，不记录密码、nonce、密钥或签名正文。详细接口及各自操作约束见 [GATT host](windows/GattHost/README.md)、[保存凭据服务](windows/SavedCredential/README.md)、[Credential Provider](windows/CredentialProvider/README.md) 和 [iOS 状态机](ios/README.md)。
+Diagnostics may record phases, errors, timing, generation and request IDs, but not passwords, private keys, nonce bytes or signature bodies. The [service](windows/SavedCredential/README.md), [GATT](windows/GattHost/README.md) and [CP](windows/CredentialProvider/README.md) guides explain local implementation boundaries.

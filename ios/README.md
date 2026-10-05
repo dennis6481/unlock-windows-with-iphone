@@ -1,116 +1,76 @@
 <!-- Created by Rui MA on 03 Oct 2026 -->
 
-# iOS Bluetooth unlock
+# iOS developer guide
 
-## Current status
+The iPhone app uses SwiftUI, CoreBluetooth and CryptoKit/Secure Enclave to respond to Windows requests. It never stores the Windows password. There is currently no App Store or TestFlight distribution: developers install it with their own Xcode signing configuration.
 
-2026-10-04: overnight logs show background restoration/discovery before foreground entry, followed by a pending connection whose ten-second task ran about sixty-one seconds later, then another retry of the old candidate. The current iOS revision separates system-owned pending connections from the single connected GATT initialization session. Fresh advertised routes can connect while an older restored route is still waiting; waiting itself has no application timeout. The underlying reason the original native connection stalled is still unconfirmed. Code and policy regression cases are updated; no build, test execution or device acceptance has been performed. No Windows executable, registration, BLE UUID/frame, signing, RSSI threshold or authentication lifetime is changed by this revision; no system bonding, location background mode or Live Activity is added.
+## Build and install on a device
 
-2026-10-03: user logs show successful approval followed by GATT invalidation and prolonged connected service-wait; Windows also logged advertising aborts. The exact background event order and underlying abort cause remain unconfirmed. This revision releases connections with a confirmed missing service and waits for a fresh service advertisement, and adds a request-bound readiness handshake before Windows consumes its challenge. Code and regression cases are written; only static inspection has been performed, with no build, test execution, installation or device acceptance. Windows and iOS must be updated together; existing valid ComputerId and public-key registrations are preserved.
+- Use **Xcode 27** as the current project baseline, on an Apple silicon Mac with a macOS version supported by that Xcode release. The checked-in project records tools/upgrade version 27 and object version 90; opening/building it in older Xcode versions has not been verified. The source uses iOS 18 APIs, and the app deployment target remains **iOS 18.0**.
+- Use a physical iPhone running iOS 18 or later. Secure Enclave availability is checked at runtime; there is no software-key fallback for the simulator.
+- The separate Swift Package policy tests require **Swift 6.0 or newer**. The app target currently uses Swift 5 language mode; the package tools version is a distinct requirement.
 
-Windows remains the authentication authority. The flow is an existing locked console session → Enter on the phone tile → a fresh RSSI/signature response → Windows approval → CP automatic submission. The iPhone does not store the Windows password. `unlock_approved` means approval, not confirmed desktop unlock.
+1. Open [ios.xcodeproj](ios.xcodeproj) in Xcode and select the `ios` app scheme.
+2. In **Signing & Capabilities**, choose your own development team for Debug and Release and enable automatic signing. Replace the checked-in bundle identifier (`com.ruima.unlock-windows`) with a unique identifier your team can sign. The checked-in team is not a distribution entitlement for other developers.
+3. Connect and trust the iPhone, enable Developer Mode if requested, select it as the run destination, and build/run the app. Follow the device's development-app trust prompts where applicable. Signing validity and renewal depend on your Apple account/provisioning.
+4. Grant Bluetooth permission. The app's Info.plist declares the Bluetooth usage description and `bluetooth-central` background mode.
+5. Install Windows from the same repository revision and register the computer as described below.
+
+The Home Screen name comes from `INFOPLIST_KEY_CFBundleDisplayName`; Info.plist references that setting. The in-app title is separate. No signing certificate, provisioning profile or private signing key is distributed in this repository.
+
+## Register and use
+
+1. On the unlocked Windows desktop select **Pair iPhone…** in the tray and approve UAC.
+2. In the app select **登记电脑** (Register computer), or Settings → re-register, then start registration. Confirm the full fingerprint and target account on Windows.
+3. Complete registration only after a successful Windows enrollment result and a valid ComputerId. Cancelling, rejection or service reload failure preserves the previous valid phone target.
+4. Keep automatic response enabled in Settings. Lock Windows and press Enter / Unlock on the phone tile. The phone requires a new signal reading for each challenge before signing.
+
+The app stores one registered computer record: its ComputerId, display name and last peripheral UUID. The name is display text; the peripheral UUID is a routing cache. A changed peripheral UUID alone does not require registration again. If Windows loses its ComputerId, register explicitly again.
+
+The automatic-response preference remains off when saved as off. Bluetooth interruptions, disconnection and registration errors do not silently change it. Settings also expose the signal threshold, registration metadata, diagnostics and Retry. The iOS UI currently includes Chinese text.
+
+## Code responsibilities
+
+| Source | Responsibility |
+|---|---|
+| `MyApp.swift`, `ContentView.swift` | Lifecycle forwarding and SwiftUI presentation. |
+| `Core/UnlockSetupModel.swift` | App model and user actions. |
+| `Core/BluetoothAuthenticator.swift` | Native CoreBluetooth operations and structured published state. |
+| `Core/BluetoothConnectionRecovery.swift` | Per-peripheral pending/connected routes, cancellation and retry policy. |
+| `Core/BluetoothAuthenticationState.swift` | Selected-connection initialization, readiness and per-request RSSI state. |
+| `Core/UnlockProtocol.swift` | Protocol decoding and canonical signing payload. |
+| `Core/SecureEnclaveKeyStore.swift` | Secure Enclave key creation, keychain persistence and signing. |
+| `Tests/`, `Package.swift` | Pure policy regression tests, independent of native BLE and Secure Enclave. |
+
+Wire formats and identity rules live in [Protocol.md](../Protocol.md); security assumptions live in [SECURITY.md](../SECURITY.md).
 
 ## Connection and recovery
 
-- `BluetoothConnectionRecovery` manages per-peripheral native waiting, connected candidates, serialized cancellation and one retry per attempt cycle. `BluetoothAuthenticationState` manages the selected connection's initialization, readiness and RSSI qualification. Both production policies are exercised by pure Swift test sources. `BluetoothAuthenticator` owns CoreBluetooth operations and publishes one structured snapshot; the model does not overwrite connection status with enrollment/authentication strings.
-- Only a verified computer identity and both challenge/result subscriptions establish Ready. Merely connecting does not reset the retry budget or authorize signing.
-- Service invalidation discards old characteristics and the pending authentication, then rediscovers on the same connection. Discovery operations are serialized; repeated invalidations request a coalesced follow-up pass without extending the existing deadline.
-- Waiting for any native connection has no application deadline or periodic reconnect timer. Service-filtered scanning continues alongside up to sixteen tracked native routes, including system-restored pending requests. A fresh candidate can connect without waiting for an older route to fail or be cancelled. Only an actually connected candidate takes the single GATT initialization slot; already-connected alternatives take precedence over retrying a failed route. Each route retains its own one-retry budget. The cached peripheral UUID only routes a request, never authorizes signing. Readiness releases other routes, while preserving the usable connection.
-- The fixed ten-second initialization deadline starts when a connected candidate is selected for GATT discovery. Discovery, identity, subscriptions and repeated service invalidations do not extend it. Foreground entry and relevant Bluetooth callbacks check the monotonic deadline directly, as well as the timer task: a task delayed by suspension cannot make expired initialization become Ready. Timeout tasks also check their captured generation. Exhaustion releases the failed connection and leaves scanning plus a phase error; starting a scan alone cannot rearm the failed cached route.
-- Empty filtered discovery after service invalidation confirms the unlock service is unavailable on this connection. Clear characteristics, authentication and preparation state, then release the connection through serialized cancellation. Start a fresh service-filtered scan and show waiting for the computer advertisement; do not immediately reconnect the cached peripheral. Healthy usable connections remain connected.
-- Service changes on a usable connection start one bounded recovery cycle. An outstanding discovery callback must drain before a coalesced follow-up pass; repeated changes cannot extend the active ten-second deadline. Failed initialization releases its connection. Late RSSI, notification and write callbacks are rejected by peripheral, characteristic and generation checks; discovery draining must still be validated against native callback delivery.
-- After confirmed service absence, the advertisement requirement survives connection release and failures until successful identity/subscription initialization or explicit Retry. Cancel the obsolete routes and wait for a fresh service-filtered advertisement; do not immediately reconnect the cached device. Deduplication follows live route state, so the same UUID may start a new cycle after a terminal event and a new discovery, without a scan restart. Identity-rejected routes are excluded for the current scan round. Repeated missing-service results do not restart scanning. Advertisements received during cancellation are retained until the old native terminal callback drains; the same device is not connected again before that callback.
-- Foreground re-entry reconciles missing scans, connections and discovery operations. Failed initialization or advertisement waiting can start a new recovery/scan round on this explicit lifecycle event; ordinary waiting does not continuously restart operations. Explicit Retry remains available. Automatic off and Bluetooth unavailability stop operations without changing the saved preference.
-- A service change does not clear an outstanding RSSI read. Its callback is drained and rejected when generation/request differ. A missing callback has its own three-second deadline and may trigger bounded connection recovery.
-- Authentication uses a new RSSI read per challenge, with a three-second RSSI/signing deadline and an adjustable default −60 dBm threshold. Recent displayed readings are never reused. Result waiting after sending a signature is not an RSSI timeout.
-- Writes retain their characteristic, connection generation and request/enrollment association until acknowledgment. Old callbacks cannot overwrite a later operation. Queues and diagnostics are bounded.
+Service-filtered scanning can track up to sixteen native routes, including restored pending connections. A system-owned pending connection has no application timeout. A fresh advertised candidate may connect while an older route remains pending; only an actually connected candidate takes the single GATT initialization slot.
 
-## Request readiness
+Initialization requires ComputerId verification and both challenge/result notification subscriptions. Its monotonic ten-second deadline starts when the connected candidate is selected, not while CoreBluetooth is merely waiting to connect. Foreground entry and relevant callbacks check the deadline directly, so a timer delayed by suspension cannot authorize expired readiness. Each route has one active retry; restarting a scan alone does not replenish an exhausted cached route.
 
-Windows sends `{"authenticated":false,"status":"transport_ready_required","requestID":"<UUID>"}` to the selected result subscriber, at most once a second. Initialization can cache one probe. Only after ComputerId verification and both native notification subscriptions does iOS write `0x04` plus the 36-byte lowercase ASCII requestID to the request characteristic. Pending writes are coalesced; repeated probes do not extend the cached deadline. A preparation message does not sign, approve or complete enrollment. A challenge requires a matching acknowledgment in the current generation; unsolicited or early challenges are logged and ignored.
+Service changes invalidate characteristics and pending authentication, then trigger serialized rediscovery. A confirmed missing service releases that connection and waits for fresh service advertising instead of immediately reconnecting the cache. Healthy usable connections are retained. Cancellation drains the old native terminal callback before reconnecting the same peripheral; late callbacks are checked against connection and generation.
 
-Windows retains the authoritative original thirty-second deadline. Readiness, rediscovery and reconnects do not extend it or create a request. Service invalidation, cancellation, enrollment and request completion clear preparation state. The existing three-second fresh RSSI/signing window and assertion format remain unchanged. No legacy protocol path is added.
+Foreground entry reconciles missing operations. Explicit Retry can start a new recovery cycle. Automatic response off and Bluetooth unavailable stop operations without changing the saved preference. Background restoration depends on native OS scheduling and is not guaranteed after force-quitting the app.
 
-## Stable target and registration
+Each challenge requires a fresh RSSI read and signature within three seconds; old displayed readings are not reused. Waiting for the Windows result after sending a signature is a separate phase. The adjustable threshold defaults to −60 dBm and does not promise a fixed distance. Readiness and reconnects do not extend Windows' authentication deadline.
 
-Windows already provides the following contract (introduced in `cd11511`):
+## Diagnostics and tests
 
-| Item | Value |
-|---|---|
-| Service | `F1E2D3C4-B5A6-4789-8012-3456789ABCDE` |
-| ComputerId read characteristic | `F1E2D3C4-B5A6-4789-8012-3456789ABCD5` |
-| Value | Exactly 36 UTF-8 UUID characters; nonzero UUID |
-| Windows persistence | Target user's `HKCU\\Software\\UnlockWindowsWithIPhone\\GattHost\\ComputerId` |
+Settings diagnostics retain up to 64 recent entries with UTC/monotonic time, connection generation, route attempt, peripheral/native state, requestID, RSSI and raw errors. Passwords, private keys, nonces and signature bodies are not diagnostic output. Redact personal machine/device identifiers before sharing logs publicly.
 
-The iPhone scans by service, connects to candidates, and reads ComputerId before signing. One registered ComputerId is stored; peripheral UUID is only a routing cache/preference and the name is only display text. A changed peripheral UUID does not require registration again. A same-name but different ComputerId is not accepted. ComputerId is not a cryptographic server identity and does not replace Windows signature verification.
-
-Registration preserves the existing Secure Enclave key. Only `enrollment_saved` or `enrollment_already_registered`, with a valid ComputerId and no service reload failure, offers a replacement target. Cancellation, rejection, errors and `saved_reload_failed` preserve the previous valid target. Unknown result codes never match an enrollment outcome, including when their detail is `saved_reload_failed`. If Windows has lost its persistent ComputerId, explicit registration is required; no name-based fallback is used.
-
-The sole iPhone target record is `registeredWindowsComputer` in UserDefaults: ComputerId, display name and last peripheral UUID. The undeployed version has no historical target-record migration or old-record compatibility path.
-
-## UI and automatic-response preference
-
-- The Home Screen app name is managed by the target's Display Name setting (`INFOPLIST_KEY_CFBundleDisplayName`). `App/Info.plist` references that build setting instead of duplicating the name; keep Debug and Release values aligned. The in-app navigation title is separate.
-- Home uses a large computer symbol and the registered computer name, with a separate connection/authentication status card. Actionable errors and failed-connection Retry remain visible; Bluetooth implementation details, RSSI controls and usage notes are in Settings.
-- Home connection and authentication status lines debounce ordinary presentation changes for 300 ms, with text, icon and color updated together. Equivalent preparation phases share the same presentation and do not restart the delay. Initial status, approval, rejection, pause, Bluetooth unavailability and connection errors display immediately; error details and Retry remain live. Diagnostic states and the approval animation are not debounced. “Waiting for unlock service” does not imply that Windows is unlocked.
-- Home maps waiting-for-computer to “正在搜索Windows电脑”; the superseded connected service-wait state is removed. With automatic response off and no active enrollment, waiting instead shows “自动响应已暂停” immediately. This does not assert that Windows is unlocked.
-- iOS recognizes the existing Windows rejection codes `rssi_too_low`, `automatic_disabled`, `rssi_unavailable`, `signing_failed` and `transport_failed`, retaining their raw codes in diagnostics instead of classifying them as `unknown_result`. Their user messages are respectively “请靠近电脑后重试”, “本次无法自动解锁，请检查设置”, “暂时无法判断距离，请重试”, “本次认证未完成，请重试” and “与电脑的连接出现问题，请重试”. Local low-signal rejection uses the same message as its Windows acknowledgment; diagnostics still retain RSSI and threshold. The existing reason behind `automatic_disabled` also covers other eligibility failures, so its message does not assert that the user turned off automatic response. This revision changes only text and result-code display recognition, not approval decisions or transport behavior. Validation is static only; device acceptance remains pending.
-- The gear opens a Settings sheet with its own navigation stack. Automatic response and the unchanged RSSI threshold/range, recent reading and timestamp are here. Register/Re-register is in Settings; an unregistered phone also has a Home registration button.
-- Registration information and the latest 64 diagnostics are a pushed detail page in Settings, not an expandable disclosure. Full connection/authentication states, ComputerId, fingerprint and errors remain available.
-- While Home is visible in the foreground, a new approved request changes `desktopcomputer` directly to `lock.open.desktopcomputer` using the native Magic Replace symbol transition at normal speed. Processing keeps the ordinary computer symbol; no closed-lock computer symbol is shown. The open symbol returns to `desktopcomputer` five seconds after approval. Ordinary connection/authentication updates do not interrupt this approval feedback. A new approved request restarts the five-second timer; sheet presentation or foreground departure cancels the pending reset and restores the ordinary computer symbol. Opening Home or returning from the background does not replay an earlier approval. Reduce Motion disables the animated transition.
-- This is approval feedback, not live Windows lock state: `unlock_approved` precedes credential submission, and the existing backend does not notify iOS of actual desktop unlock. No model, Bluetooth, authentication, registration, lifecycle or Windows logic changed for this UI revision.
-- UI revision validation: static inspection only; no build, compilation, test execution, packaging, installation or device visual acceptance performed. Dark/light appearance, large text, long names, VoiceOver, Reduce Motion, sheet navigation and native symbol motion remain to be visually accepted.
-- Removed constant Connect/Stop buttons and manual key preparation, local signature testing and raw public-key clipboard actions.
-- Registration uses its own sheet: Start registration, Cancel registration while active, Finish afterwards. The Windows fingerprint must still be confirmed locally.
-- Retry connection appears on failure; it does not re-enroll or create Windows approval.
-- Automatic response reads the saved `automaticUnlockEnabled` switch; an absent setting uses the view-state default (on), and a saved `false` stays off. Reading the preference writes neither the setting nor a migration marker. Disconnect, missing target, Bluetooth failure and enrollment failure do not change or disable the toggle. RSSI settings use the same threshold default as the view state.
-- Recent diagnostics retain at most 64 entries with UTC, monotonic uptime, GATT generation, per-route attempt, peripheral UUID, native peripheral state and requestID, plus phases, subscription flags, RSSI, native errors, readiness and recovery events. Native peripheral identifiers are routing diagnostics, not trusted identity. No passwords, keys, candidate public-key data, nonces or signature bodies are logged.
-
-## UI visual acceptance (pending)
-
-- Check Home and Settings in light/dark appearance, accessibility text sizes and with a long computer name; text must wrap and Home must remain scrollable.
-- Check VoiceOver labels for Settings, registration, Retry and the RSSI slider; the decorative computer symbol is hidden from accessibility.
-- Confirm the initial registration button appears only without a target. Settings → Re-register must retain the existing Start/Cancel/Finish flow and dismissal restriction while registration is active.
-- Open Settings → Registration information and diagnostics; confirm metadata, full states, errors and logs appear directly without an expansion action.
-- With Home visible in the foreground, check ordinary computer during processing → open-lock computer on approval → ordinary computer five seconds after approval, with symbol transitions at normal speed. During the five-second display, check connection changes and authentication returning to waiting: neither should dismiss the open-lock symbol. A second approval must restart the timer. Also check presenting a sheet and entering the background. Old reset work must not overwrite the newer display; returning to Home must not replay a past approval.
-- Check rapid ordinary status changes: intermediate presentations lasting less than 300 ms should not flash. Approval, rejection, pause and connection errors must remain immediate, with matching text/icon/color; diagnostics must still show the live state.
-- Check advertisement waiting displays “正在搜索Windows电脑”, with the service-missing/release event visible in diagnostics. Turn automatic response off without enrollment and confirm the waiting headline immediately becomes “自动响应已暂停”.
-- Check low signal, automatic-response/eligibility rejection, RSSI read failure, authentication failure and transport failure: the five recognized codes must show their user messages instead of `unknown_result`. Low-signal text must be consistent before and after the Windows acknowledgment, with the original RSSI/threshold still visible in diagnostics. Confirm unrecognized results still produce an explicit error.
-- Enable Reduce Motion and confirm symbol changes have no animated transition. Verify the native lock-symbol transition visually; its exact lock-shackle motion is system controlled.
-
-## Acceptance after explicit build/test authorization
-
-All commands below are relative to the repository root. They are instructions, not commands executed by the agent.
-
-Pure policy tests:
+From the repository root:
 
 ```sh
 swift test --package-path ./ios
 ```
 
-Real iPhone and Windows:
-
-1. Update Windows and iOS to matching versions. Keep the native PIN/password path available. Do not clear existing valid ComputerId/public-key registration or the saved Windows password.
-2. Open the Windows tray pairing/replacement flow on the unlocked desktop. In iOS choose Register/Re-register computer → Start registration, then confirm the same phone fingerprint in Windows. For an already registered key, use the existing confirmation outcome; do not regenerate the phone key.
-3. Confirm iOS registration succeeded and ComputerId is present in Settings → Registration information and diagnostics. The connection may subsequently wait because Windows only advertises on lock or during pairing.
-4. After registration, leave Windows on the unlocked desktop long enough to exceed the old recovery windows (at least one minute). Put iOS in the background and do not reopen it or tap Retry. Lock Windows, press Enter on the tile once, and confirm the phone becomes Ready, takes a new RSSI/signature, receives `unlock_approved`, and Windows actually unlocks. Compare SID/session with the pre-lock baseline. The Windows request still has its own 30-second deadline; slower discovery is not an RSSI failure.
-5. Repeat at least twenty lock/unlock cycles, including fifteen-minute and overnight background gaps. Do not Refresh GATT, reopen the app or tap Retry. Service absence must release the useless connection and wait for a service advertisement; no disconnect/connect/scan loop is allowed. A real initialization or RSSI callback timeout must report its phase while preserving future waiting.
-6. Restart the Windows tray and lock again. ComputerId must remain unchanged; if peripheral UUID changes, the existing iPhone target must still reconnect without re-registration.
-7. Test below/above the RSSI threshold, a missing/invalid reading, full disconnection, explicit automatic off, and restoration after on. No stale reading or old result may approve a new request.
-8. Test Windows sleep/resume, phone leaving and returning, Bluetooth off/on, Windows restart and subsequent native first login/lock. Force-quitting the app is not a promised automatic-restoration path.
-9. If iOS is Ready but Windows still waits, capture tray subscriptions/challenge delivery and service status. Do not infer an RSSI problem from a missing connection or an enrollment result.
-
-The tests cover a restored waiter alongside a fresh connected route, per-device retry budgets, connected-candidate priority, cancellation/generation isolation, duplicate native-request suppression, bounded routes, cache exhaustion across scan restarts, and initialization delayed until after suspension. Existing missing-service, identity/both-subscription, readiness, RSSI, result, enrollment and preference tests remain. They have not been executed and do not simulate native callback delivery/cancellation or prove background/overnight reliability. Also verify that Windows leaves the challenge undelivered before readiness, expires at thirty seconds, and never approves twice for duplicate receipts.
-
-For this recovery revision, additionally check: an old restored `.connecting` route does not delay a new advertised UUID; failed cached routes do not loop without a new discovery/foreground recovery/explicit Retry; cancellation and a late native connect callback do not cancel the newly ready route; automatic off, Bluetooth off/on, enrollment cancellation, and enrollment on an already-ready connection retain their behavior. Allow GATT initialization to exceed ten seconds while suspended, then resume with identity/subscription callbacks: it must fail that initialization and use only its remaining retry, never accept expired readiness. Pending-connection waiting has no ten-second task. Capture the new peripheral UUID/native-state/attempt fields to determine why the earlier native request stalled.
-
-Capture both sides' UTC and monotonic timing, generation and requestID: Windows publication target/operation/status/errors, readiness probes/receipts and challenge delivery; iOS scan round, service absence/change, subscriptions and authentication result. Preserve raw errors to investigate the still-unconfirmed abort cause. Full pairing cancellation and Windows failure acceptance remain pending.
-
-2026-10-04 source cleanup removes preference/target migrations, unused challenge construction/encoding, public-key hexadecimal formatting and the unproduced local-verification error. Enrollment codes have one switch definition. Updated test sources cover first-read defaults, a preserved off setting, repeated reads without persistence and unknown enrollment results. Only static inspection was performed; Swift tests and device behavior remain unverified.
+These policy tests do not simulate native CoreBluetooth callback delivery, cancellation, radio behavior or Secure Enclave operation. Follow the [device and background testing guide](../docs/Testing.md) to validate actual behavior.
 
 ## References
 
-- [Apple: peripheral(_:didModifyServices:)](https://developer.apple.com/documentation/corebluetooth/cbperipheraldelegate/peripheral(_:didmodifyservices:))
-- [Apple: service-filtered scanning](https://developer.apple.com/documentation/corebluetooth/cbcentralmanager/scanforperipherals(withservices:options:))
+- [Apple: Xcode 27 release notes and host requirements](https://developer.apple.com/documentation/xcode-release-notes/xcode-27-release-notes)
+- [Apple: Secure Enclave key protection](https://developer.apple.com/documentation/security/protecting-keys-with-the-secure-enclave)
 - [Apple: Core Bluetooth background processing](https://developer.apple.com/library/archive/documentation/NetworkingInternetWeb/Conceptual/CoreBluetooth_concepts/CoreBluetoothBackgroundProcessingForIOSApps/PerformingTasksWhileYourAppIsInTheBackground.html)
-- [Apple: What’s new in SwiftUI — SF Symbols 6 and Magic Replace](https://developer.apple.com/videos/play/wwdc2024/10144/)
+- [Apple: Service invalidation callback](https://developer.apple.com/documentation/corebluetooth/cbperipheraldelegate/peripheral(_:didmodifyservices:))

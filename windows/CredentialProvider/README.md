@@ -2,40 +2,36 @@
 
 # Credential Provider
 
-**Unlock with iPhone®** 仅在已有、明确锁定的物理控制台用户会话中显示。Windows 10+ 的 CPUS_LOGON 也可能用于解锁，不按场景枚举值单独排除。首次登录、注销后登录、其他账户和远程会话无手机磁贴；原生 PIN／密码保留。
+The **Unlock with iPhone®** tile is offered only for an existing, explicitly locked physical-console session. Initial sign-in, signed-out users, other accounts and remote sessions are ineligible. Windows can use `CPUS_LOGON` for unlocking; the scenario enum alone does not establish eligibility. Native Windows password/PIN providers remain available.
 
-## 枚举与发起
+## Enumeration and requests
 
-CP 从系统 ICredentialProviderUser 取得 SID、PrimarySid、原样 QualifiedUserName 和 ProviderID，核对控制台身份，并通过服务 unlockEligibility 确认已有锁定会话；没有单候选回退，不自行拼在线账户名。
+CP captures SID, PrimarySid, original QualifiedUserName and ProviderID from the system user objects. Before requiring an existing console user, it submits the installer-recorded target as a provisioning candidate over a separate operation. Transport failures retry on a cancellable worker for the current LogonUI lifetime; rejection is reported rather than bypassed. This path cannot create an unlock tile, snapshot nonce or approval.
 
-磁贴只有 App 图标、标题及 Unlock 按钮，不接受手输密码或测试授权。正常候选默认索引 0、autoLogon=FALSE；Enter／箭头发起 beginPhoneAuthentication，选中磁贴或刚锁屏不创建请求。默认选择受 LogonUI 控制，不设置不可编辑按钮的 CPFIS_FOCUSED 或添加假输入框。
+For phone unlocking, CP checks console identity and asks the service for `unlockEligibility`, without inventing account names or falling back to a lone candidate.
 
-手动发起返回无凭据的等待状态，不同步阻塞 BLE；工作线程查询服务结构化状态，按 requestID 关联并在 COM 所在线程更新提示。30 秒期限由服务决定，不使用独立认证计时器。
+The tile contains the app logo, title and **Unlock** action; it does not accept typed passwords or test approvals. Enter / Unlock starts `beginPhoneAuthentication`. Selection and locking alone do not create requests. Initial enumeration has `autoLogon=FALSE`; default tile selection remains controlled by LogonUI.
 
-## 自动提交
+Manual initiation returns a no-credential waiting state rather than blocking on BLE. A worker queries structured service status by requestID and marshals UI changes onto the COM/Advise thread. The service owns the deadline.
 
-批准就绪时工作线程取得一次 takeAutoSubmitOffer，消息窗口在 Advise 线程调用 CredentialsChanged。重新枚举后 GetCredentialCount 仅一次设置 autoLogon=TRUE；GetSerialization 核对当次 capture nonce 和 offer，再领取密码。
+## Automatic submission
 
-服务 claimCredential 先消费批准，再返回明文；CP 在 LogonUI 会话中调用 CRED_PACK_PROTECTED_CREDENTIALS | CRED_PACK_ID_PROVIDER_CREDENTIALS，并交原生 Negotiate。CP 不自行创建 token 或调用 LsaLogonUser。
+When approval becomes available, the worker obtains one `takeAutoSubmitOffer`. The message window calls `CredentialsChanged` on the Advise thread; the next eligible enumeration exposes automatic submission once. `GetSerialization` validates the current captured identity/nonce and offer before claiming the password.
 
-相同 SID、QualifiedUserName、ProviderID 和 session 的重新枚举保留未提交 offer；身份变化／UnAdvise 回收工作线程。通知丢失、打包失败或 Windows 拒绝密码不能恢复授权或重新发 offer，重试需新手机批准。
+The service consumes approval before releasing plaintext. CP packs credentials in LogonUI using protected/ID-provider flags and submits to native Negotiate. It does not construct a token or call `LsaLogonUser`. Only native authentication confirms actual unlock.
 
-## 展示与部署
+Matching identity/session re-enumeration can retain an unsubmitted offer. Identity changes and UnAdvise retire worker state. Missing notifications, serialization failure or native password rejection cannot restore a consumed approval or reissue its offer; another attempt requires a fresh phone request.
 
-等待手机、等待批准、手机过远、新距离读数失败、断连、自动批准关闭、超时、验签失败、真实会话变化和服务不可用使用英文用户文案。批准显示正在解锁，不提前宣称成功。
+## Presentation and deployment
 
-AppTile.bmp 是 iOS 标准 AppIcon 派生的 provider logo，不替换用户头像；字号和 ® 位置由 LogonUI 控制。桌面 DPI 配置不注入 CP。
+Status text distinguishes phone waiting, signal failure, disconnected transport, automatic response off, timeout, verification failure, service failure and genuine session changes. Approval is shown as an unlock attempt, not completed success.
 
-通过 [setup.exe](../README.md#安装更新与卸载) 正常 Update 并重启，服务、CP 与工具须同一构建，不直接覆盖 LogonUI 已加载的 DLL。
+`AppTile.bmp` is derived from the standard iOS icon and is a provider logo, not a replacement user avatar. LogonUI controls tile typography; desktop DPI settings are not injected into CP.
 
-## 构建后的实体机验收
+Install/update through the [installer](../ComponentsWizard/README.md) and honor its restart boundary. Do not overwrite a DLL already loaded by LogonUI. Service, CP and app must be from the same build. Use the [testing guide](../../docs/Testing.md#authentication-and-security-boundaries) for repeated enumeration, single consumption and native-login recovery.
 
-按 [集中验收记录](../Validation.md#回归顺序) 回归首次登录边界、已有会话解锁、SID／session、一份批准只用一次、原生恢复和服务重启。正常路径基线不证明重建／通知丢失／失败路径通过。
+## References
 
-调试阶段只输出阶段和 HRESULT，不记录密码或 nonce。若没有自动提交，先核对已发请求、双订阅、challenge 投递及服务阶段，不用手动领取绕过批准。
-
-## 参考资料
-
+- [Microsoft V2 Credential Provider sample](https://github.com/microsoft/Windows-classic-samples/blob/main/Samples/CredentialProvider/cpp/CSampleCredential.cpp)
 - [CredentialsChanged](https://learn.microsoft.com/en-us/windows/win32/api/credentialprovider/nf-credentialprovider-icredentialproviderevents-credentialschanged)
-- [GetCredentialCount](https://learn.microsoft.com/en-us/windows/win32/api/credentialprovider/nf-credentialprovider-icredentialprovider-getcredentialcount)
-- [Message-only windows](https://learn.microsoft.com/en-us/windows/win32/winmsg/window-features#message-only-windows)
+- [GetCredentialCount and automatic submission](https://learn.microsoft.com/en-us/windows/win32/api/credentialprovider/nf-credentialprovider-icredentialprovider-getcredentialcount)

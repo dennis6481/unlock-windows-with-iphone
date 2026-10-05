@@ -103,7 +103,7 @@ public:
     void writeCompletion(const CompletionRecord& result) const;
     [[nodiscard]] std::optional<CompletionRecord> readCompletion() const;
     void acknowledgeCompletion(const std::wstring& transactionId) const;
-    void startTrayForCompletedOperation(const std::wstring& transactionId) const;
+    void startTrayForCompletedOperation(const std::wstring& transactionId, bool setup = false) const;
 
     void restartWindows() const;
 

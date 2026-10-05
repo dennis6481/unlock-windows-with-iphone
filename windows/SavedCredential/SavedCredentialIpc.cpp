@@ -18,6 +18,9 @@ namespace {
 
 constexpr std::uint32_t kMagic = 0x31434347;
 constexpr std::uint16_t kVersion = 2;
+constexpr std::uint8_t kCredentialPresentFlag = 1;
+constexpr std::uint8_t kCredentialMatchesFlag = 2;
+constexpr std::uint8_t kCredentialStatusFlags = kCredentialPresentFlag | kCredentialMatchesFlag;
 constexpr std::uint32_t kAckMagic = 0x314b4341;
 
 #pragma pack(push, 1)
@@ -287,10 +290,11 @@ bool decodeIdentity(const std::uint8_t* data, const std::size_t size, Identity& 
 
 bool encodeStatus(const StatusPayload& status, SensitiveBytes& output) {
     SensitiveBytes identity;
-    if (!encodeIdentity(status.identity, identity)) return false;
+    if ((status.credentialMatches && !status.credentialPresent) || !encodeIdentity(status.identity, identity)) return false;
     output.clear();
     append(output, status.snapshotNonce.data(), status.snapshotNonce.size());
-    const std::uint8_t present = status.credentialPresent ? 1 : 0;
+    const std::uint8_t present = (status.credentialPresent ? kCredentialPresentFlag : 0) |
+        (status.credentialMatches ? kCredentialMatchesFlag : 0);
     append(output, &present, 1);
     append(output, identity.value.data(), identity.value.size());
     return true;
@@ -299,8 +303,11 @@ bool encodeStatus(const StatusPayload& status, SensitiveBytes& output) {
 bool decodeStatus(const std::uint8_t* data, const std::size_t size, StatusPayload& output) {
     if (data == nullptr || size < kNonceSize + 1) return false;
     std::copy_n(data, kNonceSize, output.snapshotNonce.begin());
-    if (data[kNonceSize] > 1) return false;
-    output.credentialPresent = data[kNonceSize] == 1;
+    const auto flags = data[kNonceSize];
+    if ((flags & ~kCredentialStatusFlags) != 0 ||
+        ((flags & kCredentialMatchesFlag) && !(flags & kCredentialPresentFlag))) return false;
+    output.credentialPresent = (flags & kCredentialPresentFlag) != 0;
+    output.credentialMatches = (flags & kCredentialMatchesFlag) != 0;
     return decodeIdentity(data + kNonceSize + 1, size - kNonceSize - 1, output.identity);
 }
 

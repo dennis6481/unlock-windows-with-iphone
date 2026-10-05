@@ -4,6 +4,7 @@
 #include "SavedCredentialVault.h"
 #include "EnrollmentStore.h"
 #include "PhoneApprovalCore.h"
+#include "../ComponentsWizard/SetupIdentity.h"
 
 #include <WtsApi32.h>
 #include <bcrypt.h>
@@ -34,6 +35,7 @@ constexpr ACCESS_MASK kClientPipeRights = 0x0012019B;
 
 std::atomic_bool gStopping{false};
 std::atomic<ULONGLONG> gConsoleGeneration{0};
+std::atomic<ULONGLONG> gIdentityGeneration{0};
 std::atomic<DWORD> gObservedConsoleSession{0xffffffff};
 std::atomic_bool gPipeFailed{false};
 SERVICE_STATUS_HANDLE gStatusHandle = nullptr;
@@ -182,6 +184,7 @@ struct Console final {
     DWORD session = 0xffffffff;
     std::wstring sid;
     bool locked = false;
+    LUID logonId{};
 };
 
 Console currentConsole() {
@@ -192,6 +195,7 @@ Console currentConsole() {
     if (!WTSQueryUserToken(result.session, &userToken.value)) fail("existing console user token unavailable");
     if (tokenSession(userToken.value) != result.session) fail("console user token session differs");
     result.sid = tokenSid(userToken.value);
+    result.logonId = tokenLogonId(userToken.value);
     LPWSTR raw = nullptr;
     DWORD bytes = 0;
     if (!WTSQuerySessionInformationW(WTS_CURRENT_SERVER_HANDLE, result.session,
@@ -219,6 +223,13 @@ struct Snapshot final {
     DWORD session = 0xffffffff;
     ULONGLONG expiresAt = 0;
     std::array<std::uint8_t, kNonceSize> nonce{};
+};
+
+struct ProvisioningIdentity final {
+    Identity identity;
+    DWORD session = 0xffffffff;
+    ULONGLONG generation = 0;
+    std::optional<LUID> logonId;
 };
 
 struct Grant final {
@@ -272,7 +283,32 @@ public:
         response.result = Result::rejected;
         try {
             const auto client = inspectClient(pipe);
+            if (endpoint == Endpoint::credential && request.operation == Operation::captureProvisioningIdentity) {
+                const DWORD session = WTSGetActiveConsoleSessionId();
+                if (!client.logonUi || session == 0xffffffff || client.session != session || removing_)
+                    return response;
+                Identity identity;
+                std::wstring targetSid;
+                if (!decodeIdentity(request.payload.value.data(), request.payload.value.size(), identity) ||
+                    FAILED(unlock::components::readSetupTargetSid(targetSid)) || identity.sid != targetSid)
+                    return response;
+                if (WTSGetActiveConsoleSessionId() != session) return response;
+                gObservedConsoleSession = session;
+                const auto generation = gIdentityGeneration.load();
+                if (!provisioning_ || provisioning_->session != session || provisioning_->generation != generation ||
+                    !sameIdentity(provisioning_->identity, identity))
+                    provisioning_ = ProvisioningIdentity{identity, session, generation, std::nullopt};
+                response.result = Result::success;
+                return response;
+            }
             const auto console = currentConsole();
+            if (provisioning_ && (provisioning_->session != console.session ||
+                provisioning_->generation != gIdentityGeneration.load() || provisioning_->identity.sid != console.sid ||
+                (provisioning_->logonId && (provisioning_->logonId->LowPart != console.logonId.LowPart ||
+                    provisioning_->logonId->HighPart != console.logonId.HighPart)))) {
+                provisioning_.reset();
+                snapshot_.reset();
+            }
             gObservedConsoleSession = console.session;
             expirePhoneRequest(console);
             if (client.session != console.session) return response;
@@ -336,6 +372,10 @@ public:
                 Identity identity;
                 if (!decodeIdentity(request.payload.value.data(), request.payload.value.size(), identity) ||
                     identity.sid != console.sid) return response;
+                std::wstring targetSid;
+                if (FAILED(unlock::components::readSetupTargetSid(targetSid)) || identity.sid != targetSid)
+                    return response;
+                provisioning_ = ProvisioningIdentity{identity, console.session, gIdentityGeneration.load(), console.logonId};
                 const ULONGLONG now = GetTickCount64();
                 const bool reuseAuthorizedNonce = grant_ &&
                     grant_->session == console.session &&
@@ -361,10 +401,11 @@ public:
                 }
                 response.payload.value.assign(snapshot_->nonce.begin(), snapshot_->nonce.end());
             } else if (request.operation == Operation::status) {
-                if (!client.admin || console.locked || !request.payload.value.empty() ||
-                    !freshSnapshot(console)) return response;
-                StatusPayload status{snapshot_->identity, snapshot_->nonce,
-                    vault_.storedIdentity().has_value()};
+                if (!client.admin || console.locked || !request.payload.value.empty()) return response;
+                if (!refreshManagementSnapshot(console)) return response;
+                const auto stored = vault_.storedIdentity();
+                StatusPayload status{snapshot_->identity, snapshot_->nonce, stored.has_value(),
+                    stored && sameIdentity(*stored, snapshot_->identity)};
                 if (!encodeStatus(status, response.payload)) fail("saved credential status encoding failed");
             } else if (request.operation == Operation::setCredential ||
                        request.operation == Operation::updateCredential) {
@@ -394,6 +435,7 @@ public:
                 vault_.clear();
                 grant_.reset();
                 snapshot_.reset();
+                provisioning_.reset();
                 phoneChallenge_.reset();
                 removing_ = true;
             } else if (request.operation == Operation::reloadPhoneEnrollment) {
@@ -589,8 +631,27 @@ private:
         }
     }
 
+    bool refreshManagementSnapshot(const Console& console) {
+        std::wstring targetSid;
+        if (!provisioning_ || provisioning_->session != console.session ||
+            provisioning_->generation != gIdentityGeneration.load() || provisioning_->identity.sid != console.sid ||
+            FAILED(unlock::components::readSetupTargetSid(targetSid)) || targetSid != console.sid) return false;
+        provisioning_->logonId = console.logonId;
+        if (!freshSnapshot(console) || !sameIdentity(snapshot_->identity, provisioning_->identity)) {
+            Snapshot snapshot{provisioning_->identity, console.session, GetTickCount64() + kSnapshotLifetimeMs, {}};
+            if (BCryptGenRandom(nullptr, snapshot.nonce.data(), kNonceSize, BCRYPT_USE_SYSTEM_PREFERRED_RNG) < 0)
+                fail("saved credential management snapshot RNG failed");
+            snapshot_ = std::move(snapshot);
+        }
+        return freshSnapshot(console);
+    }
+
     bool freshSnapshot(const Console& console) const {
-        return snapshot_ && snapshot_->session == console.session &&
+        return snapshot_ && provisioning_ && provisioning_->logonId &&
+            provisioning_->session == console.session && provisioning_->generation == gIdentityGeneration.load() &&
+            provisioning_->logonId->LowPart == console.logonId.LowPart &&
+            provisioning_->logonId->HighPart == console.logonId.HighPart &&
+            sameIdentity(snapshot_->identity, provisioning_->identity) && snapshot_->session == console.session &&
             snapshot_->identity.sid == console.sid && GetTickCount64() < snapshot_->expiresAt;
     }
 
@@ -600,6 +661,7 @@ private:
     std::wstring enrolledSid_;
     std::vector<std::uint8_t> enrolledKey_;
     std::optional<Snapshot> snapshot_;
+    std::optional<ProvisioningIdentity> provisioning_;
     std::optional<Grant> grant_;
     std::optional<PhoneChallenge> phoneChallenge_;
     std::optional<Identity> authenticationIdentity_;
@@ -638,6 +700,7 @@ DWORD WINAPI serviceControl(const DWORD control, const DWORD eventType, void* ev
             (eventType == WTS_SESSION_UNLOCK || eventType == WTS_SESSION_LOGOFF ||
             eventType == WTS_CONSOLE_DISCONNECT || eventType == WTS_REMOTE_DISCONNECT)) {
             ++gConsoleGeneration;
+            if (eventType != WTS_SESSION_UNLOCK) ++gIdentityGeneration;
         }
         return NO_ERROR;
     }

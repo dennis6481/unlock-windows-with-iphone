@@ -3,6 +3,7 @@
 #define UNICODE
 #define _UNICODE
 #include "SetupFinalization.h"
+#include "../DesktopApp/DesktopApp.h"
 #include "../Resources/resource.h"
 #include "InstallationPaths.h"
 #include "../SavedCredential/SavedCredentialVault.h"
@@ -38,6 +39,7 @@ std::wstring contractParameters(const std::wstring& script) {
         result += L"$" + std::wstring(name) + L"=" + std::to_wstring(value) + L"\n";
     };
     text(L"productName", UNLOCK_PRODUCT_DISPLAY_NAME);
+    text(L"setupRole", unlock_windows::desktop_app::kSetupRole);
     text(L"stPath", kWizardStateRegistryPath.c_str());
     text(L"inPath", kInstalledProductRegistryPath.c_str());
     text(L"rsPath", kResultRegistryPath.c_str());
@@ -122,6 +124,8 @@ function Read-Result{
     const auto body = reader + script;
     std::wstring result = L"$ErrorActionPreference='Stop'\n$id=" + literal(state.transactionId) +
         L"\n$userSid=" + literal(state.targetSid) + L"\n";
+    if (scriptUses(body, L"firstInstall"))
+        result += L"$firstInstall=" + std::wstring(state.operation == SetupOperation::install ? L"$true\n" : L"$false\n");
     if (scriptUses(body, L"uninstall"))
         result += L"$uninstall=" + std::wstring(state.operation == SetupOperation::uninstall ? L"$true\n" : L"$false\n");
     if (scriptUses(body, L"setup")) result += L"$setup=" + literal((desktopDirectory() / kInstallerFile).wstring()) + L"\n";
@@ -209,7 +213,9 @@ try{
             if(!$uninstall){
                 $pending=$hk.OpenSubKey($stPath)
                 if(!$pending){
-                    Start-Process -FilePath $setup -ArgumentList @('--show-result',$id)
+                    $arguments=@('--show-result',$id)
+                    if($firstInstall -and $record.Success){$arguments += $setupRole}
+                    Start-Process -FilePath $setup -ArgumentList $arguments
                     exit 0
 }
                 $pending.Dispose()

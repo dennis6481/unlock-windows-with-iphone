@@ -3,6 +3,7 @@
 #include <initguid.h>
 #include "UnlockCredentialProvider.h"
 #include "SavedCredentialIpc.h"
+#include "../ComponentsWizard/SetupIdentity.h"
 #include "../Resources/resource.h"
 #include <algorithm>
 #include <array>
@@ -63,6 +64,40 @@ void logAutoSubmitError(const wchar_t* operation, const HRESULT status) noexcept
         operation, static_cast<unsigned long>(status));
     OutputDebugStringW(message);
 }
+
+struct ProvisioningWatch final {
+    unlock_windows::saved_credential::Identity identity;
+    DWORD session = 0xffffffff;
+    HANDLE stop = nullptr;
+    std::thread worker;
+
+    ~ProvisioningWatch() {
+        if (stop) SetEvent(stop);
+        if (worker.joinable()) worker.join();
+        if (stop) CloseHandle(stop);
+    }
+
+    void run() noexcept {
+        using namespace unlock_windows::saved_credential;
+        try {
+            while (WaitForSingleObject(stop, 0) == WAIT_TIMEOUT && WTSGetActiveConsoleSessionId() == session) {
+                SensitiveBytes request;
+                Packet reply;
+                CallDiagnostics diagnostics;
+                if (!encodeIdentity(identity, request)) throw std::runtime_error("Invalid provisioning identity");
+                if (call(Operation::captureProvisioningIdentity, std::move(request), reply, 250, &diagnostics)) {
+                    if (reply.result == Result::success) return;
+                    logAutoSubmitError(L"provisioning identity rejected", E_ACCESSDENIED);
+                    return;
+                }
+                logAutoSubmitError(L"provisioning identity transport", HRESULT_FROM_WIN32(diagnostics.win32Error));
+                if (WaitForSingleObject(stop, 250) != WAIT_TIMEOUT) return;
+            }
+        } catch (const std::exception& error) {
+            OutputDebugStringA(error.what());
+        }
+    }
+};
 
 struct ApprovalWatch final {
     unlock_windows::saved_credential::Identity identity;
@@ -920,6 +955,7 @@ public:
     UnlockCredentialProvider& operator=(const UnlockCredentialProvider&) = delete;
 
     ~UnlockCredentialProvider() {
+        provisioningWatch_.reset();
         stopWatching();
         destroyApprovalWindow();
         if (events_ != nullptr) {
@@ -1024,6 +1060,52 @@ public:
         return S_OK;
     }
 
+    HRESULT captureProvisioningUsers(ICredentialProviderUserArray* users, DWORD count) {
+        provisioningWatch_.reset();
+        std::wstring targetSid;
+        auto result = unlock::components::readSetupTargetSid(targetSid);
+        if (FAILED(result)) return result;
+        DWORD processSession = 0xffffffff;
+        if (!ProcessIdToSessionId(GetCurrentProcessId(), &processSession)) return HRESULT_FROM_WIN32(GetLastError());
+        if (processSession != WTSGetActiveConsoleSessionId()) return S_OK;
+        for (DWORD index = 0; index < count; ++index) {
+            ICredentialProviderUser* rawUser = nullptr;
+            result = users->GetAt(index, &rawUser);
+            if (FAILED(result) || !rawUser) return FAILED(result) ? result : E_UNEXPECTED;
+            struct User final { ICredentialProviderUser* value; ~User() { value->Release(); } } user{rawUser};
+            LPWSTR rawSid = nullptr;
+            result = user.value->GetSid(&rawSid);
+            struct Sid final { LPWSTR value; ~Sid() { CoTaskMemFree(value); } } sid{rawSid};
+            if (FAILED(result) || !rawSid) return FAILED(result) ? result : E_UNEXPECTED;
+            const auto normalized = normalizedSid(rawSid);
+            if (normalized != targetSid) continue;
+            std::wstring primarySid;
+            unlock_windows::saved_credential::Identity identity;
+            identity.sid = normalized;
+            result = propertyString(user.value, PKEY_Identity_PrimarySid, primarySid);
+            if (SUCCEEDED(result)) result = propertyString(user.value, PKEY_Identity_QualifiedUserName, identity.qualifiedUserName);
+            if (SUCCEEDED(result)) result = user.value->GetProviderID(&identity.providerId);
+            if (FAILED(result)) return result;
+            if (normalizedSid(primarySid) != identity.sid) return E_UNEXPECTED;
+            using namespace unlock_windows::saved_credential;
+            SensitiveBytes request;
+            Packet reply;
+            if (!encodeIdentity(identity, request)) return E_UNEXPECTED;
+            if (call(Operation::captureProvisioningIdentity, std::move(request), reply, 250))
+                return reply.result == Result::success ? S_OK : E_ACCESSDENIED;
+            auto watch = std::make_unique<ProvisioningWatch>();
+            watch->identity = std::move(identity);
+            watch->session = processSession;
+            watch->stop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+            if (!watch->stop) return HRESULT_FROM_WIN32(GetLastError());
+            auto* running = watch.get();
+            watch->worker = std::thread([running] { running->run(); });
+            provisioningWatch_ = std::move(watch);
+            return S_OK;
+        }
+        return S_OK;
+    }
+
     HRESULT STDMETHODCALLTYPE SetUserArray(
         ICredentialProviderUserArray* users
     ) override {
@@ -1046,6 +1128,14 @@ public:
         auto result = users->GetCount(&userCount);
         if (FAILED(result)) {
             return result;
+        }
+        try {
+            const auto provisioningStatus = captureProvisioningUsers(users, userCount);
+            if (FAILED(provisioningStatus)) logAutoSubmitError(L"capture provisioning account", provisioningStatus);
+        } catch (const std::bad_alloc&) {
+            return E_OUTOFMEMORY;
+        } catch (const std::exception& error) {
+            OutputDebugStringA(error.what());
         }
         if (userCount == 0) {
             stopWatching();
@@ -1382,6 +1472,7 @@ private:
     HWND approvalWindow_ = nullptr;
     UINT_PTR watchGeneration_ = 0;
     std::unique_ptr<ApprovalWatch> watch_;
+    std::unique_ptr<ProvisioningWatch> provisioningWatch_;
     std::optional<unlock_windows::saved_credential::AutoSubmitOffer> pendingAutomaticOffer_;
 };
 

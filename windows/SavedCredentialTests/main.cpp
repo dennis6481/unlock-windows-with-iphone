@@ -1,6 +1,7 @@
 // Created by Rui MA on 30 Sep 2026
 
 #include "../SavedCredential/SavedCredentialIpc.h"
+#include "../DesktopApp/DesktopApp.h"
 #include "../GattHost/AdvertisingLifecycle.h"
 #include "../GattHost/TransportReadiness.h"
 
@@ -42,9 +43,16 @@ void testStatusRoundTrip() {
     StatusPayload decoded;
     require(decodeStatus(bytes.value.data(), bytes.value.size(), decoded), "status should decode");
     require(decoded.identity.sid == status.identity.sid && decoded.snapshotNonce == status.snapshotNonce &&
-        decoded.credentialPresent, "status round trip changed data");
+        decoded.credentialPresent && !decoded.credentialMatches, "status round trip changed data");
+    status.credentialMatches = true;
+    require(encodeStatus(status, bytes) && decodeStatus(bytes.value.data(), bytes.value.size(), decoded) &&
+        decoded.credentialPresent && decoded.credentialMatches, "matching identity readiness must survive transport");
     bytes.value[kNonceSize] = 2;
-    require(!decodeStatus(bytes.value.data(), bytes.value.size(), decoded), "invalid present flag must fail");
+    require(!decodeStatus(bytes.value.data(), bytes.value.size(), decoded), "matching without a saved copy must fail");
+    bytes.value[kNonceSize] = 4;
+    require(!decodeStatus(bytes.value.data(), bytes.value.size(), decoded), "unknown credential state must fail");
+    status.credentialPresent = false;
+    require(!encodeStatus(status, bytes), "encoder must reject matching identity without a saved copy");
 }
 
 void testPhoneEndpointRejectsCredentialOperations() {
@@ -68,7 +76,7 @@ void testPhoneEndpointRejectsCredentialOperations() {
 void testAuthenticationOperationPackets() {
     for (const std::uint16_t operation : {std::uint16_t{12}, std::uint16_t{6},
             std::uint16_t{9}, std::uint16_t{13}, std::uint16_t{14}, std::uint16_t{15},
-            std::uint16_t{16}, std::uint16_t{17}, std::uint16_t{18}, std::uint16_t{0}, std::uint16_t{65535}}) {
+            std::uint16_t{16}, std::uint16_t{17}, std::uint16_t{18}, std::uint16_t{19}, std::uint16_t{0}, std::uint16_t{65535}}) {
         HANDLE reader = INVALID_HANDLE_VALUE;
         HANDLE writer = INVALID_HANDLE_VALUE;
         require(CreatePipe(&reader, &writer, nullptr, 0) != FALSE, "test pipe must open");
@@ -80,7 +88,7 @@ void testAuthenticationOperationPackets() {
         const bool accepted = readPacket(reader, inbound);
         const DWORD error = GetLastError();
         require(CloseHandle(writer) && CloseHandle(reader), "test pipe handles must close");
-        const bool known = operation == 9 || (operation >= 12 && operation <= 17);
+        const bool known = operation == 9 || (operation >= 12 && operation <= 18);
         require(isKnownOperation(operation) == known, "operation whitelist rejected new operation or accepted unknown operation");
         require(accepted == known, "packet parser must accept authentication operations and reject unknown operations");
         if (accepted) {
@@ -92,6 +100,38 @@ void testAuthenticationOperationPackets() {
     }
 }
 
+void testSetupLaunchArguments() {
+    using namespace unlock_windows::desktop_app;
+    wchar_t executable[] = L"UnlockWithIPhone.exe";
+    std::wstring setup(kSetupRole), password(kSavedPasswordRole);
+    wchar_t* trayArguments[]{executable, setup.data()};
+    require(parseLaunch(2, trayArguments).role == Role::setup, "setup must enter the ordinary tray role");
+    wchar_t* passwordArguments[]{executable, password.data(), setup.data()};
+    const auto launch = parseLaunch(3, passwordArguments);
+    require(launch.role == Role::savedPassword && launch.setup, "setup must reuse the elevated password role");
+    wchar_t* conflicting[]{executable, setup.data(), password.data()};
+    bool rejected = false;
+    try { static_cast<void>(parseLaunch(3, conflicting)); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    require(rejected, "conflicting ordinary/elevated role arguments must be rejected");
+}
+
+void testProvisioningIdentityTransport() {
+    const Identity identity{L"S-1-5-21-100-200-300-1001", L"MicrosoftAccount\\setup@example.invalid",
+        {0x12345678, 0x1234, 0x5678, {1, 2, 3, 4, 5, 6, 7, 8}}};
+    Packet request;
+    request.operation = Operation::captureProvisioningIdentity;
+    require(encodeIdentity(identity, request.payload), "provisioning must preserve a system identity");
+    Identity decoded;
+    require(decodeIdentity(request.payload.value.data(), request.payload.value.size(), decoded) &&
+        decoded.sid == identity.sid && decoded.qualifiedUserName == identity.qualifiedUserName &&
+        IsEqualGUID(decoded.providerId, identity.providerId), "provisioning must not reconstruct or discard online identity fields");
+    Packet reply;
+    CallDiagnostics diagnostics;
+    require(!callPhone(Operation::captureProvisioningIdentity, std::move(request.payload), reply, 250, &diagnostics) &&
+        diagnostics.stage == CallStage::requestValidation, "phone endpoint must reject provisioning before connection");
+}
+
 void testPacketTransportParity() {
     const auto name = L"\\\\.\\pipe\\unlock-packet-test-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64());
     const HANDLE server = CreateNamedPipeW(name.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
@@ -101,7 +141,7 @@ void testPacketTransportParity() {
         FILE_FLAG_OVERLAPPED, nullptr);
     require(client != INVALID_HANDLE_VALUE, "overlapped packet test client must open");
     require(ConnectNamedPipe(server, nullptr) || GetLastError() == ERROR_PIPE_CONNECTED, "test pipe must connect");
-    for (auto operation : {std::uint16_t{9}, std::uint16_t{12}, std::uint16_t{17}, std::uint16_t{18}, std::uint16_t{6}, std::uint16_t{65535}}) {
+    for (auto operation : {std::uint16_t{9}, std::uint16_t{12}, std::uint16_t{17}, std::uint16_t{18}, std::uint16_t{19}, std::uint16_t{6}, std::uint16_t{65535}}) {
         Packet outbound;
         outbound.operation = static_cast<Operation>(operation);
         outbound.payload.value = {17, 91};
@@ -387,6 +427,8 @@ int main() {
     testStatusRoundTrip();
     testPhoneEndpointRejectsCredentialOperations();
     testPacketTransportParity();
+    testProvisioningIdentityTransport();
+    testSetupLaunchArguments();
     testAutoSubmitOffer();
     testAuthenticationOperationPackets();
     testAuthenticationState();

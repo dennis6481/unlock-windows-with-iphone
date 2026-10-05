@@ -37,6 +37,7 @@ enum class Operation : std::uint16_t {
     phoneAuthenticationStatus = 15,
     unlockEligibility = 16,
     peekPhoneAuthentication = 17,
+    captureProvisioningIdentity = 18,
 };
 
 inline constexpr bool isKnownOperation(const std::uint16_t value) noexcept {
@@ -57,6 +58,7 @@ inline constexpr bool isKnownOperation(const std::uint16_t value) noexcept {
     case Operation::phoneAuthenticationStatus:
     case Operation::unlockEligibility:
     case Operation::peekPhoneAuthentication:
+    case Operation::captureProvisioningIdentity:
         return true;
     default:
         return false;
@@ -108,6 +110,7 @@ struct StatusPayload final {
     Identity identity;
     std::array<std::uint8_t, kNonceSize> snapshotNonce{};
     bool credentialPresent = false;
+    bool credentialMatches = false;
 };
 
 struct AutoSubmitOffer final {

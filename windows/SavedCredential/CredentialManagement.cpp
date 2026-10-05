@@ -29,6 +29,8 @@ struct UiState final {
     StatusPayload status;
     bool snapshotAvailable = false;
     bool technicalExpanded = false;
+    bool setup = false;
+    bool credentialReady = false;
     unlock_windows::desktop_ui::DialogAppearance appearance;
 };
 
@@ -57,12 +59,12 @@ bool refresh(const HWND window) {
             ? L"Saved credential IPC failed at " + std::wstring(callStageName(diagnostics.stage)) +
                 L" (Win32 " + std::to_wstring(diagnostics.win32Error) + L"). No operation can proceed."
             : response.result == Result::rejected
-                ? L"No current LogonUI identity snapshot or the console is not unlocked. Lock this console, unlock with native PIN/password, then Refresh."
+                ? L"No verified LogonUI identity is available for the installed target in this unlocked console. Refresh retries account verification. If the service restarted after sign-in, inspect its diagnostics; no credential change can proceed."
                 : L"Saved credential service returned an error or malformed identity status. No operation can proceed.";
         const auto message = !connected
             ? L"Saved password management is unavailable. Your PIN and password still work. See Technical details."
             : response.result == Result::rejected
-                ? L"Lock this PC, unlock with your usual PIN or password, then choose Refresh to confirm the target account."
+                ? L"Windows account information is not ready. Choose Refresh to retry verification for this signed-in console."
                 : L"Account information could not be verified. See Technical details.";
         SetWindowTextW(gUi.information, message);
         SetDlgItemTextW(window, IDC_UI_ACCOUNT, L"Windows account: not yet verified");
@@ -96,13 +98,27 @@ bool refresh(const HWND window) {
     const auto displayAccount = gUi.status.identity.qualifiedUserName.substr(
         separator == std::wstring::npos ? 0 : separator + 1);
     SetDlgItemTextW(window, IDC_UI_ACCOUNT, (L"Windows account: " + displayAccount).c_str());
-    SetWindowTextW(gUi.information, gUi.status.credentialPresent
+    SetWindowTextW(gUi.information, gUi.status.credentialPresent && !gUi.status.credentialMatches
+        ? L"Update the saved password copy for this verified Windows account before continuing setup. This app does not change your account password."
+        : gUi.status.credentialPresent
         ? L"An encrypted password copy is saved on this PC. Update it here if your Microsoft Account password changes. This app does not change your account password."
         : L"No password copy is saved. Save your Microsoft Account password to enable iPhone unlock. This app does not change your account password.");
     SetDlgItemTextW(window, IDC_UI_TECHNICAL, details.c_str());
     EnableWindow(GetDlgItem(window, kSet), !gUi.status.credentialPresent);
     EnableWindow(GetDlgItem(window, kUpdate), gUi.status.credentialPresent);
     EnableWindow(GetDlgItem(window, kClear), gUi.status.credentialPresent);
+    return true;
+}
+
+bool finishPasswordSetup(const HWND window) {
+    if (!gUi.setup || !gUi.snapshotAvailable || !gUi.status.credentialMatches) return false;
+    Packet response;
+    if (!call(Operation::reloadPhoneEnrollment, SensitiveBytes{}, response) || response.result != Result::success) {
+        showError(window, L"The service could not reload phone registration. Setup has not continued. Choose Refresh to retry.");
+        return false;
+    }
+    gUi.credentialReady = true;
+    DestroyWindow(window);
     return true;
 }
 
@@ -159,13 +175,14 @@ void setOrUpdate(const HWND window, const bool update) {
     SecureZeroMemory(password.value.data(), sizeof(password.value));
     Packet response;
     const auto operation = update ? Operation::updateCredential : Operation::setCredential;
-    if (!call(operation, std::move(request), response) || response.result != Result::success) {
+    const bool saved = call(operation, std::move(request), response) && response.result == Result::success;
+    if (!saved) {
         showError(window, L"The service rejected the credential change. The previous saved copy, if any, was not confirmed replaced.");
     } else {
         MessageBoxW(window, L"Your encrypted password copy is saved. Windows has not yet verified that the password is correct.",
             L"Saved Windows password", MB_OK | MB_ICONINFORMATION);
     }
-    refresh(window);
+    if (refresh(window) && saved) finishPasswordSetup(window);
 }
 
 void clearCredential(const HWND window) {
@@ -245,7 +262,9 @@ INT_PTR CALLBACK windowProcedure(const HWND window, const UINT message, const WP
             return FALSE;
         case WM_COMMAND:
             switch (LOWORD(key)) {
-                case kRefresh: refresh(window); break;
+                case kRefresh:
+                    if (refresh(window)) finishPasswordSetup(window);
+                    break;
                 case kSet: setOrUpdate(window, false); break;
                 case kUpdate: setOrUpdate(window, true); break;
                 case kClear: clearCredential(window); break;
@@ -256,7 +275,11 @@ INT_PTR CALLBACK windowProcedure(const HWND window, const UINT message, const WP
             }
             return TRUE;
         case WM_CLOSE: DestroyWindow(window); return TRUE;
-        case WM_DESTROY: PostQuitMessage(0); return TRUE;
+        case WM_DESTROY:
+            PostQuitMessage(static_cast<int>(gUi.credentialReady
+                ? unlock_windows::desktop_app::SetupResult::credentialReady
+                : unlock_windows::desktop_app::SetupResult::cancelled));
+            return TRUE;
         }
     } catch (const std::exception& error) {
         gUi.snapshotAvailable = false;
@@ -269,7 +292,8 @@ INT_PTR CALLBACK windowProcedure(const HWND window, const UINT message, const WP
 
 } // namespace
 
-int unlock_windows::desktop_app::runSavedPassword(const HINSTANCE instance, int show) {
+int unlock_windows::desktop_app::runSavedPassword(const HINSTANCE instance, int show, const bool setup) {
+    gUi.setup = setup;
     if (!unlock_windows::enrollment::elevatedAdmin()) {
         MessageBoxW(nullptr, L"Run the saved-credential manager as administrator on the physical console.",
             L"Saved Windows password", MB_OK | MB_ICONERROR);
@@ -280,7 +304,7 @@ int unlock_windows::desktop_app::runSavedPassword(const HINSTANCE instance, int 
         const HWND window = CreateDialogParamW(instance, MAKEINTRESOURCEW(IDD_SAVED_PASSWORD), nullptr, windowProcedure, 0);
         unlock_windows::desktop_ui::require(window != nullptr, "CreateDialogParamW(saved password)");
         unlock_windows::desktop_ui::centerOnActiveMonitor(window);
-        ShowWindow(window, show);
+        if (!finishPasswordSetup(window)) ShowWindow(window, show);
         MSG message{};
         BOOL received;
         while ((received = GetMessageW(&message, nullptr, 0, 0)) > 0)

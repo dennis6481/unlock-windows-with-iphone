@@ -3,6 +3,7 @@
 #define UNICODE
 #define _UNICODE
 #include "WindowsAdapter.h"
+#include "../DesktopApp/DesktopApp.h"
 #include "InstallationPaths.h"
 #include "SetupFinalization.h"
 #include "../PhoneApproval/EnrollmentStore.h"
@@ -195,7 +196,7 @@ BOOL CALLBACK visitTray(HWND window, LPARAM value) {
     auto& search = *reinterpret_cast<TraySearch*>(value);
     std::array<wchar_t, 128> name{};
     GetClassNameW(window, name.data(), static_cast<int>(name.size()));
-    if (wcscmp(name.data(), L"UnlockWindowsWithIPhoneGattHost") != 0) return TRUE;
+    if (wcscmp(name.data(), unlock_windows::desktop_app::kTrayWindowClass) != 0) return TRUE;
     try {
         DWORD pid = 0; GetWindowThreadProcessId(window, &pid);
         Handle process(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid));
@@ -577,7 +578,7 @@ void WindowsAdapter::acknowledgeCompletion(const std::wstring& transaction) cons
     Scheduler scheduler; scheduler.remove(kResultTask);
     regCheck(RegDeleteKeyExW(HKEY_LOCAL_MACHINE, kResultRegistryPath.c_str(), KEY_WOW64_64KEY, 0), L"Remove acknowledged result record");
 }
-void WindowsAdapter::startTrayForCompletedOperation(const std::wstring& transaction) const {
+void WindowsAdapter::startTrayForCompletedOperation(const std::wstring& transaction, bool setup) const {
     const auto result = readCompletion();
     const auto state = readState();
     if (!result || !result->finished || !result->success || result->transactionId != transaction)
@@ -591,12 +592,13 @@ void WindowsAdapter::startTrayForCompletedOperation(const std::wstring& transact
         session != WTSGetActiveConsoleSessionId() || consoleUserSid() != state->targetSid)
         throw ComponentError(L"Bluetooth must start from the ordinary target user's physical console session.");
     if (!userStartupPresent()) throw ComponentError(L"Bluetooth Run startup is not registered.");
-    if (trayRunning()) return;
+    if (trayRunning() && !setup) return;
     SHELLEXECUTEINFOW launch{}; launch.cbSize = sizeof(launch);
     const auto executable = desktopDirectory() / kMainAppFile;
     const auto directory = desktopDirectory();
     launch.fMask = SEE_MASK_FLAG_NO_UI;
     launch.lpVerb = L"open"; launch.lpFile = executable.c_str(); launch.lpDirectory = directory.c_str();
+    launch.lpParameters = setup ? unlock_windows::desktop_app::kSetupRole : nullptr;
     launch.nShow = SW_SHOWNORMAL;
     win(ShellExecuteExW(&launch), L"Start Bluetooth tray from the ordinary completion UI");
 }

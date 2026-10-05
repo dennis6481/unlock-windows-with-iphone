@@ -4,6 +4,7 @@
 #define _UNICODE
 #include "../Resources/resource.h"
 #include "ComponentTransaction.h"
+#include "../DesktopApp/DesktopApp.h"
 #include "resource.h"
 #include "../Resources/DesktopUi.h"
 #include <Windows.h>
@@ -399,6 +400,9 @@ struct Window {
             buttons(nullptr, L"Finish", nullptr);
         }
     }
+    bool firstSetup = false;
+    bool offerSetup = false;
+
     void pollResult() {
         const auto record = adapter.readCompletion();
         if (!record || record->transactionId != resultId) {
@@ -415,11 +419,18 @@ struct Window {
         setPage(record->success ? Page::result : Page::failure,
             record->success ? L"Operation completed and verified" : L"Operation failed",
             record->message);
-        buttons(nullptr, L"Finish", nullptr);
+        offerSetup = record->success && firstSetup && !adapter.environment().elevated;
+        if (offerSetup) {
+            setPage(Page::result, L"Installation completed", L"Start setup to save your Windows account password, then pair your iPhone. You can continue later from the tray.");
+            buttons(nullptr, L"Start setup", L"Later");
+        } else buttons(nullptr, L"Finish", nullptr);
     }
     void command(int id) {
         if (busy) return;
-        if (id == IDC_CANCEL_ACTION) { DestroyWindow(hwnd); return; }
+        if (id == IDC_CANCEL_ACTION) {
+            if (resultMode && (page == Page::result || page == Page::failure)) adapter.acknowledgeCompletion(resultId);
+            DestroyWindow(hwnd); return;
+        }
         if (id == IDCANCEL) {
             if (resultMode && (page == Page::result || page == Page::failure)) adapter.acknowledgeCompletion(resultId);
             DestroyWindow(hwnd); return;
@@ -430,7 +441,10 @@ struct Window {
             return;
         }
         if (id != IDC_ACTION) return;
-        if (resultMode) { adapter.acknowledgeCompletion(resultId); DestroyWindow(hwnd); return; }
+        if (resultMode) {
+            if (offerSetup) adapter.startTrayForCompletedOperation(resultId, true);
+            adapter.acknowledgeCompletion(resultId); DestroyWindow(hwnd); return;
+        }
         if (page == Page::home) {
             if (!installed) start(WizardAction::install);
             else {
@@ -527,15 +541,16 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
         if (!args) throw ComponentError(L"Cannot read command line.");
         std::wstring mode = count > 1 ? args[1] : L"";
         std::wstring transaction = count > 2 ? args[2] : L"";
+        const bool firstSetup = count == 4 && std::wstring_view(args[3]) == unlock_windows::desktop_app::kSetupRole;
         LocalFree(args);
         headless = sessionZero || mode == L"--resume-operation";
         Window window(modulePath());
         if (mode == L"--resume-operation") return transaction.empty() ? ERROR_INVALID_PARAMETER : resume(window.adapter, transaction);
         if (sessionZero) return ERROR_INVALID_PARAMETER;
-        window.resultMode = mode == L"--show-result"; window.resultId = transaction;
+        window.resultMode = mode == L"--show-result"; window.resultId = transaction; window.firstSetup = firstSetup;
         window.uninstallMode = mode == L"--uninstall";
         if ((!mode.empty() && !window.resultMode && !window.uninstallMode) ||
-            (window.resultMode && transaction.empty()) || (window.uninstallMode && count != 2))
+            (window.resultMode && (transaction.empty() || (count != 3 && !firstSetup))) || (window.uninstallMode && count != 2))
             throw ComponentError(L"Unsupported installer command line.");
         if (!window.resultMode && !window.adapter.environment().elevated) {
             SHELLEXECUTEINFOW request{sizeof(request)};

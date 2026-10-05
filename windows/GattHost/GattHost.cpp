@@ -815,17 +815,31 @@ public:
     }
     ~TrayHost() { close(); }
 
-    int run(HINSTANCE instance) {
+    int run(HINSTANCE instance, bool setup) {
         requireWin32(ProcessIdToSessionId(GetCurrentProcessId(), &session_), L"ProcessIdToSessionId");
         singleton_ = CreateMutexW(nullptr, FALSE, L"Local\\UnlockWindowsWithIPhone-GattHost");
         if (!singleton_) requireWin32(FALSE, L"CreateMutexW");
-        if (GetLastError() == ERROR_ALREADY_EXISTS) return 0;
+        if (GetLastError() == ERROR_ALREADY_EXISTS) {
+            if (setup) {
+                HWND existing = nullptr;
+                for (int attempt = 0; attempt < 40 && !existing; ++attempt) {
+                    existing = FindWindowW(unlock_windows::desktop_app::kTrayWindowClass, nullptr);
+                    if (!existing) Sleep(50);
+                }
+                if (!existing) throw std::runtime_error("The existing tray is not ready. Choose Continue setup from its menu.");
+                DWORD pid = 0, session = 0xffffffff;
+                GetWindowThreadProcessId(existing, &pid);
+                requireWin32(pid && ProcessIdToSessionId(pid, &session) && session == session_, L"Verify setup tray session");
+                requireWin32(PostMessageW(existing, unlock_windows::desktop_app::kSetupMessage, 0, 0), L"Request setup from tray");
+            }
+            return 0;
+        }
         loadTrayIcon(instance);
 
         WNDCLASSW windowClass{};
         windowClass.hInstance = instance;
         windowClass.hIcon = trayIcon_;
-        windowClass.lpszClassName = L"UnlockWindowsWithIPhoneGattHost";
+        windowClass.lpszClassName = unlock_windows::desktop_app::kTrayWindowClass;
         windowClass.lpfnWndProc = windowProcedure;
         requireWin32(RegisterClassW(&windowClass), L"RegisterClassW");
         window_ = CreateWindowExW(0, windowClass.lpszClassName, UNLOCK_PRODUCT_DISPLAY_NAME,
@@ -843,6 +857,7 @@ public:
             state_->record(L"GATT initialization: " + initializationError_, true);
         }
         reconcile(true);
+        if (setup) requireWin32(PostMessageW(window_, unlock_windows::desktop_app::kSetupMessage, 0, 0), L"Begin setup");
         MSG message{};
         BOOL result;
         while ((result = GetMessageW(&message, nullptr, 0, 0)) > 0) {
@@ -945,10 +960,15 @@ private:
         pairingOutcome_ = std::wstring(to_hstring(result));
         if (savedReloadFailed) pairingOutcome_ += job->remove ? L": registration removed, service reload failed" : L": registration saved, service reload failed";
         state_->record(L"Pairing finished: " + pairingOutcome_, savedReloadFailed || std::string_view(result) == "enrollment_error");
+        const bool guided = std::exchange(setupPairing_, false);
         if (job->session) {
             try { host_.enrollmentResult(job->session, result, savedReloadFailed); }
             catch (...) { state_->record(L"Pairing result notification: " + exceptionText(), true); }
         }
+        if (guided && !job->remove && !savedReloadFailed &&
+            (std::string_view(result) == "enrollment_saved" || std::string_view(result) == "enrollment_already_registered"))
+            MessageBoxW(window_, L"Setup is configured. Lock this PC to test iPhone unlock. Windows has not yet verified the saved password.",
+                L"Setup configured", MB_OK | MB_ICONINFORMATION);
     }
 
     void checkPairing() {
@@ -1311,12 +1331,81 @@ private:
         }
     }
 
+    void finishSetup(const unlock_windows::enrollment::Console& target) {
+        const auto current = unlock_windows::enrollment::queryConsole();
+        if (current.locked || current.session != target.session || current.sid != target.sid || closing_)
+            throw std::runtime_error("The setup console account changed. Continue setup from the target user's tray.");
+        const auto registration = unlock_windows::phone_approval::EnrollmentStore{}.load();
+        if (registration && registration->accountSid != target.sid)
+            throw std::runtime_error("The paired iPhone belongs to a different Windows account.");
+        if (registration) {
+            MessageBoxW(window_, L"A password copy and iPhone registration are present. Lock this PC to test iPhone unlock. Windows has not yet verified the saved password.",
+                L"Setup configured", MB_OK | MB_ICONINFORMATION);
+            return;
+        }
+        setupPairing_ = true;
+        startPairing();
+        if (!pairing_) setupPairing_ = false;
+    }
+
+    void continueSetup() {
+        if (setupPasswordPending_ || pairing_ || launchOutstanding_) return;
+        const auto target = unlock_windows::enrollment::queryConsole();
+        if (target.locked || target.session != session_ ||
+            target.sid != unlock_windows::phone_approval::EnrollmentStore::currentUserSid() ||
+            unlock_windows::enrollment::elevatedAdmin())
+            throw std::runtime_error("Continue setup as the ordinary unlocked physical console user.");
+        std::wstring executable(32768, L'\0');
+        const DWORD size = GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
+        if (!size || size >= executable.size()) throw std::runtime_error("Could not locate the saved password manager");
+        executable.resize(size);
+        const auto arguments = std::wstring(unlock_windows::desktop_app::kSavedPasswordRole) + L" " +
+            unlock_windows::desktop_app::kSetupRole;
+        setupPasswordPending_ = true;
+        try {
+            SHELLEXECUTEINFOW launch{sizeof(launch)};
+            launch.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
+            launch.lpVerb = L"runas"; launch.lpFile = executable.c_str(); launch.lpParameters = arguments.c_str();
+            launch.nShow = SW_SHOWNORMAL;
+            if (!ShellExecuteExW(&launch)) {
+                const auto error = GetLastError();
+                if (error == ERROR_CANCELLED) { setupPasswordPending_ = false; return; }
+                SetLastError(error); requireWin32(FALSE, L"Open saved password setup");
+            }
+            auto process = std::make_shared<unlock_windows::enrollment::Handle>();
+            process->value = launch.hProcess;
+            if (!process->value) throw std::runtime_error("Saved password setup returned no process handle");
+            std::thread([state = state_, this, process, target] {
+                DWORD code = static_cast<DWORD>(unlock_windows::desktop_app::SetupResult::error);
+                std::wstring error;
+                try {
+                    requireWin32(WaitForSingleObject(process->value, INFINITE) == WAIT_OBJECT_0, L"Wait for password setup");
+                    requireWin32(GetExitCodeProcess(process->value, &code), L"Read password setup result");
+                } catch (...) { error = exceptionText(); }
+                state->post([this, code, error, target] {
+                    setupPasswordPending_ = false;
+                    try {
+                        if (!error.empty()) throw std::runtime_error(winrt::to_string(error));
+                        if (code == static_cast<DWORD>(unlock_windows::desktop_app::SetupResult::credentialReady)) finishSetup(target);
+                        else if (code != static_cast<DWORD>(unlock_windows::desktop_app::SetupResult::cancelled))
+                            throw std::runtime_error("Password setup did not complete. Continue setup to retry.");
+                    } catch (...) {
+                        const auto message = exceptionText();
+                        state_->record(L"Setup: " + message, true);
+                        MessageBoxW(window_, message.c_str(), L"Setup needs attention", MB_OK | MB_ICONERROR);
+                    }
+                });
+            }).detach();
+        } catch (...) { setupPasswordPending_ = false; throw; }
+    }
+
     void menu() {
         HMENU popup = CreatePopupMenu();
         if (!popup) requireWin32(FALSE, L"CreatePopupMenu");
         struct MenuHandle final { HMENU value; ~MenuHandle() { DestroyMenu(value); } } handle{popup};
         requireWin32(AppendMenuW(popup, MF_STRING, 1, L"Status\u2026"), L"AppendMenuW");
-        const UINT available = pairing_ || launchOutstanding_ ? MF_GRAYED : 0;
+        const UINT available = pairing_ || launchOutstanding_ || setupPasswordPending_ ? MF_GRAYED : 0;
+        requireWin32(AppendMenuW(popup, MF_STRING | available, 8, L"Continue setup\u2026"), L"AppendMenuW");
         requireWin32(AppendMenuW(popup, MF_STRING | available, 4, L"Pair iPhone\u2026"), L"AppendMenuW");
         requireWin32(AppendMenuW(popup, MF_STRING | available, 5, L"Manage saved password\u2026"), L"AppendMenuW");
         requireWin32(AppendMenuW(popup, MF_STRING | available, 7, L"Remove paired iPhone\u2026"), L"AppendMenuW");
@@ -1332,6 +1421,7 @@ private:
         if (command == 4) startPairing();
         if (command == 5) manageSavedPassword();
         if (command == 7) startPairing(true);
+        if (command == 8) requireWin32(PostMessageW(window_, unlock_windows::desktop_app::kSetupMessage, 0, 0), L"Continue setup");
         requireWin32(PostMessageW(window_, WM_NULL, 0, 0), L"PostMessageW(WM_NULL)");
     }
 
@@ -1379,6 +1469,14 @@ private:
                 self->trayAdded_ = false; self->addTray(); return 0;
             }
             switch (message) {
+            case unlock_windows::desktop_app::kSetupMessage:
+                try { self->continueSetup(); }
+                catch (...) {
+                    const auto error = exceptionText();
+                    self->state_->record(L"Setup: " + error, true);
+                    MessageBoxW(window, error.c_str(), L"Setup needs attention", MB_OK | MB_ICONERROR);
+                }
+                return 0;
             case kDispatch: self->dispatch(); return 0;
             case WM_TIMER: self->dispatch(); return 0;
             case WM_WTSSESSION_CHANGE:
@@ -1436,19 +1534,21 @@ private:
     std::wstring initializationError_;
     std::shared_ptr<Pairing> pairing_;
     bool launchOutstanding_ = false;
+    bool setupPasswordPending_ = false;
+    bool setupPairing_ = false;
     std::wstring helperPath_;
     std::wstring pairingOutcome_;
 };
 
 } // namespace
 
-int unlock_windows::desktop_app::runTray(HINSTANCE instance) {
+int unlock_windows::desktop_app::runTray(HINSTANCE instance, bool setup) {
     try {
         unlock_windows::desktop_ui::initialize();
         init_apartment(apartment_type::multi_threaded);
         struct Apartment final { ~Apartment() { uninit_apartment(); } } apartment;
         TrayHost app;
-        return app.run(instance);
+        return app.run(instance, setup);
     } catch (...) {
         const auto error = exceptionText();
         MessageBoxW(nullptr, error.c_str(), L"Could not start phone connectivity", MB_OK | MB_ICONERROR);

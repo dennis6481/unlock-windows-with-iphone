@@ -1,6 +1,7 @@
 // Created by Rui MA on 26 Sep 2026
 
 #include "EnrollmentStore.h"
+#include "../DesktopApp/DesktopApp.h"
 #include "EnrollmentSession.h"
 #include "EnrollmentChannel.h"
 #include "../Resources/resource.h"
@@ -280,8 +281,9 @@ private:
     std::string error_;
 };
 
-ExitCode enroll(int argc, wchar_t* argv[], bool bluetooth) {
-    if (!elevatedAdmin()) throw std::runtime_error("Run PairingTool as an elevated administrator");
+ExitCode enroll(wchar_t* argv[], const unlock_windows::desktop_app::Launch& launch) {
+    const bool bluetooth = launch.role == unlock_windows::desktop_app::Role::bluetoothEnrollment;
+    if (!elevatedAdmin()) throw std::runtime_error("Run the enrollment role as an elevated administrator");
     EnrollmentWriter writer;
     if (writer.busy()) return ExitCode::busy;
     EnrollmentStore store;
@@ -297,10 +299,8 @@ ExitCode enroll(int argc, wchar_t* argv[], bool bluetooth) {
     std::unique_ptr<EnrollmentChannel> channel;
     bool replace = false;
     std::vector<std::uint8_t> publicKey;
-    const bool clear = bluetooth ? argc == 9 && std::wstring_view(argv[3]) == L"remove" :
-        argc == 2 && std::wstring_view(argv[1]) == L"--clear";
+    const bool clear = bluetooth ? std::wstring_view(argv[3]) == L"remove" : launch.clear;
     if (bluetooth) {
-        if (argc != 9) throw std::invalid_argument("Invalid Bluetooth enrollment arguments");
         if (clear) {
             if (std::wstring_view(argv[2]) != L"clear") throw std::invalid_argument("Invalid removal arguments");
         }
@@ -343,15 +343,8 @@ ExitCode enroll(int argc, wchar_t* argv[], bool bluetooth) {
             confirmation.channel = channel.get();
         }
     } else if (!clear) {
-        const std::wstring_view command(argv[1]);
-        const bool clipboard = command == L"--key-clipboard";
-        const bool hex = command == L"--key-hex";
-        const int expected = clipboard ? 2 : 3;
-        if ((!clipboard && !hex) || argc < expected || argc > expected + 1)
-            throw std::invalid_argument("Usage: --key-hex <key> [--replace], --key-clipboard [--replace], or --clear");
-        replace = argc == expected + 1;
-        if (replace && std::wstring_view(argv[expected]) != L"--replace") throw std::invalid_argument("Expected --replace");
-        publicKey = parsePublicKey(clipboard ? clipboardText() : std::wstring(argv[2]));
+        replace = launch.replace;
+        publicKey = parsePublicKey(launch.clipboard ? clipboardText() : std::wstring(argv[2]));
     }
     if (const auto code = confirmation.check(); code != ExitCode::saved) return code;
     const auto original = store.load();
@@ -420,20 +413,18 @@ ExitCode enroll(int argc, wchar_t* argv[], bool bluetooth) {
 }
 }
 
-int wmain(int argc, wchar_t* argv[]) {
-    const bool bluetooth = argc >= 2 && std::wstring_view(argv[1]) == L"--bluetooth";
+int unlock_windows::desktop_app::runEnrollment(wchar_t* argv[], const Launch& launch) {
+    const bool bluetooth = launch.role == Role::bluetoothEnrollment;
     try {
-        if (bluetooth && GetConsoleWindow()) require(FreeConsole(), "FreeConsole");
-        if (argc < 2) throw std::invalid_argument("Specify --key-hex, --key-clipboard or --clear");
-        const auto result = enroll(argc, argv, bluetooth);
+        const auto result = enroll(argv, launch);
         if (!bluetooth) std::cout << "Enrollment exit code: " << static_cast<DWORD>(result) << '\n';
         return static_cast<int>(result);
     } catch (const EnrollmentAborted& error) {
-        OutputDebugStringW((L"PairingTool: enrollment ended, exit code=" +
+        OutputDebugStringW((L"Enrollment role: enrollment ended, exit code=" +
             std::to_wstring(static_cast<DWORD>(error.code)) + L"\n").c_str());
         return static_cast<int>(error.code);
     } catch (const std::exception& error) {
-        std::cerr << "[PairingTool] " << error.what() << '\n';
+        std::cerr << "[Unlock with iPhone] " << error.what() << '\n';
         const std::string message(error.what());
         MessageBoxW(nullptr, std::wstring(message.begin(), message.end()).c_str(), L"Phone enrollment failed", MB_OK | MB_ICONERROR);
         return static_cast<int>(ExitCode::error);

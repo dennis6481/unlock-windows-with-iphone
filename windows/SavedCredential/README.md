@@ -30,11 +30,11 @@ reportPhoneFailure 保留 `36 字节 requestID + 1 字节原因`，原因 1–6 
 
 ## 密码管理
 
-从托盘 **Manage saved password…** 或开始菜单打开，正常请求 UAC，仅在已解锁控制台操作。目标是控制台用户，不是提权管理员。
+从托盘 **Manage saved password…** 打开，同一 `UnlockWithIPhone.exe --saved-password` 角色请求一次 UAC，仅在已解锁控制台操作。不部署独立密码管理 EXE，不创建开始菜单项。目标是控制台用户，不是提权管理员。
 
 首次设置／更新：先锁屏，再以原生 PIN／密码返回桌面；Refresh 核对账户，Save password… 或 Update saved password…。服务身份快照保留五分钟；失效时需重复原生锁屏／解锁，不读取诊断文件或拼接 online identity。
 
-Remove saved password… 确认后清除本机副本；Close 关闭工具。SID、QualifiedUserName、ProviderID 和错误码在 Technical details。工具不修改 Windows／Microsoft Account 密码。
+Remove saved password… 确认后清除本机副本；Close 只关闭该操作实例，不退出普通用户托盘。SID、QualifiedUserName、ProviderID 和错误码在 Technical details。工具不修改 Windows／Microsoft Account 密码。
 
 ## 删除与验收
 

@@ -1,8 +1,10 @@
 // Created by Rui MA on 30 Sep 2026
 
 #include "SavedCredentialIpc.h"
+#include "../DesktopApp/DesktopApp.h"
 #include "../Resources/resource.h"
 #include "../Resources/DesktopUi.h"
+#include "../Enrollment/EnrollmentSession.h"
 
 #include <objbase.h>
 #include <wincred.h>
@@ -39,17 +41,6 @@ UiState gUi;
 
 void showError(const HWND parent, const wchar_t* message) {
     MessageBoxW(parent, message, L"Saved Windows password", MB_OK | MB_ICONERROR);
-}
-
-bool elevated() {
-    HANDLE token = nullptr;
-    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return false;
-    TOKEN_ELEVATION elevation{};
-    DWORD bytes = 0;
-    const bool okay = GetTokenInformation(token, TokenElevation, &elevation,
-        sizeof(elevation), &bytes) && elevation.TokenIsElevated;
-    CloseHandle(token);
-    return okay;
 }
 
 bool refresh(const HWND window) {
@@ -278,8 +269,8 @@ INT_PTR CALLBACK windowProcedure(const HWND window, const UINT message, const WP
 
 } // namespace
 
-int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, LPWSTR, int show) {
-    if (!elevated()) {
+int unlock_windows::desktop_app::runSavedPassword(const HINSTANCE instance, int show) {
+    if (!unlock_windows::enrollment::elevatedAdmin()) {
         MessageBoxW(nullptr, L"Run the saved-credential manager as administrator on the physical console.",
             L"Saved Windows password", MB_OK | MB_ICONERROR);
         return 1;

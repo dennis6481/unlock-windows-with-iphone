@@ -1,8 +1,8 @@
 <!-- Created by Rui MA on 26 Sep 2026 -->
 
-# GATT host
+# 主应用后台模块
 
-`unlock_gatt_host.exe` 是控制台普通用户的单实例托盘 BLE transport，不持有密码、不自行形成可信批准。安装后由目标用户 Run 在登录后启动；首次登录使用原生 PIN／密码。
+`UnlockWithIPhone.exe` 的无参数角色是控制台普通用户的单实例托盘 BLE transport，不持有密码、不自行形成可信批准。安装后由目标用户 Run 在登录后启动；首次登录使用原生 PIN／密码。
 
 ## 生命周期与认证
 
@@ -22,9 +22,11 @@ request 接受失败帧 `0x03 + requestID + 原因` 和固定 37 字节的 `0x04
 
 - **Status…**：当前连接、广播及登记；Refresh 核对当前状态，Technical details 展示历史诊断。
 - **Pair iPhone…**：统一首次、重复和替换入口。
-- **Manage saved password…**：安装目录密码管理工具，请求 UAC。
+- **Manage saved password…**：同一主程序的密码管理角色，请求一次 UAC。
 - **Remove paired iPhone…**：删除公钥登记，不删除密码、ComputerId 或系统蓝牙配对。
 - **Quit**：停止广播、撤销事件、清理配对／异步请求并退出。
+
+普通角色拒绝管理员提权运行；关闭操作窗口不退出托盘。角色分派见 [主应用](../README.md)。
 
 历史错误不覆盖恢复后的当前状态。托盘注册失败明确记录，等待任务栏事件和定期重试，不增加无限进程重启。
 
@@ -35,7 +37,7 @@ request 接受失败帧 `0x03 + requestID + 原因` 和固定 37 字节的 `0x04
 3. 同一手机及账户确认已登记，不重写文件；不同手机只有明确确认才替换原登记。
 4. 取消、超时、断连、锁屏、会话变化、睡眠或退出终止操作；提交前检查原记录未变。
 
-两分钟从点击开始，不因 UAC 或候选到达延长。host／工具保持同目录。保存后加载失败明确报告已保存但服务加载失败，不假装回滚。详见 [PairingTool](../PairingTool/README.md)。
+两分钟从点击开始，不因 UAC 或候选到达延长。配对窗口由同一主程序的临时提权角色承接。保存后加载失败明确报告已保存但服务加载失败，不假装回滚。详见 [登记模块](../Enrollment/README.md)。
 
 ## 实体机验收记录与待验证项
 
@@ -50,7 +52,7 @@ request 接受失败帧 `0x03 + requestID + 原因` 和固定 37 字节的 `0x04
 获授权的诊断启动命令从仓库根目录执行；不要与已安装托盘同时运行：
 
 ```powershell
-& '.\windows\build\unlock_gatt_host.exe'
+& '.\windows\build\UnlockWithIPhone.exe'
 ```
 
 ## 参考资料

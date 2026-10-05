@@ -2,16 +2,16 @@
 
 # Windows Setup
 
-发布安装包名为 **UnlockWithIPhone_<版本号>_setup.exe**，构建时自动读取 [ProductVersion.h](../ProductVersion.h)；暂存及正式维护程序仍为 **setup.exe**，产品版本从 **0.1.0** 开始。六个正式组件的固定名称由 [ComponentFiles.h](../ComponentFiles.h) 定义。安装 schema、阶段／操作、注册表路径和值名、任务／维护互斥／事件及结果快照布局唯一来源为 [SetupContract.h](SetupContract.h)；C++ 直接使用，内嵌 PowerShell 从它生成所需参数和字段顺序。本轮是发布前源码整理，未构建、安装或运行回归。
+发布安装包名为 **UnlockWithIPhone_<版本号>_setup.exe**，构建时自动读取 [ProductVersion.h](../ProductVersion.h)；暂存及正式维护程序仍为 **setup.exe**，产品版本从 **0.1.0** 开始。四个正式组件的固定名称由 [ComponentFiles.h](../ComponentFiles.h) 定义。安装 schema、阶段／操作、注册表路径和值名、任务／维护互斥／事件及结果快照布局唯一来源为 [SetupContract.h](SetupContract.h)；C++ 直接使用，内嵌 PowerShell 从它生成所需参数和字段顺序。本轮是发布前源码整理，未构建、安装或运行回归。
 
 ## 正式部署与维护入口
 
 | 位置 | 内容 |
 |---|---|
 | System32 | Credential Provider DLL、自动 LocalSystem 凭据服务 |
-| Program Files / Unlock Windows with iPhone | GATT 托盘、PairingTool、密码管理器、setup.exe |
+| Program Files / Unlock Windows with iPhone | UnlockWithIPhone.exe、setup.exe |
 | ProgramData / UnlockWindowsWithIPhone / Setup / Transactions / 事务 ID | 仅进行中的受保护事务暂存 |
-| Windows 设置：已安装的应用／应用和功能 | 单个 Unlock Windows with iPhone® 条目及产品版本 |
+| Windows 设置：已安装的应用／应用和功能 | 单个 Unlock with iPhone® 条目及产品版本 |
 
 不创建开始菜单快捷方式。密码管理保留托盘入口；更新运行新包中的带版本安装器。安装包命名模式唯一来源为 CMake 的 UNLOCK_SETUP_OUTPUT_NAME，只读诊断读取该模式及产品版本，不另外维护命名规则。产品目录及暂存目录要求管理员／SYSTEM 所有，禁止普通用户写入；重解析点或不安全 ACL 明确拒绝。
 
@@ -21,21 +21,21 @@
 
 ## 版本与确认
 
-六个组件都带同源的三段产品版本，PE 数字版本第四段固定为零。包内架构及版本必须一致；已安装文件版本必须符合安装记录。缺失／混合版本报错，不猜测版本。
+四个组件都带同源的三段产品版本，PE 数字版本第四段固定为零。包内架构及版本必须一致；已安装文件版本必须符合安装记录。缺失／混合版本报错，不猜测版本。
 
-- 新包版本较高：Update，替换六个固定目标。
+- 新包版本较高：Update，替换四个固定目标。
 - 相同：显示 Reinstall，仍需用户进入确认页再执行。
 - 较低：拒绝降级；卸载入口仍可使用。
 - Update／Reinstall 保留密码、手机公钥登记及 ComputerId。
 - Uninstall 清除 Windows 密码副本、手机公钥登记及安装用户 ComputerId。iPhone 的私钥和保存电脑记录由用户在手机端删除。
 
-当前无版本、旧 schema 或旧 System32 工具布局不迁移。切换到本版前，先用当前已安装的旧维护工具完成卸载；旧卸载器的保留数据和暂存残留需要独立核验处理，不能认为新源码已改变旧二进制行为。
+当前安装契约 schema 为 5；无版本、旧 schema、旧六组件或旧 System32 工具布局均不迁移，旧待办事务也不由新安装器续办。切换到本版前，先用当前已安装的旧维护工具完成卸载；旧卸载器的保留数据和暂存残留需要独立核验处理，不能认为新源码已改变旧二进制行为。
 
 ## 事务与退出收尾
 
 开始操作前重新查询系统，共用维护决策。先持久登记事务及目标路径，再创建目录、写暂存文件。准备失败保留归属和原始错误；只允许继续同一事务，不自动猜测式删除或回滚。
 
-Update／Uninstall 先移除 Run，持有已核验的托盘及配对工具进程句柄，请求正常退出；30 秒未退出则暂停，不强杀。更新停用 CP、停止服务，实际重启后逐文件替换固定目标并逐字节验证，恢复服务、CP、Run。卸载先取得服务密码清除确认，重启后删除组件及登记数据。
+Update／Uninstall 先移除 Run，按已安装主程序的实际路径固定所有实例句柄，核对托盘用户／session 后请求托盘正常退出；配对随托盘取消，密码管理和手工操作须完成或关闭。逐实例等待 30 秒，仍运行或重新启动实例则暂停，不强杀，不报告文件已释放。更新停用 CP、停止服务，实际重启后逐文件替换固定目标并逐字节验证，恢复服务、CP、Run。卸载先取得服务密码清除确认，重启后删除组件及登记数据。
 
 安装与更新共用事务类的私有 finishDeployment：记录安装版本、注册桌面集成、验证版本与完整安装，再写入 finalizing。各自的部署步骤、操作文案和失败持久化保留。未定义阶段（包括已删除的编号 1、5）明确拒绝；当前有效阶段编号保持不变。
 
@@ -61,7 +61,7 @@ Update／Uninstall 先移除 Run，持有已核验的托盘及配对工具进程
 
 获授权后验证：
 
-1. 全新安装：六个版本一致，正式路径正确，单个应用条目，原生 PIN／密码首次登录、Run 与托盘管理正常。
+1. 全新安装：四个版本一致，正式路径正确，单个应用条目，原生 PIN／密码首次登录、Run 与托盘管理正常。
 2. 同版本 Reinstall、较高版本 Update、较低版本拒绝，确认取消／UAC 取消均不改数据。
 3. 连续更新至少五次，只有一套正式文件；Finish 后不存在事务目录、替换临时文件或一次性任务。
 4. 暂存中断、错误版本／架构、写入及替换失败、进程未退出、收尾删除失败与重启续办；归属可查，错误不被成功提示覆盖。

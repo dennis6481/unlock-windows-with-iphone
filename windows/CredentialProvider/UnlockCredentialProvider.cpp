@@ -46,7 +46,7 @@ struct FieldDefinition final {
 
 const FieldDefinition kFields[] = {
     {kIconField, CPFT_TILE_IMAGE, nullptr, CPFG_CREDENTIAL_PROVIDER_LOGO},
-    {kTitleField, CPFT_LARGE_TEXT, L"Unlock with iPhone\u00ae", GUID{}},
+    {kTitleField, CPFT_LARGE_TEXT, UNLOCK_PRODUCT_DISPLAY_NAME, GUID{}},
     {kSubmitField, CPFT_SUBMIT_BUTTON, L"Unlock", GUID{}},
 };
 
@@ -530,7 +530,7 @@ public:
                 *value = nullptr;
                 return S_OK;
             case kTitleField:
-                return copyString(L"Unlock with iPhone\u00ae", value);
+                return copyString(UNLOCK_PRODUCT_DISPLAY_NAME, value);
             default:
                 if (value != nullptr) {
                     *value = nullptr;
@@ -623,7 +623,7 @@ public:
     void showAuthenticationStatus(const std::wstring& text) {
         if (events_ != nullptr) {
             const HRESULT result = events_->SetFieldString(this, kTitleField,
-                text.empty() ? L"Unlock with iPhone\u00ae" : text.c_str());
+                text.empty() ? UNLOCK_PRODUCT_DISPLAY_NAME : text.c_str());
             if (FAILED(result)) logAutoSubmitError(L"authentication status field", result);
         }
     }

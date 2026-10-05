@@ -1,6 +1,6 @@
 <!-- Created by Rui MA on 26 Sep 2026 -->
 
-# Unlock Windows with iPhone®
+# Unlock with iPhone®
 
 这个项目用 iPhone 的 Secure Enclave 私钥证明手机身份，并在 Windows 已有会话的锁屏界面消费一次性授权。
 
@@ -9,6 +9,12 @@
 这仍是原型，不是已验收的后台自动解锁产品。2026-10-02 已将同一 Windows GATT host 改为带托盘、无终端的普通用户进程，仅在确认当前物理控制台锁定时广播。用户反馈测试动作均符合预期，唯一报告的问题是实际解锁、广播停止后托盘仍显示“错误”；该提示逻辑已修正，2026-10-02 用户确认最新提示修正回归成功。第一阶段五轮专项验收记录仍待补齐。登录任务和安装器重构已接入代码，按用户要求跳过验证；本轮未构建、安装或实测。此前 host 实测记录为手动启动，iPhone App 保持前台；身份变化与部分拒绝路径尚未完成验收。重启后首次登录明确不支持手机登录：不显示自定义磁贴，使用原生登录方式；手机解锁只用于已有会话再次锁屏。
 
 2026-10-02 冻结记录（用户实体机实测反馈）：手机批准后的自动解锁通过；再次锁屏且不发起手机批准时保持锁定，重新手机批准后再次自动解锁，原生 PIN/密码仍可用。Components Wizard 的 Update 更新流程也已确认通过。冻结范围为“前台 iPhone 批准 → 自动解锁已有会话 + 安装器正常更新”，不代表完整负面测试或生产级更新恢复已通过。
+
+## Windows 产物收敛（2026-10-05，源码待验收）
+
+三个用户态程序收敛为 **UnlockWithIPhone.exe**：普通托盘／BLE 后台、临时提权配对、临时提权密码管理及手工登记共用同一产物，角色互斥，权限检查保留。Service、Credential Provider DLL 与 setup.exe 独立，共四个产品组件。现有 Win32 窗口继续使用，本阶段没有 Dashboard／WinUI，不修改 iOS、BLE 协议或认证合同。
+
+安装契约 schema 为 5，旧六组件安装及旧事务不兼容；先用原版本工具卸载，再全新安装，不增加迁移或历史清理分支。自启指向新主程序；维护等待所有已安装主程序实例结束，不强杀。源码完成不代表运行验收通过；未构建、执行编译型测试、打包或安装。收敛验收通过后才设计并接入现代界面。[主应用与角色](windows/README.md)、[安装约定](windows/ComponentsWizard/README.md)、[验收记录](windows/Validation.md#产物收敛2026-10-05源码待验收)。
 
 ## 当前边界
 
@@ -34,7 +40,7 @@ Windows 安装包构建命名为 `UnlockWithIPhone_<版本号>_setup.exe`，当�
 - Windows 密码由专用 LocalSystem 服务使用自身 user scope 的 DPAPI 保存，不使用 `CRYPTPROTECT_LOCAL_MACHINE`；Credential Provider 只能在有效手机授权窗口内领取一次。
 - Credential Provider 不提供手输密码输入框，也没有绕过手机批准的测试开关。
 - 当前分支不包含自定义 LSA Authentication Package。此前的无密码 token 构造研究没有形成可用产品路径，相关探针和兼容层已经移除。
-- 公钥登记必须在已解锁控制台由用户主动开启配对，立即处理一次 UAC，等待窗口就绪后再经 BLE 发送公钥，在同一 `unlock_pairing_tool` 窗口核对完整指纹并确认。正常模式拒绝蓝牙登记；Windows 交互已获用户符合预期的反馈；iPhone 与完整蓝牙登记专项测试暂缓，手工登记工具仍可使用。
+- 公钥登记必须在已解锁控制台由用户主动开启配对，立即处理一次 UAC，等待窗口就绪后再经 BLE 发送公钥，在同一主应用提权配对窗口核对完整指纹并确认。正常模式拒绝蓝牙登记；Windows 交互已获用户符合预期的反馈；iPhone 与完整蓝牙登记专项测试暂缓，手工登记工具仍可使用。
 - 安装、更新、卸载和失败恢复只由原生 Components Wizard 管理；Update 保留密码与公钥，重启后续办替换，正常更新流程已由用户确认通过，[步骤见 Windows 文档](windows/README.md#安装更新与卸载)。没有 PowerShell 安装兼容层，也没有跳过凭据清除确认的 emergency removal。
 
 ## Windows 组件
@@ -42,14 +48,16 @@ Windows 安装包构建命名为 `UnlockWithIPhone_<版本号>_setup.exe`，当�
 整体架构 Mermaid 流程图、信任边界及跨端消息格式统一见 [Protocol.md](Protocol.md#整体架构流程图)。
 
 - `windows/GattHost`：暴露五个 GATT characteristic，转送 CP 发起的认证，并提供 ComputerId；本地主动开启的配对窗口接收 `0x02 + 公钥`，不再接受旧 `0x01` 认证请求。停止广播时不主动断开连接。原锁屏广播和提示修正已获用户预期反馈，新增 Windows 交互已获用户确认；完整蓝牙登记验收暂缓。
-- `windows/SavedCredential`：LocalSystem 服务、IPC、凭据保管和暂时保留的密码管理 GUI。
+- `windows/SavedCredential`：LocalSystem 服务、IPC、凭据保管和主应用内的密码管理 GUI。
 - `windows/CredentialProvider`：绑定当前控制台用户，只消费手机批准后的保存凭据。
 - `windows/PhoneApproval`：当前服务使用的签名验证核心与登记存储；不是独立 host。
-- `windows/PairingTool`：管理员确认公钥登记、刷新服务中的登记状态。
+- `windows/Enrollment`：主应用的管理员登记模块，确认公钥登记、刷新服务中的登记状态。
 - `windows/ComponentsWizard`：安装、更新、卸载、重启后续办和事务恢复。
 - `windows/Protocol`：跨平台签名载荷与 Windows CNG 验签。
 
-## 当前已验证流程
+## 历史已验证流程（旧六组件版本）
+
+以下保留当时实际使用的程序名，不是当前安装步骤；收敛版本须按上方主应用和验收文档重新验证。
 
 1. 使用 Components Wizard 安装 `unlock_saved_credential_service` 和 Credential Provider。
 2. 在已解锁的物理控制台，以管理员身份运行 `unlock_saved_credential_manager`：点击 **Refresh**，然后设置或更新当前账户的实际 Microsoft Account 密码。
@@ -137,7 +145,7 @@ This project is licensed under the MIT License. See [LICENSE.md](LICENSE.md).
 
 ## Windows 程序图标
 
-所有 CMake EXE 目标（包括服务、管理器、GATT host、PairingTool、Components Wizard 和测试程序）统一嵌入由 iOS `Assets.xcassets/AppIcon.appiconset/Contents.json` 中无 `appearances` 的标准图标 派生的 `windows/Resources/AppIcon.ico`。ICO 包含 16、24、32、48、64、128、256 像素尺寸；GUI 窗口及 GATT 托盘也使用同一图标资源。Windows ICO（16/24/32/48/64/128/256）与 CP 的 72×72 位图直接从该标准图像派生并提交，EXE 和 CP DLL 内嵌资源；不新增生成脚本。根目录旧 `icon.png` 保留但不再作为当前资源来源。修改标准图像时须同步更新两个派生资源，再在获得构建授权后构建。运行和部署不需要外置 PNG 或 ICO。
+所有 CMake EXE 目标（包括服务、主应用、Components Wizard 和测试程序）统一嵌入由 iOS `Assets.xcassets/AppIcon.appiconset/Contents.json` 中无 `appearances` 的标准图标 派生的 `windows/Resources/AppIcon.ico`。ICO 包含 16、24、32、48、64、128、256 像素尺寸；GUI 窗口及 GATT 托盘也使用同一图标资源。Windows ICO（16/24/32/48/64/128/256）与 CP 的 72×72 位图直接从该标准图像派生并提交，EXE 和 CP DLL 内嵌资源；不新增生成脚本。根目录旧 `icon.png` 保留但不再作为当前资源来源。修改标准图像时须同步更新两个派生资源，再在获得构建授权后构建。运行和部署不需要外置 PNG 或 ICO。
 
 2026-10-02：图标资源已接入，ICO 内容与 EXE 目标覆盖已做静态检查；本次未构建或运行，新 EXE 图标及窗口显示仍待验证。
 

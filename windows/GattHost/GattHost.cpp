@@ -1,13 +1,13 @@
 // Created by Rui MA on 26 Sep 2026
 
+#include "../Resources/resource.h"
 #include "SavedCredentialIpc.h"
 #include "AdvertisingLifecycle.h"
 #include "TransportReadiness.h"
-#include "../ComponentFiles.h"
+#include "../DesktopApp/DesktopApp.h"
 #include "EnrollmentStore.h"
-#include "../PairingTool/EnrollmentSession.h"
-#include "../PairingTool/EnrollmentChannel.h"
-#include "../Resources/resource.h"
+#include "../Enrollment/EnrollmentSession.h"
+#include "../Enrollment/EnrollmentChannel.h"
 #include "../Resources/DesktopUi.h"
 
 #include <Windows.h>
@@ -828,7 +828,7 @@ public:
         windowClass.lpszClassName = L"UnlockWindowsWithIPhoneGattHost";
         windowClass.lpfnWndProc = windowProcedure;
         requireWin32(RegisterClassW(&windowClass), L"RegisterClassW");
-        window_ = CreateWindowExW(0, windowClass.lpszClassName, L"Unlock Windows with iPhone\u00ae",
+        window_ = CreateWindowExW(0, windowClass.lpszClassName, UNLOCK_PRODUCT_DISPLAY_NAME,
             0, 0, 0, 0, 0, nullptr, nullptr, instance, this);
         if (!window_) requireWin32(FALSE, L"CreateWindowExW");
         state_->window = window_;
@@ -887,10 +887,10 @@ private:
             const DWORD size = GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
             if (!size || size >= executable.size()) throw std::runtime_error("GetModuleFileNameW failed");
             executable.resize(size);
-            const auto helper = std::filesystem::path(executable).parent_path() / unlock::components::kPairingToolFile;
+            const std::filesystem::path helper(executable);
             const DWORD attributes = GetFileAttributesW(helper.c_str());
             if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY))
-                throw std::runtime_error("The pairing helper must exist beside the GATT host");
+                throw std::runtime_error("The main application executable is unavailable");
             auto job = std::make_shared<Pairing>();
             job->target = target;
             job->deadline = GetTickCount64() + unlock_windows::enrollment::kPairingLifetime;
@@ -922,7 +922,7 @@ private:
             pairingOutcome_ = L"";
             state_->record(L"Pairing opened by local user; fixed 120-second lifetime", false);
             reconcile(true);
-            if (pairing_ == job) launchHelper(job, L"--bluetooth " + (remove ? std::wstring(L"clear remove ") :
+            if (pairing_ == job) launchHelper(job, std::wstring(unlock_windows::desktop_app::kBluetoothRole) + L" " + (remove ? std::wstring(L"clear remove ") :
                 job->channelName + L" pair ") + lifetimeArguments(job));
         } catch (...) {
             const auto error = exceptionText();
@@ -963,7 +963,7 @@ private:
             try {
                 if (!pairing_->helperReady && pairing_->channel->ready(pairing_->helperPid)) {
                     pairing_->helperReady = true;
-                    state_->record(L"PairingTool ready; desktop pairing advertising enabled", false);
+                    state_->record(L"Pairing role ready; desktop pairing advertising enabled", false);
                 }
                 pairing_->channel->checkWrite();
             } catch (...) {
@@ -1003,24 +1003,24 @@ private:
                         if (!ShellExecuteExW(&launch)) {
                             const DWORD win32 = GetLastError();
                             if (win32 == ERROR_CANCELLED) code = static_cast<DWORD>(unlock_windows::enrollment::ExitCode::cancelled);
-                            else throw hresult_error(HRESULT_FROM_WIN32(win32), L"ShellExecuteExW(PairingTool)");
+                            else throw hresult_error(HRESULT_FROM_WIN32(win32), L"ShellExecuteExW(pairing role)");
                         } else {
                             unlock_windows::enrollment::Handle process;
                             process.value = launch.hProcess;
-                            if (!process.value) throw std::runtime_error("PairingTool returned no process handle");
+                            if (!process.value) throw std::runtime_error("Pairing role returned no process handle");
                         const DWORD helperPid = GetProcessId(process.value);
-                        requireWin32(helperPid != 0, L"GetProcessId(PairingTool)");
+                        requireWin32(helperPid != 0, L"GetProcessId(pairing role)");
                         state->post([this, job, helperPid] {
                             if (pairing_ == job) job->helperPid = helperPid;
                         });
-                            if (WaitForSingleObject(process.value, INFINITE) == WAIT_FAILED) requireWin32(FALSE, L"WaitForSingleObject(PairingTool)");
-                            requireWin32(GetExitCodeProcess(process.value, &code), L"GetExitCodeProcess(PairingTool)");
+                            if (WaitForSingleObject(process.value, INFINITE) == WAIT_FAILED) requireWin32(FALSE, L"WaitForSingleObject(pairing role)");
+                            requireWin32(GetExitCodeProcess(process.value, &code), L"GetExitCodeProcess(pairing role)");
                         }
                     }
                 } catch (...) { error = exceptionText(); }
                 state->post([this, state, job, code, error] {
                     launchOutstanding_ = false;
-                    if (!error.empty()) state->record(L"PairingTool launch: " + error, true);
+                    if (!error.empty()) state->record(L"Enrollment role launch: " + error, true);
                     if (pairing_ != job) {
                         if (code == static_cast<DWORD>(unlock_windows::enrollment::ExitCode::savedReloadFailed)) {
                             pairingOutcome_ = job->remove ? L"Registration removed, service reload failed; operation window closed afterward" :
@@ -1032,7 +1032,7 @@ private:
                         }
                         if (code == static_cast<DWORD>(unlock_windows::enrollment::ExitCode::saved) ||
                             code == static_cast<DWORD>(unlock_windows::enrollment::ExitCode::alreadyRegistered))
-                            state->record(L"PairingTool committed before cancellation was observed; verify current enrollment", true);
+                            state->record(L"Enrollment role committed before cancellation was observed; verify current enrollment", true);
                         return;
                     }
                     using unlock_windows::enrollment::ExitCode;
@@ -1271,7 +1271,7 @@ private:
         config.hwndParent = window_;
         config.hInstance = GetModuleHandleW(nullptr);
         config.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_EXPAND_FOOTER_AREA;
-        config.pszWindowTitle = L"Unlock Windows with iPhone\u00ae";
+        config.pszWindowTitle = UNLOCK_PRODUCT_DISPLAY_NAME;
         config.pszMainInstruction = L"iPhone unlock status";
         config.pszContent = summary.c_str();
         config.pszExpandedInformation = details.c_str();
@@ -1292,10 +1292,11 @@ private:
             const auto size = GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
             if (!size || size >= executable.size()) throw std::runtime_error("Could not locate installed tools");
             executable.resize(size);
-            const auto tool = std::filesystem::path(executable).parent_path() / unlock::components::kCredentialManagerFile;
+            const std::filesystem::path tool(executable);
             SHELLEXECUTEINFOW request{sizeof(request)};
             request.lpVerb = L"runas";
             request.lpFile = tool.c_str();
+            request.lpParameters = unlock_windows::desktop_app::kSavedPasswordRole;
             request.nShow = SW_SHOWNORMAL;
             if (!ShellExecuteExW(&request)) {
                 const auto error = GetLastError();
@@ -1441,7 +1442,7 @@ private:
 
 } // namespace
 
-int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
+int unlock_windows::desktop_app::runTray(HINSTANCE instance) {
     try {
         unlock_windows::desktop_ui::initialize();
         init_apartment(apartment_type::multi_threaded);

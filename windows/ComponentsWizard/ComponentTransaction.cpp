@@ -56,7 +56,7 @@ OperationResult ComponentTransaction::prepare(WizardState& state, const Progress
             adapter_.createCredentialProviderRegistration(adapter_.credentialProviderTarget());
             state.phase = WizardPhase::installPendingReboot;
         } else {
-            report(progress, 50, L"Remove Run startup and wait for normal tray and pairing-tool exit.");
+            report(progress, 50, L"Remove Run startup and wait for normal main application and operation exit.");
             adapter_.stopTray(state); adapter_.removeCredentialProviderRegistration();
             if (state.operation == SetupOperation::uninstall) {
                 adapter_.removeDesktopIntegration(); adapter_.removeSavedCredentialService();
@@ -161,7 +161,7 @@ OperationResult ComponentTransaction::completeUpdate(const ProgressCallback& pro
         state->phase = WizardPhase::updating; adapter_.writeState(*state);
         adapter_.stopTray(*state); adapter_.removeCredentialProviderRegistration();
         adapter_.configureSavedCredentialServiceForUpdate(true);
-        report(progress, 40, L"Replace and byte-verify the six fixed component targets.");
+        report(progress, 40, L"Replace and byte-verify the four fixed component targets.");
         adapter_.applyStagedUpdate(*state); adapter_.configureSavedCredentialServiceForUpdate(false);
         adapter_.createCredentialProviderRegistration(adapter_.credentialProviderTarget());
         finishDeployment(*state);

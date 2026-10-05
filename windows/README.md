@@ -6,15 +6,29 @@
 
 ## 组件
 
-- [Components Wizard](ComponentsWizard/README.md)：六组件安装、更新、卸载及重启续办。
-- [GattHost](GattHost/README.md)：普通用户托盘、锁屏广播及配对传输。
-- [PairingTool](PairingTool/README.md)：短期提权登记，一台电脑一份手机公钥登记。
+- [Components Wizard](ComponentsWizard/README.md)：四组件安装、更新、卸载及重启续办。
+- [主应用](#主应用运行角色)：唯一用户态产物 `UnlockWithIPhone.exe`，包含普通托盘后台与临时提权操作角色。
+- [GattHost](GattHost/README.md)：主应用内的普通用户托盘、锁屏广播及配对传输。
+- [登记模块](Enrollment/README.md)：主应用内的短期提权登记，一台电脑一份手机公钥登记。
 - [SavedCredential](SavedCredential/README.md)：密码服务、受限 IPC 及本机密码副本管理。
 - [CredentialProvider](CredentialProvider/README.md)：LogonUI 磁贴、身份核验及原生序列化。
 - [PhoneApproval](PhoneApproval/README.md)、[Protocol](Protocol/README.md)：签名验证、登记存储及共享加密实现。
 - `Diagnostics/Get-ComponentsStatus.ps1`：只读诊断，读取共享组件清单。
 
 没有自定义 LSA 包、旧探针、独立审批 host、旧 UI 或旧 IPC 接受路径。手工配对 CLI 仍受支持。
+
+## 主应用运行角色
+
+无参数启动普通用户单实例托盘，拒绝管理员运行；托盘经一次 UAC 启动同一 EXE 的配对或密码管理角色。操作角色不初始化 BLE 或托盘，不受后台单实例限制；关闭操作窗口不退出后台。未知／冲突参数明确拒绝。
+
+| 参数 | 角色 |
+|---|---|
+| 无参数 | 普通托盘／BLE／会话监控 |
+| `--bluetooth` 及既有内部参数 | 临时提权配对／移除，参数不授予权限 |
+| `--saved-password` | 临时提权密码管理 |
+| `--key-hex`、`--key-clipboard`、`--clear` | 管理员手工登记，连接调用方控制台 |
+
+角色及命令唯一来源为 [DesktopApp.h](DesktopApp/DesktopApp.h)，产品名称复用 [资源定义](Resources/resource.h)。当前没有 Dashboard／WinUI，收敛验收通过后再按真实能力设计 UI；手机自动响应与 RSSI 设置仍在 iPhone。
 
 ## 构建与诊断
 
@@ -38,9 +52,9 @@ ctest --test-dir '.\windows\build' -C Release --output-on-failure
 
 安装包构建名称统一为 `UnlockWithIPhone_<版本号>_setup.exe`，Debug／Release 及支持的架构共用规则。版本从 [ProductVersion.h](ProductVersion.h) 自动读取，当前产物为 `UnlockWithIPhone_0.1.0_setup.exe`；修改版本后重新构建即自动使用新名称，无需另改文件名。示例命令中的版本应使用实际产物版本。
 
-六个正式组件名称由 [ComponentFiles.h](ComponentFiles.h) 定义，暂存和安装后的维护程序仍为 `setup.exe`；CP 与凭据服务在 System32，四个桌面工具在 Program Files 的 `Unlock Windows with iPhone` 目录。此次仅修改构建产物名称、诊断路径及说明，未改业务代码或执行构建。
+四个正式组件名称由 [ComponentFiles.h](ComponentFiles.h) 定义，暂存和安装后的维护程序仍为 `setup.exe`；CP 与凭据服务在 System32，主应用及 setup.exe 在 Program Files 的 `Unlock Windows with iPhone` 目录。2026-10-05 用户态产物已在源码收敛，保留现有 Win32 界面，未构建或运行验收。
 
-安装器自行请求 UAC，目标仍为实际物理控制台用户。Windows 设置“已安装的应用”（Windows 10“应用和功能”）显示单个带产品版本的 **Unlock Windows with iPhone®** 条目；密码管理从托盘打开，不创建开始菜单项。较高版本 Update，同版本明确 Reinstall，较低版本拒绝。当前无版本／旧布局安装先卸载，不增加旧版迁移路径。
+安装器自行请求 UAC，目标仍为实际物理控制台用户。Windows 设置“已安装的应用”（Windows 10“应用和功能”）显示单个带产品版本的 **Unlock with iPhone®** 条目；密码管理从托盘打开，不创建开始菜单项。较高版本 Update，同版本明确 Reinstall，较低版本拒绝。当前 schema 为 5，无版本／旧六组件布局／旧 schema 安装先用原工具卸载，不增加旧版迁移路径。
 
 设置卸载入口以 `--uninstall` 请求 UAC 并直达确认页，默认 Cancel。准备期间指向本事务暂存 setup，收尾期间使用系统 PowerShell 的受限续办命令。事务先于目录登记；部署验证和退出收尾分开，成功后释放暂存、恢复正式入口或移除卸载条目。结果页不继续占用暂存 EXE；无人登录时卸载保留待交接状态，登录交接后才清除最后记录。2026-10-04 仅源码与静态检查，未构建或运行安装器回归，详见 [Windows Setup](ComponentsWizard/README.md)。
 
@@ -49,9 +63,9 @@ ctest --test-dir '.\windows\build' -C Release --output-on-failure
 - Restart now / Later：Later 保留事务；再次打开只处理当前事务。
 - SYSTEM 开机任务完成受保护事务；目标用户普通权限结果页显示真实结果，Finish 清除一次性提示任务。
 
-只支持当前完整安装。旧两组件安装、旧版本记录、缺失目标 SID 或不完整安装明确拒绝维护，不自动迁移、修复、重绑用户或清密码。当前待重启事务仍沿用续办，不要求维护期间已停用的组件正在运行。历史残留须另行处理，新安装器不清理旧 GATT 登录任务。
+只支持当前完整安装。旧两组件安装、旧版本记录、缺失目标 SID 或不完整安装明确拒绝维护，不自动迁移、修复、重绑用户或清密码。仅当前 schema 的待重启事务沿用续办，不要求维护期间已停用的组件正在运行。历史残留须另行处理，新安装器不清理旧 GATT 登录任务。
 
-Update 保留密码、公钥及目标用户；先移除 Run，核实托盘／配对进程后请求正常退出，超时暂停，不强杀。真正重启后统一替换和验证文件，再恢复组件；失败保留事务及日志，不自动回滚或假报成功。
+Update 保留密码、公钥及目标用户；先移除 Run，固定所有已安装主程序实例句柄，核实托盘身份后请求正常退出并等待操作实例结束，超时暂停，不强杀。真正重启后统一替换和验证文件，再恢复组件；失败保留事务及日志，不自动回滚或假报成功。
 
 正常卸载先取得服务密码清除确认，再移除 Run、程序、CP、服务、公钥登记及安装用户 ComputerId；最后核验暂存、任务、产品记录和应用条目已清除。iPhone 数据须在手机端删除。文件删除不代表 SSD、备份或快照历史数据被物理擦除。旧二进制仍按旧约定保留登记，切换到新布局时须独立核验旧卸载后的残留。
 
@@ -65,7 +79,7 @@ Update 保留密码、公钥及目标用户；先移除 Run，核实托盘／配
 
 成功批准之间没有固定冷却期；快速再次锁屏仍须新的 challenge 与有效签名，旧批准不能再次使用。移除原 5 秒限制后的执行状态见 [Windows 验收记录](Validation.md)。
 
-2026-10-03 锁屏恢复修复已写入源码：广播启停串行推进、五秒操作期限及最多三次退避重试，phone-only IPC 新增不消费 challenge 的状态查询。iOS 确认服务缺失后释放连接并等待服务广播，两端新增 `transport_ready_required`／`0x04` 就绪握手。回归用例已补，未构建、执行或实机验收；需匹配版本一起更新，已有有效 ComputerId／公钥无需重新登记。验收至少 20 轮锁屏／解锁、后台 15 分钟及隔夜、睡眠／蓝牙恢复，全程无手动刷新，详见 [GATT host](GattHost/README.md)。广播中止底层原因仍未确认，本任务不修改安装器。
+2026-10-03 锁屏恢复修复已写入源码：广播启停串行推进、五秒操作期限及最多三次退避重试，phone-only IPC 新增不消费 challenge 的状态查询。iOS 确认服务缺失后释放连接并等待服务广播，两端新增 `transport_ready_required`／`0x04` 就绪握手。回归用例已补，未构建、执行或实机验收；需匹配版本一起更新，已有有效 ComputerId／公钥无需重新登记。验收至少 20 轮锁屏／解锁、后台 15 分钟及隔夜、睡眠／蓝牙恢复，全程无手动刷新，详见 [GATT host](GattHost/README.md)。广播中止底层原因仍未确认，该锁屏恢复任务未修改安装器。
 
 密码管理只修改本机加密副本，不修改在线 MSA 密码。移除手机登记不删除密码、ComputerId 或系统蓝牙配对。详细步骤见对应组件文档。
 

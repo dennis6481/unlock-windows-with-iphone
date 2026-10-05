@@ -4,6 +4,7 @@
 #define _UNICODE
 #define SECURITY_WIN32
 
+#include "../Resources/resource.h"
 #include "WindowsAdapter.h"
 #include "InstallationPaths.h"
 #include "SetupFinalization.h"
@@ -30,7 +31,6 @@
 namespace unlock::components {
 namespace {
 
-constexpr wchar_t kCredentialProviderName[] = L"Unlock Windows with iPhone\u00ae";
 const std::wstring kCredentialProviderClsidText = [] {
     std::array<wchar_t, 39> text{};
     if (!StringFromGUID2(unlock_windows::credential_provider::kUnlockCredentialProviderClsid,
@@ -574,7 +574,7 @@ std::optional<WizardState> WindowsAdapter::readState() const {
         installed.transactionId = readRegistryString(HKEY_LOCAL_MACHINE, kInstalledProductRegistryPath.c_str(), kLastOperationIdValueName).value_or(L"");
         if (installed.schemaVersion != kWizardStateSchemaVersion || !parseProductVersion(installed.installedVersion) ||
             installed.targetSid.empty() || installed.wizardPath != (desktopDirectory() / kInstallerFile).wstring())
-            fail(L"Installed product record is incomplete or unsupported. No migration will run.");
+            fail(L"Installed product record is incomplete or unsupported. For an older installation, uninstall with its original installer before installing this version. No migration will run.");
         PSID sid = nullptr;
         if (!ConvertStringSidToSidW(installed.targetSid.c_str(), &sid)) fail(L"Invalid installed product user SID.");
         const bool valid = IsValidSid(sid) != FALSE; LocalFree(sid);
@@ -597,7 +597,7 @@ std::optional<WizardState> WindowsAdapter::readState() const {
     state.packageVersion = readRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath.c_str(), kPackageVersionValueName).value_or(L"");
     state.payloadReady = readRegistryDword(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath.c_str(), kPayloadReadyValueName).value_or(0) == 1;
     if (state.schemaVersion != kWizardStateSchemaVersion || !isKnownPhase(*phase) || state.targetSid.empty())
-        fail(L"Unsupported or incomplete installation record. No migration will run.");
+        fail(L"Unsupported or incomplete installation record. Complete or uninstall an older installation with its original installer before installing this version. No migration will run.");
     PSID target = nullptr;
     if (!ConvertStringSidToSidW(state.targetSid.c_str(), &target))
         fail(L"The recorded startup account SID is invalid.");
@@ -638,7 +638,7 @@ void WindowsAdapter::registerApplicationUninstall(const std::filesystem::path& e
         {L"Publisher", L"Rui MA"},
         {L"InstallLocation", desktopDirectory().wstring()},
         {kDisplayVersionValueName, state->installedVersion.empty() ? state->packageVersion : state->installedVersion},
-        {L"DisplayName", L"Unlock Windows with iPhone\u00ae"},
+        {L"DisplayName", UNLOCK_PRODUCT_DISPLAY_NAME},
     }};
     logOperation(L"Register Installed apps uninstall entry: " + command);
     for (const auto& value : values)
@@ -890,8 +890,8 @@ void WindowsAdapter::deleteBinaryIfPresent(const std::filesystem::path& target) 
 }
 
 void WindowsAdapter::createCredentialProviderRegistration(const std::filesystem::path& target) const {
-    writeRegistryString(HKEY_LOCAL_MACHINE, kCredentialProviderRegistryPath.c_str(), nullptr, kCredentialProviderName);
-    writeRegistryString(HKEY_LOCAL_MACHINE, kCredentialProviderClsidRegistryPath.c_str(), nullptr, kCredentialProviderName);
+    writeRegistryString(HKEY_LOCAL_MACHINE, kCredentialProviderRegistryPath.c_str(), nullptr, UNLOCK_PRODUCT_DISPLAY_NAME);
+    writeRegistryString(HKEY_LOCAL_MACHINE, kCredentialProviderClsidRegistryPath.c_str(), nullptr, UNLOCK_PRODUCT_DISPLAY_NAME);
     const auto inprocPath = std::wstring(kCredentialProviderClsidRegistryPath.c_str()) + L"\\InprocServer32";
     writeRegistryString(HKEY_LOCAL_MACHINE, inprocPath.c_str(), nullptr, target.wstring());
     writeRegistryString(HKEY_LOCAL_MACHINE, inprocPath.c_str(), L"ThreadingModel", L"Apartment");

@@ -2,9 +2,12 @@
 
 #include "../ComponentsWizard/ComponentState.h"
 #include "../ComponentFiles.h"
+#include "../DesktopApp/DesktopApp.h"
 #include <cwchar>
 #include <cstdlib>
 #include <iostream>
+#include <initializer_list>
+#include <vector>
 using namespace unlock::components;
 void expect(bool condition, const char* message) {
     if (!condition) { std::cerr << "FAILED: " << message << '\n'; std::exit(EXIT_FAILURE); }
@@ -20,6 +23,27 @@ ComponentSnapshot completeInstallation() {
     return snapshot;
 }
 int main() {
+    using unlock_windows::desktop_app::Role;
+    const auto launch = [](std::initializer_list<const wchar_t*> values) {
+        std::vector<wchar_t*> arguments;
+        for (const auto* value : values) arguments.push_back(const_cast<wchar_t*>(value));
+        return unlock_windows::desktop_app::parseLaunch(static_cast<int>(arguments.size()), arguments.data());
+    };
+    expect(launch({L"app"}).role == Role::tray, "ordinary startup selects only the tray role");
+    expect(launch({L"app", L"--saved-password"}).role == Role::savedPassword,
+        "password management does not select the tray role");
+    expect(launch({L"app", L"--bluetooth", L"channel", L"pair", L"1", L"sid", L"deadline", L"event", L"pid"}).role == Role::bluetoothEnrollment,
+        "Bluetooth enrollment dispatch leaves identity validation to enrollment");
+    expect(launch({L"app", L"--key-clipboard", L"--replace"}).replace, "manual replacement option remains supported");
+    expect(launch({L"app", L"--clear"}).clear, "manual removal remains explicit");
+    for (const auto arguments : {
+            std::initializer_list<const wchar_t*>{L"app", L"--saved-password", L"--clear"},
+            {L"app", L"--key-hex"}, {L"app", L"--key-clipboard", L"--saved-password"},
+            {L"app", L"--clear", L"--replace"}, {L"app", L"--bluetooth"}, {L"app", L"--unknown"}}) {
+        bool rejected = false;
+        try { launch(arguments); } catch (const std::invalid_argument&) { rejected = true; }
+        expect(rejected, "unknown, incomplete or conflicting roles are rejected before dispatch");
+    }
     expect(parseProductVersion(kProductVersion.text()) == kProductVersion, "configured product version round trip");
     expect(packageAction({0, 10, 0}, {0, 9, 9}) == PackageAction::update, "numeric minor version comparison");
     expect(packageAction({1, 0, 0}, {0, 65535, 65535}) == PackageAction::update, "major version takes precedence");
@@ -35,7 +59,7 @@ int main() {
             expect(wcscmp(kComponentFiles[i].name, kComponentFiles[j].name) != 0, "no duplicate installed files");
         }
     }
-    expect(kComponentFiles.size() == 6 && desktopTools == 4, "manifest describes the current six components");
+    expect(kComponentFiles.size() == 4 && desktopTools == 2, "manifest describes the current four components");
     expect(wcscmp(kComponentFiles.back().name, L"setup.exe") == 0, "setup keeps its fixed name in staging and installation");
     expect(determineMaintenancePlan({}, nullptr, nullptr, false).action == MaintenanceAction::install, "empty machine offers Install");
     auto snapshot = completeInstallation();
@@ -69,8 +93,11 @@ int main() {
     snapshot.targetSid.clear(); state.targetSid.clear();
     expect(plan().action == MaintenanceAction::blocked, "missing recorded target cannot be rebound");
     snapshot = completeInstallation(); state.targetSid = snapshot.targetSid;
-    state.schemaVersion = 2;
+    state.schemaVersion = 4;
     expect(plan().action == MaintenanceAction::blocked, "old schema is unsupported");
+    state.phase = WizardPhase::finalizing;
+    expect(plan().action == MaintenanceAction::blocked, "old six-component transaction cannot resume with the new installer");
+    state.phase = WizardPhase::installed;
     state.schemaVersion = kWizardStateSchemaVersion;
     snapshot.continuationTaskPresent = true;
     expect(plan().action == MaintenanceAction::blocked, "unexpected continuation blocks new maintenance");

@@ -32,7 +32,7 @@ MaintenancePlan determineMaintenancePlan(const ComponentSnapshot& snapshot,
             : MaintenancePlan{MaintenanceAction::install};
     if (state->schemaVersion != kWizardStateSchemaVersion || state->targetSid.empty() ||
         !isKnownPhase(static_cast<std::uint32_t>(state->phase)) || state->phase == WizardPhase::none)
-        return {MaintenanceAction::blocked, L"This installation record is unsupported or has no startup account. No migration will run."};
+        return {MaintenanceAction::blocked, L"This installation record is unsupported or has no startup account. Uninstall an older installation with its original installer first. No migration will run."};
     const bool unfinishedHandoff = completion && completion->transactionId == state->transactionId && !completion->finished;
     const bool pending = unfinishedHandoff || state->phase == WizardPhase::installPendingReboot ||
         state->phase == WizardPhase::updatePendingReboot || state->phase == WizardPhase::updating ||
@@ -53,7 +53,7 @@ MaintenancePlan determineMaintenancePlan(const ComponentSnapshot& snapshot,
     if (state->phase != WizardPhase::installed)
         return {MaintenanceAction::blocked, L"An interrupted transaction is preserved for diagnosis. No automatic removal or rollback will be performed.\r\n" + state->lastError};
     if (!snapshot.isFullInstallation() || snapshot.continuationTaskPresent)
-        return {MaintenanceAction::blocked, L"The current complete installation could not be verified. Older or incomplete installations are not supported. No changes were made.\r\n" + snapshot.versionError};
+        return {MaintenanceAction::blocked, L"The current complete installation could not be verified. Older or incomplete installations are not supported. Uninstall an older installation with its original installer first. No changes were made.\r\n" + snapshot.versionError};
     return {MaintenanceAction::maintain};
 }
 

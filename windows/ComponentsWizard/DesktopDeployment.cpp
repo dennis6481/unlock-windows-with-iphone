@@ -7,6 +7,7 @@
 #include "SetupFinalization.h"
 #include "../PhoneApproval/EnrollmentStore.h"
 #include <Windows.h>
+#include <tlhelp32.h>
 #include <shellapi.h>
 #include <sddl.h>
 #include <wtsapi32.h>
@@ -167,26 +168,28 @@ struct TraySearch {
     bool stop = false;
     bool found = false;
     std::wstring error;
-    std::vector<std::unique_ptr<Handle>> helpers;
 };
-BOOL CALLBACK pinPairingHelper(HWND window, LPARAM value) {
-    auto& search = *reinterpret_cast<TraySearch*>(value);
-    std::array<wchar_t, 128> name{};
-    GetClassNameW(window, name.data(), static_cast<int>(name.size()));
-    if (wcscmp(name.data(), L"UnlockWindowsEnrollmentConfirmation") != 0) return TRUE;
-    try {
-        DWORD pid = 0; GetWindowThreadProcessId(window, &pid);
-        DWORD session = 0; win(ProcessIdToSessionId(pid, &session), L"Read pairing helper session");
-        if (session != search.session) return TRUE;
-        auto process = std::make_unique<Handle>(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid));
-        win(process->value != nullptr, L"Pin pairing helper process");
-        std::array<wchar_t, 32768> image{}; DWORD n = static_cast<DWORD>(image.size());
-        win(QueryFullProcessImageNameW(process->value, 0, image.data(), &n), L"Read pairing helper image");
-        if (_wcsicmp(image.data(), (search.expected.parent_path() / kPairingToolFile).c_str()) != 0)
-            throw ComponentError(L"Pairing window does not belong to the installed helper.");
-        search.helpers.push_back(std::move(process));
-    } catch (const ComponentError& error) { search.error = error.wideWhat(); return FALSE; }
-    return TRUE;
+std::vector<std::unique_ptr<Handle>> pinMainInstances(const std::filesystem::path& expected) {
+    Handle snapshot(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0));
+    win(snapshot.value != INVALID_HANDLE_VALUE, L"Enumerate main application processes");
+    PROCESSENTRY32W entry{};
+    entry.dwSize = sizeof(entry);
+    std::vector<std::unique_ptr<Handle>> instances;
+    BOOL found = Process32FirstW(snapshot.value, &entry);
+    while (found) {
+        if (_wcsicmp(entry.szExeFile, kMainAppFile) == 0) {
+            auto process = std::make_unique<Handle>(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE,
+                FALSE, entry.th32ProcessID));
+            win(process->value != nullptr, L"Pin main application instance");
+            std::array<wchar_t, 32768> image{};
+            DWORD size = static_cast<DWORD>(image.size());
+            win(QueryFullProcessImageNameW(process->value, 0, image.data(), &size), L"Read main application image");
+            if (_wcsicmp(image.data(), expected.c_str()) == 0) instances.push_back(std::move(process));
+        }
+        found = Process32NextW(snapshot.value, &entry);
+    }
+    if (GetLastError() != ERROR_NO_MORE_FILES) win(FALSE, L"Read main application process list");
+    return instances;
 }
 BOOL CALLBACK visitTray(HWND window, LPARAM value) {
     auto& search = *reinterpret_cast<TraySearch*>(value);
@@ -286,7 +289,7 @@ void withUserHive(const std::wstring& sid, const std::function<void(HKEY)>& oper
     regCheck(RegUnLoadKeyW(HKEY_USERS, mount.c_str()), L"Unload target user registry hive");
     restore.restore(); backup.restore();
 }
-std::wstring startupCommand() { return L"\"" + (desktopDirectory() / kGattHostFile).wstring() + L"\""; }
+std::wstring startupCommand() { return L"\"" + (desktopDirectory() / kMainAppFile).wstring() + L"\""; }
 void removeUserStartup(const std::wstring& sid) {
     withUserHive(sid, [](HKEY hive) {
         Registry key;
@@ -420,7 +423,7 @@ bool WindowsAdapter::desktopArtifactsPresent() const {
 bool WindowsAdapter::trayRunning() const {
     const auto state = readState();
     if (!state || state->targetSid.empty()) return false;
-    TraySearch search{desktopDirectory() / kGattHostFile, state->targetSid, WTSGetActiveConsoleSessionId()};
+    TraySearch search{desktopDirectory() / kMainAppFile, state->targetSid, WTSGetActiveConsoleSessionId()};
     EnumWindows(visitTray, reinterpret_cast<LPARAM>(&search));
     if (!search.error.empty()) throw ComponentError(search.error);
     return search.found;
@@ -428,15 +431,18 @@ bool WindowsAdapter::trayRunning() const {
 void WindowsAdapter::stopTray(const WizardState& state) const {
     logOperation(L"Remove target-user Run startup before component maintenance.");
     removeUserStartup(state.targetSid);
-    TraySearch search{desktopDirectory() / kGattHostFile, state.targetSid, WTSGetActiveConsoleSessionId(), true};
-    EnumWindows(pinPairingHelper, reinterpret_cast<LPARAM>(&search));
-    if (!search.error.empty()) throw ComponentError(search.error);
+    TraySearch search{desktopDirectory() / kMainAppFile, state.targetSid, WTSGetActiveConsoleSessionId(), true};
+    const auto instances = pinMainInstances(search.expected);
     EnumWindows(visitTray, reinterpret_cast<LPARAM>(&search));
     if (!search.error.empty()) throw ComponentError(search.error);
-    for (const auto& helper : search.helpers) {
-        if (WaitForSingleObject(helper->value, 30000) != WAIT_OBJECT_0)
-            throw ComponentError(L"Pairing helper did not finish cancellation within 30 seconds. Operation paused; no process was killed.");
+    for (const auto& process : instances) {
+        const DWORD waited = WaitForSingleObject(process->value, 30000);
+        if (waited == WAIT_FAILED) win(FALSE, L"Wait for main application instance");
+        if (waited != WAIT_OBJECT_0)
+            throw ComponentError(L"An Unlock with iPhone operation is still running. Close its password or manual enrollment window, then continue maintenance. No process was killed.");
     }
+    if (!pinMainInstances(search.expected).empty())
+        throw ComponentError(L"A main application instance started during maintenance. Close it before continuing. No process was killed.");
 }
 void WindowsAdapter::removeTools() const {
     for (const auto& component : kComponentFiles)
@@ -587,7 +593,7 @@ void WindowsAdapter::startTrayForCompletedOperation(const std::wstring& transact
     if (!userStartupPresent()) throw ComponentError(L"Bluetooth Run startup is not registered.");
     if (trayRunning()) return;
     SHELLEXECUTEINFOW launch{}; launch.cbSize = sizeof(launch);
-    const auto executable = desktopDirectory() / kGattHostFile;
+    const auto executable = desktopDirectory() / kMainAppFile;
     const auto directory = desktopDirectory();
     launch.fMask = SEE_MASK_FLAG_NO_UI;
     launch.lpVerb = L"open"; launch.lpFile = executable.c_str(); launch.lpDirectory = directory.c_str();

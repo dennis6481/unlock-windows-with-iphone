@@ -19,7 +19,7 @@ help:
 	@echo "make release         alias for make build-release"
 	@echo "make test            build and run all CTest tests"
 	@echo "make clean           remove CMake build outputs"
-	@echo "make run-gatt        build and start the user-session GATT tray host"
+	@echo "make run-app         build and start Unlock with iPhone"
 	@echo "make CONFIG=Release  use a different CMake configuration"
 	@echo "make TARGET_ARCH=x64  override automatic native architecture detection"
 	@echo "make TARGET_ARCH=arm64 override automatic native architecture detection"
@@ -45,5 +45,5 @@ test: build
 clean:
 	set "TEMP=$(TMP_DIR)" && set "TMP=$(TMP_DIR)" && set "UNLOCK_VS_DEV_CMD=$(VS_DEV_CMD)" && set "UNLOCK_CMAKE_COMMAND=$(CMAKE)" && set "UNLOCK_TARGET_ARCH=$(TARGET_ARCH)" && call "$(NATIVE_VSDEV_CMD)" --build "$(BUILD_DIR)" --target clean --config $(CONFIG)
 
-run-gatt: build
-	"$(BUILD_DIR)\unlock_gatt_host.exe"
+run-app: build
+	"$(BUILD_DIR)\UnlockWithIPhone.exe"

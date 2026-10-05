@@ -1,8 +1,8 @@
 <!-- Created by Rui MA on 26 Sep 2026 -->
 
-# Pairing tool
+# 主应用登记模块
 
-`unlock_pairing_tool.exe` 为短期提权公钥登记工具；一台电脑保存一份手机登记。普通托盘 Pair iPhone… 请求一次 UAC，同一窗口先等待手机，再核对实际控制台账户和完整 SHA-256 指纹。另一管理员 UAC 不改变目标用户。
+`UnlockWithIPhone.exe` 的短期提权登记角色承接本模块，不再部署独立配对 EXE；一台电脑保存一份手机登记。普通托盘 Pair iPhone… 请求一次 UAC，同一窗口先等待手机，再核对实际控制台账户和完整 SHA-256 指纹。另一管理员 UAC 不改变目标用户。
 
 ## 确认和提交
 
@@ -16,16 +16,23 @@ deadline 为两分钟，不因 UAC 延长。目标控制台、锁屏状态、管
 
 ## 托盘与手工入口
 
-host 与工具同目录。内部 `--bluetooth` 参数只由当前配对／移除流程提供，不是手工操作入口。工具就绪后才广播；公钥仅传一次，实际管道客户端 PID／SID／session 核验保留。
+托盘和登记角色使用同一主程序文件，仍是独立权限进程。内部 `--bluetooth` 参数只由当前配对／移除流程提供，不是手工操作入口。工具就绪后才广播；公钥仅传一次，实际管道客户端 PID／SID／session 核验保留。
 
 手工 CLI 仍支持，须管理员权限并明确操作。从仓库根目录执行：
 
 ```powershell
-& '.\windows\build\unlock_pairing_tool.exe' --key-hex '<130-hex-digit-public-key>'
-& '.\windows\build\unlock_pairing_tool.exe' --key-clipboard
-& '.\windows\build\unlock_pairing_tool.exe' --key-clipboard --replace
-& '.\windows\build\unlock_pairing_tool.exe' --clear
+$app = (Resolve-Path '.\windows\build\UnlockWithIPhone.exe').Path
+$process = Start-Process -FilePath $app -ArgumentList '--key-clipboard' -NoNewWindow -Wait -PassThru
+$process.ExitCode
 ```
+
+在已提权 PowerShell 控制台运行；主程序是 GUI 子系统，使用 `-Wait -PassThru` 等待并读取退出码。手工角色连接该控制台，保留确认输入及输出，不创建新控制台，也不启动 BLE。其他手工参数为：
+
+- `--key-hex <130-hex-digit-public-key>`
+- `--key-clipboard --replace`
+- `--clear`
+
+手工参数及启动角色统一见 [主应用](../README.md)。
 
 手工不同手机替换要求显式 `--replace`；清除要求输入 REMOVE 并确认。公钥是手机提供的公开材料，不是密码；仍须完整指纹核对。
 

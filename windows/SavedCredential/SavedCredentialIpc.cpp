@@ -1,5 +1,6 @@
 // Created by Rui MA on 30 Sep 2026
 
+#include "../Resources/resource.h"
 #include "SavedCredentialIpc.h"
 #include "../ComponentFiles.h"
 
@@ -470,7 +471,7 @@ const wchar_t* authenticationStatusText(const AuthenticationStatus& status) noex
     case AuthenticationStage::awaitingAssertion: return L"Waiting for approval from your iPhone\u2026";
     case AuthenticationStage::approved: return L"Approved by your iPhone. Unlocking this PC\u2026";
     case AuthenticationStage::consumed: return L"This approval has already been used. Start again for a new approval.";
-    default: return L"Unlock with iPhone\u00ae";
+    default: return UNLOCK_PRODUCT_DISPLAY_NAME;
     }
 }
 

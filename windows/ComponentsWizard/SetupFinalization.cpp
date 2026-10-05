@@ -3,6 +3,7 @@
 #define UNICODE
 #define _UNICODE
 #include "SetupFinalization.h"
+#include "../Resources/resource.h"
 #include "InstallationPaths.h"
 #include "../SavedCredential/SavedCredentialVault.h"
 #include <Windows.h>
@@ -36,6 +37,7 @@ std::wstring contractParameters(const std::wstring& script) {
         if (!scriptUses(script, name)) return;
         result += L"$" + std::wstring(name) + L"=" + std::to_wstring(value) + L"\n";
     };
+    text(L"productName", UNLOCK_PRODUCT_DISPLAY_NAME);
     text(L"stPath", kWizardStateRegistryPath.c_str());
     text(L"inPath", kInstalledProductRegistryPath.c_str());
     text(L"rsPath", kResultRegistryPath.c_str());
@@ -204,7 +206,7 @@ try{
             throw 'Uninstall finalization is incomplete. The transaction remains available for inspection.'
 }
         Add-Type -AssemblyName System.Windows.Forms
-        [Windows.Forms.MessageBox]::Show('Uninstall completed and verified. Windows credentials, phone enrollment and computer identity were removed. Remove the computer record on your iPhone separately.','Unlock Windows with iPhone',[Windows.Forms.MessageBoxButtons]::OK,[Windows.Forms.MessageBoxIcon]::Information)|Out-Null
+        [Windows.Forms.MessageBox]::Show('Uninstall completed and verified. Windows credentials, phone enrollment and computer identity were removed. Remove the computer record on your iPhone separately.',$productName,[Windows.Forms.MessageBoxButtons]::OK,[Windows.Forms.MessageBoxIcon]::Information)|Out-Null
 }finally{foreach($event in $events){$event.Dispose()}}
 }catch{
     Add-Type -AssemblyName System.Windows.Forms

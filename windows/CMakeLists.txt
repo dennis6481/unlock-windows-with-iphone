@@ -64,15 +64,6 @@ add_executable(unlock_saved_credential_service
 target_compile_features(unlock_saved_credential_service PRIVATE cxx_std_20)
 target_compile_definitions(unlock_saved_credential_service PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 
-add_executable(unlock_saved_credential_manager WIN32
-    SavedCredential/SavedCredentialManager.cpp
-)
-target_compile_features(unlock_saved_credential_manager PRIVATE cxx_std_20)
-target_compile_definitions(unlock_saved_credential_manager PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNLOCK_UI_SAVED_PASSWORD)
-target_link_libraries(unlock_saved_credential_manager PRIVATE
-    unlock_saved_credential_ipc advapi32 credui ole32 user32 comctl32 gdi32
-)
-
 if(BUILD_TESTING)
     add_executable(unlock_saved_credential_tests
         SavedCredentialTests/main.cpp
@@ -147,16 +138,19 @@ if(BUILD_TESTING)
     add_test(NAME unlock_enrollment_store_tests COMMAND unlock_enrollment_store_tests)
 endif()
 
-add_executable(unlock_gatt_host WIN32
-    GattHost/main.cpp
+add_executable(unlock_desktop_app WIN32
+    DesktopApp/main.cpp
+    GattHost/GattHost.cpp
+    Enrollment/Enrollment.cpp
+    SavedCredential/CredentialManagement.cpp
 )
 
-target_compile_features(unlock_gatt_host PRIVATE cxx_std_20)
-target_compile_definitions(unlock_gatt_host PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_libraries(unlock_gatt_host PRIVATE unlock_saved_credential_ipc unlock_enrollment_store windowsapp user32 shell32 wtsapi32 ole32 advapi32 comctl32 gdi32)
+target_compile_features(unlock_desktop_app PRIVATE cxx_std_20)
+target_compile_definitions(unlock_desktop_app PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNLOCK_UI_PAIRING UNLOCK_UI_SAVED_PASSWORD)
+target_link_libraries(unlock_desktop_app PRIVATE unlock_saved_credential_ipc unlock_enrollment_store windowsapp user32 shell32 wtsapi32 ole32 advapi32 comctl32 gdi32 credui)
 
 if(MSVC)
-    target_compile_options(unlock_gatt_host PRIVATE /utf-8)
+    target_compile_options(unlock_desktop_app PRIVATE /utf-8)
 endif()
 
 add_executable(unlock_windows_components_wizard WIN32
@@ -216,14 +210,6 @@ if(BUILD_TESTING)
     add_test(NAME unlock_components_wizard_tests COMMAND unlock_components_wizard_tests)
 endif()
 
-add_executable(unlock_pairing_tool
-    PairingTool/main.cpp
-)
-
-target_compile_features(unlock_pairing_tool PRIVATE cxx_std_20)
-target_compile_definitions(unlock_pairing_tool PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNLOCK_UI_PAIRING)
-target_link_libraries(unlock_pairing_tool PRIVATE unlock_enrollment_store unlock_saved_credential_ipc user32 wtsapi32 comctl32 gdi32)
-
 add_library(unlock_credential_provider SHARED
     CredentialProvider/UnlockCredentialProvider.cpp
 )
@@ -277,9 +263,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_
 foreach(unlock_component IN ITEMS
     "unlock_credential_provider|kCredentialProviderFile"
     "unlock_saved_credential_service|kSavedCredentialServiceFile"
-    "unlock_saved_credential_manager|kCredentialManagerFile"
-    "unlock_gatt_host|kGattHostFile"
-    "unlock_pairing_tool|kPairingToolFile"
+    "unlock_desktop_app|kMainAppFile"
     "unlock_windows_components_wizard|kInstallerFile"
 )
     string(REPLACE "|" ";" unlock_component_parts "${unlock_component}")
@@ -325,7 +309,7 @@ if(NOT EXISTS "${UNLOCK_APP_ICON_SOURCE}")
 endif()
 configure_file(Resources/AppIcon.rc.in AppIcon.rc @ONLY)
 configure_file(Resources/DesktopUi.rc.in DesktopUi.rc @ONLY)
-foreach(unlock_desktop_target IN ITEMS unlock_gatt_host unlock_pairing_tool unlock_saved_credential_manager)
+foreach(unlock_desktop_target IN ITEMS unlock_desktop_app)
     target_sources(${unlock_desktop_target} PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/DesktopUi.rc)
     if(MSVC)
         target_link_options(${unlock_desktop_target} PRIVATE /MANIFEST:NO)

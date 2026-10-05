@@ -7,9 +7,7 @@
 namespace unlock::components {
 inline constexpr wchar_t kCredentialProviderFile[] = L"unlock_credential_provider.dll";
 inline constexpr wchar_t kSavedCredentialServiceFile[] = L"unlock_saved_credential_service.exe";
-inline constexpr wchar_t kGattHostFile[] = L"unlock_gatt_host.exe";
-inline constexpr wchar_t kPairingToolFile[] = L"unlock_pairing_tool.exe";
-inline constexpr wchar_t kCredentialManagerFile[] = L"unlock_saved_credential_manager.exe";
+inline constexpr wchar_t kMainAppFile[] = L"UnlockWithIPhone.exe";
 inline constexpr wchar_t kInstallerFile[] = L"setup.exe";
 
 struct ComponentFile final {
@@ -17,12 +15,10 @@ struct ComponentFile final {
     bool desktopTool;
 };
 
-inline constexpr std::array<ComponentFile, 6> kComponentFiles{{
+inline constexpr std::array<ComponentFile, 4> kComponentFiles{{
     {kCredentialProviderFile, false},
     {kSavedCredentialServiceFile, false},
-    {kGattHostFile, true},
-    {kPairingToolFile, true},
-    {kCredentialManagerFile, true},
+    {kMainAppFile, true},
     {kInstallerFile, true},
 }};
 }

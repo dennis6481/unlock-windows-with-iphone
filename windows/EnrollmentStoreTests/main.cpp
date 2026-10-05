@@ -1,7 +1,7 @@
 // Created by Rui MA on 26 Sep 2026
 
 #include "EnrollmentStore.h"
-#include "../PairingTool/EnrollmentSession.h"
+#include "../Enrollment/EnrollmentSession.h"
 
 #include <Windows.h>
 #include <bcrypt.h>

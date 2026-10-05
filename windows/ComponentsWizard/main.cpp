@@ -2,9 +2,9 @@
 
 #define UNICODE
 #define _UNICODE
+#include "../Resources/resource.h"
 #include "ComponentTransaction.h"
 #include "resource.h"
-#include "../Resources/resource.h"
 #include "../Resources/DesktopUi.h"
 #include <Windows.h>
 #include <commctrl.h>
@@ -187,7 +187,7 @@ struct Window {
     }
     void setPage(Page next, const std::wstring& title, const std::wstring& details) {
         page = next; text(IDC_MAIN_INSTRUCTION, title); text(IDC_PAGE_DESCRIPTION, details);
-        if (!SetWindowTextW(hwnd, next == Page::home && installed ? title.c_str() : L"Unlock Windows with iPhone\u00ae Setup"))
+        if (!SetWindowTextW(hwnd, next == Page::home && installed ? title.c_str() : (std::wstring(UNLOCK_PRODUCT_DISPLAY_NAME) + L" Setup").c_str()))
             throw ComponentError(L"Could not set installer window title.");
         text(IDC_DETAILS, next == Page::progress ? details : log);
         ShowWindow(GetDlgItem(hwnd, IDC_PAGE_DESCRIPTION), next == Page::progress ? SW_HIDE : SW_SHOW);
@@ -197,7 +197,7 @@ struct Window {
         layout();
     }
     void showUninstallConfirmation() {
-        setPage(Page::uninstall, L"Uninstall Unlock Windows with iPhone\u00ae",
+        setPage(Page::uninstall, L"Uninstall " + std::wstring(UNLOCK_PRODUCT_DISPLAY_NAME),
             L"Remove phone connectivity, login startup, lock-screen unlock and saved password management.\r\n\r\n"
             L"The saved Windows password copy, paired iPhone registration and computer identity will be deleted. "
             L"Remove this computer from the iPhone app separately. Reinstallation requires setup and pairing again. A restart is required.");
@@ -234,7 +234,7 @@ struct Window {
             const auto account = startupAccountLabel(state->targetSid, log);
             if (requestUninstall) showUninstallConfirmation();
             else {
-                setPage(Page::home, L"Unlock Windows with iPhone\u00ae installed", L"Installed version: " + state->installedVersion +
+                setPage(Page::home, std::wstring(UNLOCK_PRODUCT_DISPLAY_NAME) + L" installed", L"Installed version: " + state->installedVersion +
                     L"\r\nPackage version: " + incoming.text() + L"\r\nStartup account: " + account +
                     L"\r\nBluetooth tray: " + (status.trayRunning ? L"running" : L"not running") +
                     L"\r\n\r\nUpdate and reinstall preserve credentials and pairing. Uninstall removes Windows product data.");
@@ -244,7 +244,7 @@ struct Window {
             text(IDC_LOG_TOGGLE, L"Technical details");
         } else {
             log.clear();
-            setPage(Page::home, L"Install Unlock Windows with iPhone\u00ae",
+            setPage(Page::home, L"Install " + std::wstring(UNLOCK_PRODUCT_DISPLAY_NAME),
                 L"Use your iPhone to unlock this PC after signing in normally.\r\n\r\n"
                 L"Setup installs phone connectivity, lock-screen unlock and saved password management. "
                 L"Phone connectivity starts automatically when you sign in. Use your usual PIN or password after restarting Windows.");
@@ -357,7 +357,7 @@ struct Window {
         if (page == Page::home) {
             if (!installed) start(WizardAction::install);
             else {
-                setPage(Page::update, reinstall ? L"Reinstall Unlock Windows with iPhone\u00ae" : L"Update Unlock Windows with iPhone\u00ae",
+                setPage(Page::update, reinstall ? L"Reinstall " + std::wstring(UNLOCK_PRODUCT_DISPLAY_NAME) : L"Update " + std::wstring(UNLOCK_PRODUCT_DISPLAY_NAME),
                     L"Replace installed program files with the precompiled files supplied beside this installer. "
                     L"Your saved password, phone registration and startup target account will be preserved.\r\n\r\nA restart is required.");
                 buttons(L"Back", reinstall ? L"Reinstall" : L"Update", L"Cancel");
@@ -470,7 +470,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
             if (!IsDialogMessageW(hwnd, &message)) { TranslateMessage(&message); DispatchMessageW(&message); }
         return 0;
     } catch (const std::exception& error) {
-        if (!headless) MessageBoxW(nullptr, errorText(error).c_str(), L"Unlock Windows with iPhone\u00ae", MB_OK | MB_ICONERROR);
+        if (!headless) MessageBoxW(nullptr, errorText(error).c_str(), UNLOCK_PRODUCT_DISPLAY_NAME, MB_OK | MB_ICONERROR);
         else OutputDebugStringW(errorText(error).c_str());
         return ERROR_INSTALL_FAILURE;
     }

@@ -449,7 +449,7 @@ struct Window {
             if (!installed) start(WizardAction::install);
             else {
                 setPage(Page::update, reinstall ? L"Reinstall " + std::wstring(UNLOCK_PRODUCT_DISPLAY_NAME) : L"Update " + std::wstring(UNLOCK_PRODUCT_DISPLAY_NAME),
-                    L"Replace installed program files with the precompiled files supplied beside this installer. "
+                    L"Replace installed program files with the components embedded in this installer. "
                     L"Your saved password, phone registration and startup target account will be preserved.\r\n\r\nA restart is required.");
                 buttons(L"Back", reinstall ? L"Reinstall" : L"Update", L"Cancel");
             }

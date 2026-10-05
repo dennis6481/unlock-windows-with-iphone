@@ -2,7 +2,7 @@
 
 # Testing and diagnostics
 
-This guide describes reusable checks, not a personal test diary or a record that every scenario has passed. The author reports a stable primary unlock/installer workflow on their setup; broader compatibility, negative paths, oldest-Windows and ARM64 hardware remain to be established. Record results for the exact revision and matching binaries under test.
+This guide describes reusable checks, not a personal test diary or a record that every scenario has passed. The author reports a relatively stable primary unlock workflow on their setup with one Windows user and a password-backed Microsoft Account (MSA). This report does not establish acceptance of the latest self-contained packaging changes. Broader compatibility, negative paths, oldest-Windows and ARM64 hardware remain to be established. See the [supported account scope](../README.md#requirements) and record results for the exact revision and matching binaries under test.
 
 ## Environment and evidence
 
@@ -108,6 +108,10 @@ Check these discriminating cases:
 Force-quit recovery is not promised. Collect both platforms' timelines to separate native connection waiting, initialization, subscription, readiness, challenge, signature and native password verification.
 
 ## Installer and removal
+
+Self-contained packaging acceptance is pending. After explicit build authorization, build Release for the current target architecture and inspect normal and delay-load imports of setup and all three embedded components. There must be no Debug CRT, dynamic VC++ runtime or unprovided non-system dependencies. Copy only the setup EXE from `windows/dist/` to a clean machine of the same architecture without Visual Studio, CMake or VC++ Redistributable; verify installation, native sign-in after restart, service/tray startup and physical-device unlock. Older companion-file installations must first complete their transactions and be uninstalled with their original installer.
+
+Check that rebuilding a changed component refreshes setup's embedded resource/manifest. Test missing/corrupt resources, mixed versions and wrong architecture before deployment; interrupt protected extraction and confirm preparation resumes with the same transaction and only marks `payloadReady` after every component is verified. Package resource hashes check integrity, not publisher identity. These checks do not authorize running builds or installers by themselves.
 
 Test a clean install, same-version Reinstall, higher-version Update, downgrade rejection, restart continuation and explicit Uninstall. Confirm all four files match native architecture/version and the documented paths, and there is only one Settings entry. Cancellation before execution must preserve installation and records.
 

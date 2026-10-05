@@ -45,12 +45,14 @@ make -C windows build-release TARGET_ARCH=arm64 BUILD_DIR=build/arm64
 
 Use separate directories when changing architecture or configuration. For a nonstandard Visual Studio location, pass `VS_DEV_CMD=<absolute-path-to-VsDevCmd.bat>` as a quoted Make argument. The helper still selects the requested architecture.
 
-The output directory contains `UnlockWithIPhone.exe`, `unlock_saved_credential_service.exe`, `unlock_credential_provider.dll` and `UnlockWithIPhone_<version>_setup.exe`, alongside test binaries. The version comes from [ProductVersion.h](ProductVersion.h); filenames come from [ComponentFiles.h](ComponentFiles.h) and CMake's installer naming rule. Keep the four product files together: setup reads its companion binaries, rather than downloading or compiling them on the target machine.
+The build directory contains `UnlockWithIPhone.exe`, `unlock_saved_credential_service.exe`, `unlock_credential_provider.dll`, test binaries and intermediate files. The installer is written separately to `windows/dist/UnlockWithIPhone_<version>_setup.exe`; its debugging symbols remain in the build directory. The version comes from [ProductVersion.h](ProductVersion.h); the distribution directory and installer naming rule come from [CMakeLists.txt](CMakeLists.txt), with fixed component names in [ComponentFiles.h](ComponentFiles.h). Distribute only the setup EXE: it embeds the other three components from the same build. The default build selects the current native architecture; no second architecture build is required. Debug and Release use the same setup filename/directory; distribute the result of a Release build.
+
+CMake statically links the MSVC runtime (`/MT` for Release, `/MTd` for Debug). Release packaging is intended to run without Visual Studio, CMake or a separately installed VC++ Redistributable. The build checks embedded component versions/architecture and generates their SHA-256 manifest before linking setup. These source changes have only been statically checked; Release import inspection and clean-machine installation/runtime acceptance are pending. Debug output is not the distribution artifact.
 
 ## Install and configure
 
 1. Build Windows and iOS from matching revisions. Keep a working native Windows password/PIN available.
-2. Sign in to the target Microsoft Account at the physical console and run the versioned setup EXE from its build directory. Setup requests UAC itself; follow its confirmation and restart instructions.
+2. Sign in to the target Microsoft Account at the physical console and run the versioned setup EXE; companion files are not needed. Setup requests UAC itself; follow its confirmation and restart instructions.
 3. After restart, sign in once with your usual native PIN/password. The service starts as LocalSystem; the ordinary-user tray starts through the target user's Run entry.
 4. On the verified installation result page choose **Start setup**, or choose **Later** and use tray **Continue setup…**. The existing password window requests UAC and verifies the installed target account without an additional lock/sign-in cycle. Save the actual MSA password, not the PIN. This stores a local copy; it does not change the account password. See [password management](SavedCredential/README.md#password-management).
 5. After the service confirms the saved copy, setup opens the existing pairing window. Allow UAC, start computer registration in the iOS app, and confirm the account and full fingerprint. Already completed steps are skipped; cancelled or failed password management cannot advance to pairing. The iOS UI currently labels registration **登记电脑**. See [pairing](GattHost/README.md#pairing).
@@ -61,6 +63,8 @@ Starting Windows, signing out, or having no existing console session does not of
 ## Update and uninstall
 
 Run a higher-version package for **Update** or the same version for explicit **Reinstall**; downgrades are rejected. Updates preserve the password copy, phone registration and ComputerId. Follow the restart boundary and finish the result page.
+
+Older companion-file installations and their pending transactions are not supported by the self-contained installer. Complete any pending operation and uninstall using that installation's original maintenance tool before a fresh installation. No migration or companion-file fallback is provided.
 
 Use Windows Settings → Apps to uninstall. Removal clears the local password copy, phone registration, target user's ComputerId, product files and integration records. Delete the computer record on the iPhone separately. Details and failure recovery are in the [installer guide](ComponentsWizard/README.md).
 

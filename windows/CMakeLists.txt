@@ -4,6 +4,8 @@ cmake_minimum_required(VERSION 3.25)
 
 project(UnlockWindowsWithIPhone LANGUAGES CXX)
 
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
 # Keep NMake response files in the build tree instead of using its inline
 # temporary-file syntax. The repository path contains spaces, and compiler /
 # linker temporary files are redirected by windows/Makefile to the root .tmp.
@@ -188,6 +190,7 @@ target_link_libraries(
         user32
         version
         unlock_saved_credential_ipc
+        unlock_protocol_crypto
 )
 
 if(MSVC)
@@ -259,7 +262,10 @@ set(UNLOCK_VERSION_MINOR "${CMAKE_MATCH_2}")
 set(UNLOCK_VERSION_PATCH "${CMAKE_MATCH_3}")
 set(UNLOCK_VERSION_TEXT "${UNLOCK_VERSION_MAJOR}.${UNLOCK_VERSION_MINOR}.${UNLOCK_VERSION_PATCH}")
 set(UNLOCK_SETUP_OUTPUT_NAME "UnlockWithIPhone_${UNLOCK_VERSION_TEXT}_setup")
+set(UNLOCK_DIST_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/dist")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/ComponentFiles.h")
+set(unlock_payload_targets "")
+set(unlock_payload_files "")
 foreach(unlock_component IN ITEMS
     "unlock_credential_provider|kCredentialProviderFile"
     "unlock_saved_credential_service|kSavedCredentialServiceFile"
@@ -278,6 +284,16 @@ foreach(unlock_component IN ITEMS
     if(unlock_component_target STREQUAL "unlock_windows_components_wizard")
         set(unlock_component_output "${UNLOCK_SETUP_OUTPUT_NAME}")
         set(UNLOCK_VERSION_FILENAME "${UNLOCK_SETUP_OUTPUT_NAME}.exe")
+        set_target_properties(${unlock_component_target} PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY "$<1:${UNLOCK_DIST_DIRECTORY}>"
+            PDB_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>")
+        if(MSVC)
+            target_link_options(${unlock_component_target} PRIVATE
+                "$<$<CONFIG:Debug>:/ILK:${CMAKE_CURRENT_BINARY_DIR}/${UNLOCK_SETUP_OUTPUT_NAME}.ilk>")
+        endif()
+    else()
+        list(APPEND unlock_payload_targets "${unlock_component_target}")
+        list(APPEND unlock_payload_files "$<TARGET_FILE:${unlock_component_target}>")
     endif()
     set_target_properties(${unlock_component_target} PROPERTIES OUTPUT_NAME "${unlock_component_output}")
     if(unlock_component_target STREQUAL "unlock_credential_provider")
@@ -288,6 +304,25 @@ foreach(unlock_component IN ITEMS
     configure_file(Resources/ProductVersion.rc.in "${unlock_component_target}-version.rc" @ONLY)
     target_sources(${unlock_component_target} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/${unlock_component_target}-version.rc")
 endforeach()
+
+find_program(UNLOCK_POWERSHELL powershell REQUIRED)
+set(unlock_payload_directory "${CMAKE_CURRENT_BINARY_DIR}/package/$<CONFIG>")
+add_custom_command(
+    OUTPUT "${unlock_payload_directory}/PackagePayload.rc" "${unlock_payload_directory}/PackagePayload.h"
+    COMMAND "${UNLOCK_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+        -File "${CMAKE_CURRENT_SOURCE_DIR}/WindowsArchitecture.ps1"
+        "${UNLOCK_VERSION_TEXT}" "${unlock_payload_directory}/PackagePayload.rc"
+        "${unlock_payload_directory}/PackagePayload.h" ${unlock_payload_files}
+    DEPENDS ${unlock_payload_targets} ${unlock_payload_files}
+        "${CMAKE_CURRENT_SOURCE_DIR}/WindowsArchitecture.ps1"
+        "${CMAKE_CURRENT_SOURCE_DIR}/ProductVersion.h"
+        "${CMAKE_CURRENT_SOURCE_DIR}/ComponentFiles.h"
+    VERBATIM
+)
+target_sources(unlock_windows_components_wizard PRIVATE
+    "${unlock_payload_directory}/PackagePayload.rc" "${unlock_payload_directory}/PackagePayload.h")
+target_include_directories(unlock_windows_components_wizard PRIVATE "${unlock_payload_directory}")
+add_dependencies(unlock_windows_components_wizard ${unlock_payload_targets})
 
 set(UNLOCK_APP_ICON_ASSET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../ios/Assets.xcassets/AppIcon.appiconset")
 file(READ "${UNLOCK_APP_ICON_ASSET_DIR}/Contents.json" unlock_icon_manifest)

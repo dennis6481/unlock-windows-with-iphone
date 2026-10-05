@@ -61,6 +61,8 @@
   NOT be presented as completion of a product feature.
 - If a reference link is provided and used in an approved implementation, add it at the end of README.md.
 - If a reference link is provided but is not used, do not add it in README.md
+- After each turn, check all the documents to see if the information needs to be updated.
+- Keep the existing document writing style
 
 ## Build and validation
 

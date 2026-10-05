@@ -6,7 +6,7 @@ Unlock an existing Windows desktop session using a signature from your iPhone's 
 
 **Developer technical preview.** There is currently no App Store or TestFlight distribution for the iOS app: you need a Mac, Xcode and your own signing configuration to install it on a physical iPhone. This is an experimental open-source project, not a ready-to-use consumer release.
 
-
+The author reports that the primary unlock workflow is relatively stable on their setup with one Windows user and a password-backed Microsoft Account (MSA). This is experience on that setup, not acceptance of every scenario or the latest packaging changes; see the [testing guide](docs/Testing.md).
 
 ## What it does
 
@@ -36,7 +36,7 @@ The [protocol and architecture](Protocol.md) describe the complete data flow and
 | Windows architecture | Native **x64 (64-bit x86)** or **ARM64**. ARM64 has not been tested on physical hardware. 32-bit x86 and ARM32 are not supported. |
 | PC Bluetooth | BLE-capable adapter and driver with Windows GATT server / peripheral advertising support. BLE support alone does not guarantee that the adapter can publish this service. |
 | Phone | Physical iPhone with **iOS 18 or later**, Bluetooth enabled and Secure Enclave available. |
-| Windows account | An existing local console session with a password-backed Microsoft Account. Other account types and remote sessions are not established supported configurations. |
+| Windows account | One configured Windows user with an existing physical-console session and a password-backed Microsoft Account (MSA). Local accounts, multiple Windows users and remote sessions are not supported. |
 | Development | Windows C++ tools for the Windows components; a Mac and Xcode for the iPhone app. See the platform guides below. |
 
 ## Build and set up
@@ -46,6 +46,8 @@ The [protocol and architecture](Protocol.md) describe the complete data flow and
 - [Testing and diagnostics](docs/Testing.md)
 
 Build both platforms from the same revision. Do not mix service, Credential Provider and desktop binaries from different builds. A simulator can be useful for UI work, but cannot exercise the Secure Enclave signing path.
+
+Windows distribution is a single `windows/dist/UnlockWithIPhone_<version>_setup.exe` for the selected native target architecture, with the desktop app, service and Credential Provider embedded. The version remains automatic from `ProductVersion.h`. Release uses a static C/C++ runtime to avoid requiring development tools or a separate VC++ Redistributable on the target PC. This packaging change is statically inspected only; Release dependencies and clean-machine installation/runtime remain unverified. Complete and uninstall older companion-file installations with their original installer before installing this package.
 
 ## Repository guide
 
@@ -62,7 +64,7 @@ The [Windows module index](windows/README.md#module-index) explains the source d
 ## Known limitations
 
 - **Distribution:** There is no iOS distribution channel; device installation and signing are the developer's responsibility. Production signing and distribution are not guaranteed.
-- **Windows sessions and accounts:** Only an existing physical-console session can be unlocked. Initial sign-in after boot or sign-out uses the original Windows password/PIN path. The current credential integration targets password-backed MSA accounts; account changes or an outdated saved password can cause native authentication to fail.
+- **Windows sessions and accounts:** Only an existing physical-console session can be unlocked. Initial sign-in after boot or sign-out uses the original Windows password/PIN path. Currently, only password-backed Microsoft Account (MSA) accounts are supported; local Windows accounts are not supported. Account changes or an outdated saved password can cause native authentication to fail.
 - **Bluetooth and proximity:** Background BLE recovery depends on the iPhone, Windows adapter, driver and OS. Overnight operation, sleep/resume and failure scenarios need broader device testing. Force-quitting the iOS app is not a promised recovery path. RSSI is an adjustable proximity heuristic, not a reliable distance measurement or protection against relay attacks.
 - **Validation and security assurance:** ARM64 hardware, the oldest supported Windows build and the full negative-path matrix have not been validated. There has been no independent security audit.
 
@@ -70,6 +72,8 @@ The testing guide describes how to report results without treating a successful 
 
 ## To Do
 
+- [ ] Support multiple Windows users.
+- [ ] Support local Windows accounts.
 - [ ] Modernize the iOS and Windows UI and setup guidance
 - [ ] Integrate iOS AccessorySetupKit.
 - [ ] Move Windows installer packaging to an MSI architecture.
@@ -87,3 +91,6 @@ The project uses the [MIT License](LICENSE.md). This is an independent project; 
 - [Microsoft: GATT server](https://learn.microsoft.com/en-us/windows/apps/develop/devices-sensors/gatt-server)
 
 - [Microsoft: Credential Provider system user array](https://learn.microsoft.com/en-us/windows/win32/api/credentialprovider/nf-credentialprovider-icredentialprovidersetuserarray-setuserarray)
+- [CMake: MSVC runtime library selection](https://cmake.org/cmake/help/latest/variable/CMAKE_MSVC_RUNTIME_LIBRARY.html)
+- [Microsoft: /MD and /MT runtime linkage](https://learn.microsoft.com/en-us/cpp/build/reference/md-mt-ld-use-run-time-library)
+- [Microsoft: Finding and loading resources](https://learn.microsoft.com/en-us/windows/win32/menurc/finding-and-loading-resources)

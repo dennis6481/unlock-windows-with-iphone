@@ -6,7 +6,9 @@ The native Components Wizard installs, updates, reinstalls and removes the four 
 
 ## Package and deployment
 
-The build produces `UnlockWithIPhone_<version>_setup.exe`; the version is read from [ProductVersion.h](../ProductVersion.h). Keep the service, CP DLL and desktop app from the same build next to the package. The installed/staged maintenance program is named `setup.exe`. Fixed component names are defined in [ComponentFiles.h](../ComponentFiles.h).
+The build produces a self-contained `windows/dist/UnlockWithIPhone_<version>_setup.exe` for the selected target architecture; the version is read automatically from [ProductVersion.h](../ProductVersion.h). The service, CP DLL and desktop app are embedded as resources after their builds complete. Component changes regenerate the resource and SHA-256 manifest and rebuild setup. The installed/staged maintenance program is named `setup.exe` and retains the embedded payload. Fixed component names are defined in [ComponentFiles.h](../ComponentFiles.h).
+
+Release statically links the MSVC runtime; target machines are intended to require neither development tools nor a separate VC++ Redistributable. Single-file packaging, static runtime linkage and clean-machine operation are source changes pending an authorized build and runtime acceptance.
 
 | Location | Contents |
 |---|---|
@@ -19,6 +21,10 @@ Setup requests UAC and binds installation to the actual physical-console user, e
 
 All binaries must match the native OS architecture and product version. Protected directories require appropriate owner/ACL checks; unsafe paths and reparse points are rejected. Missing or mixed file versions are errors, not guessed installation state.
 
+Before writing a transaction, setup validates its own version/architecture and hashes each embedded component against the build-generated version/architecture manifest. During protected staging it extracts the three components, copies itself as `setup.exe` and verifies the extracted bytes and all four file versions/architectures before setting `payloadReady`. The hashes detect payload corruption; they are not publisher signatures. There is no adjacent-file fallback or extra extraction directory.
+
+Preflight and preparation use the same package validator. Preparation keeps that validated resource mapping open and extracts its verified bytes without a second resource hash. Installed-package format is checked with installed versions; pending-package format is checked when reading the pending transaction. Component names and membership remain in `ComponentFiles.h`, product version in `ProductVersion.h`; the embedded manifest is generated from the build outputs rather than maintained separately.
+
 ## Version and data rules
 
 | Operation | Behavior |
@@ -30,6 +36,8 @@ All binaries must match the native OS architecture and product version. Protecte
 | Uninstall | Confirm, clear password through the service, remove registration/ComputerId and Windows components/integration. |
 
 The current installation schema is **5**, defined in [SetupContract.h](SetupContract.h). Unsupported schemas, incomplete installations and mismatched pending transactions are rejected. This tool does not migrate them; remove them with their own maintenance tool before a fresh installation. Phone records/private keys are managed separately on the iPhone.
+
+The schema and transaction phases are unchanged. Older companion-file installations, including pending transactions, must be completed and uninstalled with their original installer before using this package. Existing maintenance packages without embedded resources are rejected; no migration path is retained.
 
 UAC cancellation and confirmation cancellation do not begin the operation. Uninstall from Settings passes `--uninstall` and opens confirmation with Cancel as default. An active transaction takes precedence over starting another operation.
 

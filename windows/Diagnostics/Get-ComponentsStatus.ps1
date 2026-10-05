@@ -49,6 +49,9 @@ $buildSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\CMakeLists.
 $setupOutput = [regex]::Matches($buildSource, 'set\(UNLOCK_SETUP_OUTPUT_NAME "([^"]+)"\)')
 if ($setupOutput.Count -ne 1) { throw 'Could not parse the authoritative setup output name.' }
 $setupBuildName = $setupOutput[0].Groups[1].Value.Replace('${UNLOCK_VERSION_TEXT}', $packageVersion) + '.exe'
+$distOutput = [regex]::Matches($buildSource, 'set\(UNLOCK_DIST_DIRECTORY "([^"]+)"\)')
+if ($distOutput.Count -ne 1) { throw 'Could not parse the authoritative setup output directory.' }
+$distDirectory = $distOutput[0].Groups[1].Value.Replace('${CMAKE_CURRENT_SOURCE_DIR}', [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..')))
 
 $entries = [regex]::Matches($manifest, '\{(k\w+), (true|false)\}')
 $count = [regex]::Match($manifest, 'std::array<ComponentFile, (\d+)>')
@@ -230,8 +233,9 @@ $recordVersion = if ($startupRecord) { $startupRecord[$installedVersionName] } e
 foreach ($component in $components) {
     $installedDirectory = if ($component.DesktopTool) { $desktopDirectory } else { $systemDirectory }
     $buildName = if ($component.Name -eq (Get-Definition 'kInstallerFile')) { $setupBuildName } else { $component.Name }
+    $outputDirectory = if ($component.Name -eq (Get-Definition 'kInstallerFile')) { $distDirectory } else { $BuildDirectory }
     foreach ($location in @(
-        [PSCustomObject]@{ Role = 'Build'; Path = Join-Path $BuildDirectory $buildName; ExpectedVersion = $packageVersion },
+        [PSCustomObject]@{ Role = 'Build'; Path = Join-Path $outputDirectory $buildName; ExpectedVersion = $packageVersion },
         [PSCustomObject]@{ Role = 'Installed'; Path = Join-Path $installedDirectory $component.Name; ExpectedVersion = $recordVersion }
     )) {
         try { $file = Get-Item -LiteralPath $location.Path -ErrorAction Stop }

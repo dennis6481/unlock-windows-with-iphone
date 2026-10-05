@@ -1,5 +1,13 @@
 # Created by Rui MA on 28 Sep 2026
 
+[CmdletBinding()]
+param(
+    [Parameter(Position = 0)][string]$PackageVersion,
+    [Parameter(Position = 1)][string]$PackageResourcePath,
+    [Parameter(Position = 2)][string]$PackageHeaderPath,
+    [Parameter(Position = 3, ValueFromRemainingArguments)][string[]]$PackageFiles
+)
+
 function Get-NativeWindowsArchitecture {
     [CmdletBinding()]
     param()
@@ -88,6 +96,57 @@ function Get-CurrentPowerShellArchitecture {
     return Get-PortableExecutableArchitecture -Path $processPath
 }
 
+function Write-EmbeddedPackage {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Version,
+        [Parameter(Mandatory)][string]$ResourcePath,
+        [Parameter(Mandatory)][string]$HeaderPath,
+        [Parameter(Mandatory)][string[]]$Files
+    )
+
+    $ErrorActionPreference = 'Stop'
+    $parts = $Version.Split('.')
+    if ($parts.Count -ne 3) { throw "Invalid product version: $Version" }
+    $resourceLines = @('// Created by Rui MA on 05 Oct 2026', '', '#include <windows.h>')
+    $headerLines = @('// Created by Rui MA on 05 Oct 2026', '', '#pragma once', '',
+        'struct EmbeddedComponent final {', '    const wchar_t* name;', '    WORD resourceId;',
+        '    ProductVersion version;', '    Architecture architecture;',
+        '    unlock_windows::protocol::Sha256Digest digest;', '};',
+        'const EmbeddedComponent kEmbeddedComponents[]{')
+    $architecture = $null
+    $resourceId = 1
+    foreach ($file in $Files) {
+        $path = (Resolve-Path -LiteralPath $file).Path
+        $info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($path)
+        if ($info.ProductVersion -ne $Version -or $info.FileVersion -ne $Version -or
+            $info.ProductPrivatePart -ne 0 -or $info.FilePrivatePart -ne 0 -or
+            $info.ProductMajorPart -ne [int]$parts[0] -or $info.FileMajorPart -ne [int]$parts[0] -or
+            $info.ProductMinorPart -ne [int]$parts[1] -or $info.FileMinorPart -ne [int]$parts[1] -or
+            $info.ProductBuildPart -ne [int]$parts[2] -or $info.FileBuildPart -ne [int]$parts[2]) {
+            throw "Mixed or missing product/file version: $path"
+        }
+        $fileArchitecture = Get-PortableExecutableArchitecture -Path $path
+        if ($architecture -and $fileArchitecture -ne $architecture) { throw "Mixed payload architecture: $path" }
+        $architecture = $fileArchitecture
+        $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+        $bytes = for ($index = 0; $index -lt $hash.Length; $index += 2) { '0x' + $hash.Substring($index, 2) }
+        $name = [System.IO.Path]::GetFileName($path)
+        $resourceLines += "$resourceId RCDATA `"$($path.Replace('\', '/'))`""
+        $headerLines += ('    {L"' + $name + '", ' + $resourceId + ', {' + ($parts -join ', ') +
+            '}, Architecture::' + $architecture + ', {' + ($bytes -join ', ') + '}},')
+        ++$resourceId
+    }
+    $headerLines += '};'
+    [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($ResourcePath)) | Out-Null
+    [System.IO.File]::WriteAllLines($ResourcePath, $resourceLines, [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllLines($HeaderPath, $headerLines, [System.Text.UTF8Encoding]::new($false))
+}
+
 if ($MyInvocation.InvocationName -ne '.') {
-    Get-NativeWindowsArchitecture
+    if ($PackageVersion) {
+        Write-EmbeddedPackage -Version $PackageVersion -ResourcePath $PackageResourcePath -HeaderPath $PackageHeaderPath -Files $PackageFiles
+    } else {
+        Get-NativeWindowsArchitecture
+    }
 }

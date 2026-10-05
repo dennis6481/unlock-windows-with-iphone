@@ -10,6 +10,7 @@
 #include "SetupFinalization.h"
 #include "SavedCredentialIpc.h"
 #include "../CredentialProvider/UnlockCredentialProvider.h"
+#include "../Protocol/UnlockCrypto.h"
 
 #include <Windows.h>
 #include <aclapi.h>
@@ -23,6 +24,7 @@
 #include <cstring>
 #include <cwchar>
 #include <fstream>
+#include <span>
 #include <utility>
 
 #pragma comment(lib, "advapi32.lib")
@@ -30,6 +32,8 @@
 
 namespace unlock::components {
 namespace {
+
+#include "PackagePayload.h"
 
 const std::wstring kCredentialProviderClsidText = [] {
     std::array<wchar_t, 39> text{};
@@ -87,6 +91,71 @@ public:
 private:
     HANDLE handle_ = INVALID_HANDLE_VALUE;
 };
+
+class EmbeddedPackage final {
+public:
+    explicit EmbeddedPackage(const std::filesystem::path& path) {
+        module_ = LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_AS_DATAFILE_EXCLUSIVE);
+        if (!module_) fail(L"Could not read embedded package: " + path.wstring() + L": " + win32ErrorMessage(GetLastError()));
+    }
+    EmbeddedPackage(const EmbeddedPackage&) = delete;
+    EmbeddedPackage& operator=(const EmbeddedPackage&) = delete;
+    ~EmbeddedPackage() { FreeLibrary(module_); }
+
+    void requireComponents() const {
+        for (const auto& entry : kEmbeddedComponents)
+            if (!FindResourceW(module_, MAKEINTRESOURCEW(entry.resourceId), RT_RCDATA))
+                fail(L"This installation or transaction has no self-contained package. Complete and uninstall it with its original installer before installing this version. No migration will run.");
+    }
+
+    ProductVersion validate(const WindowsAdapter& adapter, const WizardState& state);
+    std::span<const std::uint8_t> component(size_t index) const { return components_[index]; }
+
+private:
+    std::span<const std::uint8_t> readComponent(const ComponentFile& file, ProductVersion version,
+        Architecture architecture) const {
+        for (const auto& entry : kEmbeddedComponents) {
+            if (wcscmp(entry.name, file.name) != 0) continue;
+            if (entry.version != version || entry.architecture != architecture)
+                fail(L"Embedded component version or architecture mismatch: " + std::wstring(file.name));
+            const auto resource = FindResourceW(module_, MAKEINTRESOURCEW(entry.resourceId), RT_RCDATA);
+            if (!resource) fail(L"Missing embedded component: " + std::wstring(file.name));
+            const auto size = SizeofResource(module_, resource);
+            const auto loaded = LoadResource(module_, resource);
+            const auto bytes = loaded ? static_cast<const std::uint8_t*>(LockResource(loaded)) : nullptr;
+            if (!size || !bytes) fail(L"Could not read embedded component: " + std::wstring(file.name));
+            unlock_windows::protocol::Sha256Digest digest{};
+            const auto status = unlock_windows::protocol::sha256(bytes, size, digest);
+            if (status < 0) fail(L"Could not hash embedded component: " + std::wstring(file.name) +
+                L": NTSTATUS=" + std::to_wstring(status));
+            if (digest != entry.digest) fail(L"Embedded component integrity check failed: " + std::wstring(file.name));
+            return {bytes, size};
+        }
+        fail(L"Missing embedded component manifest entry: " + std::wstring(file.name));
+    }
+    HMODULE module_ = nullptr;
+    std::array<std::span<const std::uint8_t>, kComponentFiles.size()> components_{};
+};
+
+void writeEmbeddedComponent(const std::filesystem::path& path, std::span<const std::uint8_t> bytes) {
+    const auto handle = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) fail(L"Could not stage embedded component: " + path.wstring() +
+        L": " + win32ErrorMessage(GetLastError()));
+    ScopedHandle file(handle);
+    FILE_ATTRIBUTE_TAG_INFO attributes{};
+    checkWin32(GetFileInformationByHandleEx(file.get(), FileAttributeTagInfo, &attributes, sizeof(attributes)),
+        L"Inspect staged component");
+    if (attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) fail(L"Unsafe staged component: " + path.wstring());
+    LARGE_INTEGER start{};
+    checkWin32(SetFilePointerEx(file.get(), start, nullptr, FILE_BEGIN), L"Seek staged component");
+    checkWin32(SetEndOfFile(file.get()), L"Truncate staged component");
+    DWORD written = 0;
+    checkWin32(WriteFile(file.get(), bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr),
+        L"Write embedded component " + path.wstring());
+    if (written != bytes.size()) fail(L"Incomplete embedded component write: " + path.wstring());
+    checkWin32(FlushFileBuffers(file.get()), L"Flush embedded component " + path.wstring());
+}
 
 class ScopedServiceHandle final {
 public:
@@ -509,16 +578,21 @@ ProductVersion WindowsAdapter::binaryVersion(const std::filesystem::path& file) 
         fail(L"Invalid or inconsistent component version: " + file.wstring());
     return {HIWORD(info->dwProductVersionMS), LOWORD(info->dwProductVersionMS), HIWORD(info->dwProductVersionLS)};
 }
-ProductVersion WindowsAdapter::validatePackage(const WizardState& state) const {
+ProductVersion EmbeddedPackage::validate(const WindowsAdapter& adapter, const WizardState& state) {
     const auto version = parseProductVersion(state.packageVersion);
     if (!version) fail(L"Invalid recorded package version.");
-    for (const auto& component : kComponentFiles) {
-        const auto source = wcscmp(component.name, kInstallerFile) == 0
-            ? std::filesystem::path(state.sourcePath) : std::filesystem::path(state.sourcePath).parent_path() / component.name;
-        if (!fileExists(source) || executableArchitecture(source) != environment().nativeArchitecture || binaryVersion(source) != *version)
-            fail(L"Missing, wrong-architecture or mixed-version package component: " + source.wstring());
-    }
+    const std::filesystem::path source(state.sourcePath);
+    const auto native = adapter.environment().nativeArchitecture;
+    if (!fileExists(source) || executableArchitecture(source) != native || adapter.binaryVersion(source) != *version)
+        fail(L"Missing, wrong-architecture or mixed-version installer: " + source.wstring());
+    for (size_t index = 0; index < kComponentFiles.size(); ++index)
+        if (wcscmp(kComponentFiles[index].name, kInstallerFile) != 0)
+            components_[index] = readComponent(kComponentFiles[index], *version, native);
     return *version;
+}
+ProductVersion WindowsAdapter::validatePackage(const WizardState& state) const {
+    EmbeddedPackage package(state.sourcePath);
+    return package.validate(*this, state);
 }
 void WindowsAdapter::validateInstalledVersions(const WizardState& state) const {
     const auto version = parseProductVersion(state.installedVersion);
@@ -526,6 +600,7 @@ void WindowsAdapter::validateInstalledVersions(const WizardState& state) const {
     for (const auto& component : kComponentFiles)
         if (binaryVersion(componentTarget(component)) != *version)
             fail(L"Installed component version disagrees with the product record: " + componentTarget(component).wstring());
+    EmbeddedPackage(desktopDirectory() / kInstallerFile).requireComponents();
 }
 void WindowsAdapter::ensureDeploymentDirectories() const {
     protectedDirectory(desktopDirectory(), true);
@@ -607,6 +682,9 @@ std::optional<WizardState> WindowsAdapter::readState() const {
     if (state.operation > SetupOperation::uninstall || !parseProductVersion(state.packageVersion) ||
         (state.phase == WizardPhase::installed && !parseProductVersion(state.installedVersion)))
         fail(L"Unsupported product version or operation record. No migration will run.");
+    const auto packagePath = state.payloadReady ? state.wizardPath : state.sourcePath;
+    if (state.phase != WizardPhase::installed && !packagePath.empty() && fileExists(packagePath))
+        EmbeddedPackage(packagePath).requireComponents();
     return state;
 }
 
@@ -666,7 +744,7 @@ void WindowsAdapter::copyNativeBinary(const std::filesystem::path& source, const
     const bool replace) const {
     logOperation(L"Copy: " + source.wstring() + L" -> " + target.wstring());
     if (!fileExists(source)) {
-        fail(L"Required build output is missing: " + source.wstring());
+        fail(L"Required source component is missing: " + source.wstring());
     }
     const auto status = environment();
     const auto sourceArchitecture = executableArchitecture(source);
@@ -758,14 +836,10 @@ void WindowsAdapter::markUpdateRequiresReboot() const {
 }
 
 void WindowsAdapter::stageUpdate(WizardState& state) const {
-    validatePackage(state);
+    EmbeddedPackage package(state.sourcePath);
+    const auto version = package.validate(*this, state);
     ensureDeploymentDirectories();
     const auto native = environment().nativeArchitecture;
-    for (const auto& component : kComponentFiles) {
-        const auto source = wcscmp(component.name, kInstallerFile) == 0 ? std::filesystem::path(state.sourcePath) : std::filesystem::path(state.sourcePath).parent_path() / component.name;
-        if (!fileExists(source) || executableArchitecture(source) != native)
-            fail(L"Missing or wrong-architecture precompiled component: " + source.wstring());
-    }
     const auto directory = updateDirectory(state);
     PSECURITY_DESCRIPTOR descriptor = nullptr;
     checkWin32(ConvertStringSecurityDescriptorToSecurityDescriptorW(
@@ -777,9 +851,31 @@ void WindowsAdapter::stageUpdate(WizardState& state) const {
     if (!created && error != ERROR_ALREADY_EXISTS) checkWin32(created, L"Could not create protected update staging directory");
     protectedDirectory(directory, false);
     logOperation(L"Create protected staging directory: " + directory.wstring());
-    for (const auto& component : kComponentFiles) {
-        const auto source = wcscmp(component.name, kInstallerFile) == 0 ? std::filesystem::path(state.sourcePath) : std::filesystem::path(state.sourcePath).parent_path() / component.name;
-        copyNativeBinary(source, directory / component.name, true);
+    for (size_t index = 0; index < kComponentFiles.size(); ++index) {
+        const auto& component = kComponentFiles[index];
+        const auto target = directory / component.name;
+        if (wcscmp(component.name, kInstallerFile) == 0) {
+            copyNativeBinary(state.sourcePath, target, true);
+        } else {
+            const auto bytes = package.component(index);
+            logOperation(L"Extract embedded component: " + target.wstring());
+            writeEmbeddedComponent(target, bytes);
+            std::ifstream staged(target, std::ios::binary);
+            if (!staged) fail(L"Could not verify staged component: " + target.wstring());
+            std::array<char, 65536> buffer{};
+            size_t offset = 0;
+            do {
+                staged.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+                const auto count = static_cast<size_t>(staged.gcount());
+                if (staged.bad() || (staged.fail() && !staged.eof()) || count > bytes.size() - offset ||
+                    std::memcmp(buffer.data(), bytes.data() + offset, count) != 0)
+                    fail(L"Staged component integrity check failed: " + target.wstring());
+                offset += count;
+            } while (!staged.eof());
+            if (offset != bytes.size()) fail(L"Incomplete staged component: " + target.wstring());
+        }
+        if (executableArchitecture(target) != native || binaryVersion(target) != version)
+            fail(L"Staged component version or architecture mismatch: " + target.wstring());
     }
     state.wizardPath = (directory / kInstallerFile).wstring();
 }

@@ -136,8 +136,15 @@ std::wstring encodedPowerShell(const std::wstring& script) {
         if (lineStart && (character == L' ' || character == L'\t' || character == L'\r')) continue;
         compact += character; lineStart = character == L'\n';
     }
-    const auto* bytes = reinterpret_cast<const unsigned char*>(compact.data());
-    const size_t count = compact.size() * sizeof(wchar_t);
+    const int byteCount = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, compact.data(),
+        static_cast<int>(compact.size()), nullptr, 0, nullptr, nullptr);
+    if (!byteCount) throw ComponentError(L"Could not encode the finalization command.");
+    std::string utf8(static_cast<size_t>(byteCount), '\0');
+    if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, compact.data(), static_cast<int>(compact.size()),
+        utf8.data(), byteCount, nullptr, nullptr) != byteCount)
+        throw ComponentError(L"Could not encode the finalization command.");
+    const auto* bytes = reinterpret_cast<const unsigned char*>(utf8.data());
+    const size_t count = utf8.size();
     constexpr wchar_t alphabet[] = L"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     std::wstring encoded;
     for (size_t i = 0; i < count; i += 3) {
@@ -147,11 +154,48 @@ std::wstring encodedPowerShell(const std::wstring& script) {
         encoded += i + 1 < count ? alphabet[(value >> 6) & 63] : L'=';
         encoded += i + 2 < count ? alphabet[value & 63] : L'=';
     }
-    auto arguments = L"-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand " + encoded;
+    auto arguments = L"-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -Command \"& ([scriptblock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" + encoded + L"'))))\"";
     if (arguments.size() > 32000) throw ComponentError(L"Finalization command exceeds the supported command-line size.");
     return arguments;
 }
-std::wstring resultObserverScript(const WindowsAdapter& adapter, const WizardState& state) {
+namespace {
+std::wstring alertScript() {
+    return LR"ps(
+function Show-SetupAlert($title,$text,$icon){
+try{
+if(!('SetupUi' -as [type])){
+Add-Type -ReferencedAssemblies System.dll,System.Windows.Forms.dll,System.Drawing.dll -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Windows.Forms;
+public static class SetupUi{
+[DllImport("user32",SetLastError=true)]static extern IntPtr SetThreadDpiAwarenessContext(IntPtr c);
+[DllImport("comctl32",CharSet=CharSet.Unicode,PreserveSig=true)]static extern int TaskDialog(IntPtr p,IntPtr h,string t,string i,string c,uint b,IntPtr icon,out int r);
+public static void Show(string t,string c,int icon){
+IntPtr old=SetThreadDpiAwarenessContext(new IntPtr(-4));
+if(old==IntPtr.Zero)throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+try{
+Application.EnableVisualStyles();
+int hr=0;
+Exception failure=null;
+using(Form f=new Form()){
+f.Opacity=0;f.ShowInTaskbar=false;f.StartPosition=FormStartPosition.CenterScreen;
+f.Shown+=delegate{try{int r;hr=TaskDialog(IntPtr.Zero,IntPtr.Zero,t,null,c,1,new IntPtr(unchecked((ushort)icon)),out r);}catch(Exception e){failure=e;}finally{f.Close();}};
+f.ShowDialog();
+}
+if(failure!=null)throw failure;
+Marshal.ThrowExceptionForHR(hr);
+}finally{if(SetThreadDpiAwarenessContext(old)==IntPtr.Zero)throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());}
+}
+}
+'@
+}
+[SetupUi]::Show($title,$text,$icon)
+}catch{Write-Error('UI display failure; operation outcome is unchanged: '+$_.Exception.Message)-ErrorAction Continue;exit 1}
+}
+)ps";
+}
+std::wstring observerScript(const WindowsAdapter& adapter, const WizardState& state) {
     return prefix(adapter, state, LR"ps(
 try{
     if([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -ne $userSid){throw 'Only the recorded console user can display this result.'}
@@ -203,15 +247,17 @@ try{
             if($failure){throw($failure[$msgKey]+"`r`n"+$failure[$logKey])}
             throw 'Uninstall finalization is incomplete. The transaction remains available for inspection.'
 }
-        Add-Type -AssemblyName System.Windows.Forms
-        [Windows.Forms.MessageBox]::Show('Uninstall completed and verified. Windows credentials, phone enrollment and computer identity were removed. Remove the computer record on your iPhone separately.','Unlock Windows with iPhone',[Windows.Forms.MessageBoxButtons]::OK,[Windows.Forms.MessageBoxIcon]::Information)|Out-Null
+        Show-SetupAlert 'Unlock Windows with iPhone' 'Uninstall completed and verified. Windows credentials, phone enrollment and computer identity were removed. Remove the computer record on your iPhone separately.' -3
 }finally{foreach($event in $events){$event.Dispose()}}
 }catch{
-    Add-Type -AssemblyName System.Windows.Forms
-    [Windows.Forms.MessageBox]::Show($_.Exception.Message,'Setup needs attention',[Windows.Forms.MessageBoxButtons]::OK,[Windows.Forms.MessageBoxIcon]::Error)|Out-Null
+    Show-SetupAlert 'Setup needs attention' $_.Exception.Message -2
     exit 1
 }finally{$hk.Dispose()}
 )ps");
+}
+}
+std::wstring resultObserverScript(const WindowsAdapter& adapter, const WizardState& state) {
+    return alertScript() + observerScript(adapter, state);
 }
 std::wstring finalizationRecoveryScript(const WindowsAdapter& adapter, const WizardState& state) {
     std::array<wchar_t, 32768> directory{};
@@ -231,11 +277,11 @@ try{
 $scheduler=New-Object -ComObject 'Schedule.Service';$scheduler.Connect();$scheduler.GetFolder('\').GetTask($finalTask).Run($null)|Out-Null
 $hk.Dispose()
 )ps");
-    return L"$ErrorActionPreference='Stop'\ntry { $handoff=Start-Process -FilePath " + literal(executable) +
+    return alertScript() + L"$ErrorActionPreference='Stop'\ntry { $handoff=Start-Process -FilePath " + literal(executable) +
         L" -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList " + literal(encodedPowerShell(trigger)) +
         L"\nif ($handoff.ExitCode -ne 0) { throw 'Could not start finalization. Inspect the preserved operation result.' }\n" +
-        resultObserverScript(adapter, state) + LR"ps(
-}catch{Add-Type -AssemblyName System.Windows.Forms;[Windows.Forms.MessageBox]::Show($_.Exception.Message,'Setup needs attention')|Out-Null;exit 1}
+        observerScript(adapter, state) + LR"ps(
+}catch{Show-SetupAlert 'Setup needs attention' $_.Exception.Message -2;exit 1}
 )ps";
 }
 std::wstring finalizationScript(const WindowsAdapter& adapter, const WizardState& state) {

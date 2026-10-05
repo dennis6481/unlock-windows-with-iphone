@@ -204,6 +204,8 @@ iOS 对系统恢复的候选设备读取 ComputerId 并重新核实订阅；长�
 
 本轮追加将安装器默认页收紧，展开详情才增加高度，打开时在活动显示器居中，调整大小保持中心。Windows 可见完整产品名统一为 **Unlock Windows with iPhone®**，已安装页标题为 **Unlock Windows with iPhone® installed**。此为历史 UI 记录；当时仅对外安装产物叫 `setup.exe`，内部旧维护文件名现已由本轮正式布局替代，不迁移旧续办记录。未构建或运行，新布局仍待验收。
 
+2026-10-04 安装器显示层统一为 Task Dialog 风格：系统状态图标、白色正文和紧凑灰色按钮区，保留按钮行为；普通页面直接显示文字并移除详情复选框，仅进度页面保留可滚动日志。确认、错误及卸载结果通知使用原生 Task Dialog，并补短期结果进程的 DPI 设置。安装／更新／卸载逻辑冻结，本次仅静态检查，未构建或运行 UI；高 DPI、跨屏及结果显示待实测，详见 [安装器文档](windows/ComponentsWizard/README.md)。
+
 参考：[Microsoft 高 DPI 桌面开发指南](https://learn.microsoft.com/en-us/windows/win32/hidpi/high-dpi-desktop-application-development-on-windows)。
 
 参考：[Microsoft 应用卸载注册项](https://learn.microsoft.com/en-us/windows/win32/msi/uninstall-registry-key)、[Windows 文件关闭与删除](https://learn.microsoft.com/en-us/windows/win32/fileio/closing-and-deleting-files)、[MoveFileEx 延迟删除及返回值限制](https://learn.microsoft.com/windows/win32/api/winbase/nf-winbase-movefileexa)、[Task Scheduler 主动启动](https://learn.microsoft.com/en-us/windows/win32/api/taskschd/nf-taskschd-iregisteredtask-run)、[Task Scheduler 结果码](https://learn.microsoft.com/en-us/windows/win32/taskschd/task-scheduler-error-and-success-constants)。

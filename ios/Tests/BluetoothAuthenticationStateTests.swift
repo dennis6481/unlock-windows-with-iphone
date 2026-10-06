@@ -34,7 +34,7 @@ final class BluetoothAuthenticationStateTests: XCTestCase {
         XCTAssertEqual(state.phase, .services)
         XCTAssertEqual(state.generation, generation + 1)
         XCTAssertNil(state.verifiedComputerID)
-        XCTAssertFalse(state.acceptsAuthentication(target: computer, enabled: true, enrolling: false))
+        XCTAssertFalse(state.acceptsAuthentication(target: computer, enrolling: false))
         XCTAssertFalse(state.invalidateServices(now: 5))
         XCTAssertEqual(state.completeDiscoveryStep(now: 6), .rediscover)
         XCTAssertEqual(state.completeDiscoveryStep(now: 7), .proceed)
@@ -89,12 +89,11 @@ final class BluetoothAuthenticationStateTests: XCTestCase {
         XCTAssertFalse(state.subscriptions(challenge: true, result: true, now: 1))
         XCTAssertTrue(state.verifyComputer(computer, expected: computer, enrolling: false, now: 1))
         XCTAssertFalse(state.subscriptions(challenge: true, result: false, now: 2))
-        XCTAssertFalse(state.acceptsAuthentication(target: computer, enabled: true, enrolling: false))
+        XCTAssertFalse(state.acceptsAuthentication(target: computer, enrolling: false))
         XCTAssertTrue(state.subscriptions(challenge: true, result: true, now: 3))
-        XCTAssertTrue(state.acceptsAuthentication(target: computer, enabled: true, enrolling: false))
-        XCTAssertFalse(state.acceptsAuthentication(target: otherComputer, enabled: true, enrolling: false))
-        XCTAssertFalse(state.acceptsAuthentication(target: computer, enabled: false, enrolling: false))
-        XCTAssertFalse(state.acceptsAuthentication(target: computer, enabled: true, enrolling: true))
+        XCTAssertTrue(state.acceptsAuthentication(target: computer, enrolling: false))
+        XCTAssertFalse(state.acceptsAuthentication(target: otherComputer, enrolling: false))
+        XCTAssertFalse(state.acceptsAuthentication(target: computer, enrolling: true))
     }
 
     func testExpiredSubscriptionSetupCannotBecomeReady() {
@@ -170,33 +169,6 @@ final class BluetoothAuthenticationStateTests: XCTestCase {
         XCTAssertNil(BluetoothAuthenticationState.enrollmentOutcome(code: "unknown", detail: "saved_reload_failed"))
     }
 
-    func testAutomaticPreferencePreservesChoiceAcrossConnectionFailures() {
-        let name = "BluetoothAuthenticationPolicyTests.\(UUID())"
-        let defaults = UserDefaults(suiteName: name)!
-        defer { defaults.removePersistentDomain(forName: name) }
-        defaults.set(false, forKey: "automaticUnlockEnabled")
-        XCTAssertFalse(BluetoothAuthenticationState.automaticPreference(defaults))
-        XCTAssertFalse(BluetoothAuthenticationState.automaticPreference(defaults))
-        var state = readyState()
-        state.invalidateServices(now: 4)
-        state.failed()
-        state.disconnected()
-        XCTAssertFalse(BluetoothAuthenticationState.automaticPreference(defaults))
-        defaults.set(true, forKey: "automaticUnlockEnabled")
-        XCTAssertTrue(BluetoothAuthenticationState.automaticPreference(defaults))
-        XCTAssertEqual(defaults.persistentDomain(forName: name)?.keys.sorted(), ["automaticUnlockEnabled"])
-    }
-
-    func testNewInstallDefaultsToAutomaticResponse() {
-        let name = "BluetoothAuthenticationPolicyTests.\(UUID())"
-        let defaults = UserDefaults(suiteName: name)!
-        defer { defaults.removePersistentDomain(forName: name) }
-        XCTAssertTrue(BluetoothAuthenticationState.automaticPreference(defaults))
-        XCTAssertTrue(BluetoothAuthenticationState.automaticPreference(defaults))
-        XCTAssertNil(defaults.object(forKey: "automaticUnlockEnabled"))
-        XCTAssertTrue(defaults.persistentDomain(forName: name)?.isEmpty ?? true)
-    }
-
     func testOldOrUnassociatedAuthenticationResultsCannotMatch() {
         let old = UUID()
         let current = UUID()
@@ -232,12 +204,12 @@ final class BluetoothAuthenticationStateTests: XCTestCase {
     func testSnapshotSeparatesConnectionEnrollmentAndAuthentication() {
         var snapshot = BluetoothViewState()
         snapshot.connection = .ready
-        snapshot.enrollment = .rejected("Windows 拒绝登记")
-        snapshot.authentication = .rejected("RSSI 不足")
+        snapshot.enrollment = .rejected("Windows rejected pairing")
+        snapshot.authentication = .rejected("Insufficient RSSI")
         XCTAssertEqual(snapshot.connection, .ready)
-        XCTAssertEqual(snapshot.enrollment.title, "Windows 拒绝登记")
-        XCTAssertEqual(snapshot.authentication.title, "RSSI 不足")
-        XCTAssertEqual(PhoneAuthenticationState.approved.title, "Windows 已批准，等待电脑完成解锁")
+        XCTAssertEqual(String(localized: snapshot.enrollment.title), "Windows rejected pairing")
+        XCTAssertEqual(String(localized: snapshot.authentication.title), "Insufficient RSSI")
+        XCTAssertEqual(String(localized: PhoneAuthenticationState.approved.title), "Request approved")
     }
 
     func testServiceAbsenceClearsQualificationAndRequiresAdvertisement() {
@@ -251,7 +223,7 @@ final class BluetoothAuthenticationStateTests: XCTestCase {
         XCTAssertFalse(state.challengeSubscribed)
         XCTAssertFalse(state.resultSubscribed)
         XCTAssertGreaterThan(state.generation, generation)
-        XCTAssertFalse(state.acceptsAuthentication(target: computer, enabled: true, enrolling: false))
+        XCTAssertFalse(state.acceptsAuthentication(target: computer, enrolling: false))
     }
 
     func testWaitingOvernightDoesNotStartTheInitializationDeadline() {
@@ -259,7 +231,7 @@ final class BluetoothAuthenticationStateTests: XCTestCase {
         state.waitForComputer()
         XCTAssertNil(state.deadline)
         XCTAssertFalse(state.initializationExpired(now: 86_400))
-        XCTAssertFalse(state.acceptsAuthentication(target: computer, enabled: true, enrolling: false))
+        XCTAssertFalse(state.acceptsAuthentication(target: computer, enrolling: false))
         state.connected(now: 86_400)
         XCTAssertEqual(state.deadline, 86_410)
         XCTAssertFalse(state.initializationExpired(now: 86_409.999))
@@ -277,7 +249,7 @@ final class BluetoothAuthenticationStateTests: XCTestCase {
         XCTAssertFalse(state.verifyComputer(computer, expected: computer, enrolling: false, now: 61))
         XCTAssertFalse(state.cacheReadyProbe(UUID(), generation: generation, now: 61))
         XCTAssertFalse(state.subscriptions(challenge: true, result: true, now: 61))
-        XCTAssertFalse(state.acceptsAuthentication(target: computer, enabled: true, enrolling: false))
+        XCTAssertFalse(state.acceptsAuthentication(target: computer, enrolling: false))
     }
 
     func testPreparationCannotFinishSuspendedSubscriptionInitialization() {
@@ -299,7 +271,7 @@ final class BluetoothAuthenticationStateTests: XCTestCase {
         var state = readyState()
         state.failed()
         XCTAssertNil(state.deadline)
-        XCTAssertFalse(state.acceptsAuthentication(target: computer, enabled: true, enrolling: false))
+        XCTAssertFalse(state.acceptsAuthentication(target: computer, enrolling: false))
         state.connected(now: 100)
         XCTAssertEqual(state.deadline, 110)
         XCTAssertFalse(state.invalidateServices(now: 109, discoveryPending: true))
@@ -335,29 +307,16 @@ final class BluetoothAuthenticationStateTests: XCTestCase {
         XCTAssertNil(state.finishRSSI(now: 2.1, requestID: request))
         XCTAssertNil(state.beginRSSI(requestID: UUID(), now: 2.2))
         state.waitForComputer()
-        XCTAssertFalse(state.acceptsAuthentication(target: computer, enabled: true, enrolling: false))
-    }
-
-    func testWaitingDoesNotChangeAutomaticResponsePreference() {
-        let name = "BluetoothWaitingTests.\(UUID())"
-        let defaults = UserDefaults(suiteName: name)!
-        defer { defaults.removePersistentDomain(forName: name) }
-        XCTAssertTrue(BluetoothAuthenticationState.automaticPreference(defaults))
-        defaults.set(false, forKey: "automaticUnlockEnabled")
-        var state = readyState()
-        state.serviceMissing()
-        state.waitForComputer()
-        XCTAssertFalse(BluetoothAuthenticationState.automaticPreference(defaults))
-        XCTAssertFalse(state.acceptsAuthentication(target: computer, enabled: false, enrolling: false))
+        XCTAssertFalse(state.acceptsAuthentication(target: computer, enrolling: false))
     }
 
     func testWaitingComputerTitleDoesNotClaimUnlockChannelReady() {
         var snapshot = BluetoothViewState()
         snapshot.connection = .waitingComputer
-        XCTAssertEqual(snapshot.connection.title, "等待目标电脑广播")
+        XCTAssertEqual(String(localized: snapshot.connection.title), "Searching for PC")
         XCTAssertNil(snapshot.connection.failure)
-        snapshot.connection = .failed("阶段：subscriptions；仍在等待电脑恢复")
-        XCTAssertEqual(snapshot.connection.title, "通道初始化异常")
+        snapshot.connection = .failed("Stage: subscriptions; waiting for PC recovery")
+        XCTAssertEqual(String(localized: snapshot.connection.title), "Connection failed")
         XCTAssertNotNil(snapshot.connection.failure)
     }
 
@@ -448,4 +407,115 @@ final class BluetoothAuthenticationStateTests: XCTestCase {
         state.clearReadyProbe()
         XCTAssertFalse(state.acceptsPreparedChallenge(newRequest, now: 2.2))
     }
+
+    func testHistoryAssociatesSignalWithCurrentRequest() {
+        var history = AuthenticationHistory()
+        let first = UUID()
+        let second = UUID()
+        history.begin(first)
+        history.measured(-45, for: first)
+        history.begin(second)
+        history.measured(-40, for: first)
+        history.complete(first, approved: true, at: Date())
+        XCTAssertNil(history.result)
+        history.measured(-55, for: second)
+        let date = Date(timeIntervalSince1970: 100)
+        history.complete(second, approved: true, at: date)
+        XCTAssertEqual(history.result?.requestID, second)
+        XCTAssertEqual(history.result?.approvedAt, date)
+        XCTAssertEqual(history.result?.rssi, -55)
+    }
+
+    func testFailureClearsDisplayedApprovalAndCannotBecomeLateSuccess() {
+        var history = AuthenticationHistory()
+        let id = UUID()
+        history.begin(id)
+        history.measured(-80, for: id)
+        history.complete(id, approved: false, at: Date())
+        XCTAssertEqual(history.result?.requestID, id)
+        XCTAssertNil(history.result?.approvedAt)
+        XCTAssertNil(history.result?.rssi)
+        history.complete(id, approved: true, at: Date())
+        XCTAssertNil(history.result?.approvedAt)
+    }
+
+    func testHistoryRestoresCompletedResultButNotPendingRequest() throws {
+        let id = UUID()
+        let date = Date(timeIntervalSince1970: 100)
+        var history = AuthenticationHistory()
+        history.begin(id)
+        history.measured(-50, for: id)
+        history.complete(id, approved: true, at: date)
+        let original = try XCTUnwrap(history.result)
+        let name = "AuthenticationHistoryTests.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        try history.save(to: defaults)
+        var restarted = try AuthenticationHistory(defaults: defaults)
+        XCTAssertEqual(restarted.result, original)
+        restarted.complete(id, approved: false, at: Date())
+        XCTAssertEqual(restarted.result, original)
+        restarted.begin(UUID())
+        XCTAssertEqual(restarted.result, original)
+    }
+
+    func testForgetClearsHistoryAndRejectsLateRequestCallbacks() {
+        var history = AuthenticationHistory()
+        let id = UUID()
+        history.begin(id)
+        history.measured(-50, for: id)
+        history.forget()
+        history.measured(-45, for: id)
+        history.complete(id, approved: true, at: Date())
+        XCTAssertNil(history.result)
+        var snapshot = BluetoothViewState()
+        let target = RegisteredComputer(computerID: computer, name: "PC", peripheralID: UUID())
+        snapshot.target = target
+        snapshot.connectedComputer = target
+        snapshot.threshold = -70
+        snapshot.rssi = -45
+        snapshot.rssiMeasuredAt = Date()
+        snapshot.lastResult = .init(requestID: id, approvedAt: Date(), rssi: -45)
+        snapshot.forgetComputer()
+        XCTAssertNil(snapshot.target)
+        XCTAssertNil(snapshot.connectedComputer)
+        XCTAssertNil(snapshot.lastResult)
+        XCTAssertNil(snapshot.rssi)
+        XCTAssertNil(snapshot.rssiMeasuredAt)
+        XCTAssertEqual(snapshot.threshold, -70)
+        XCTAssertEqual(snapshot.connection, .unregistered)
+        XCTAssertEqual(snapshot.authentication, .waiting)
+        let policy = readyState()
+        XCTAssertFalse(policy.acceptsAuthentication(target: snapshot.target?.computerID, enrolling: false))
+        XCTAssertTrue(policy.acceptsAuthentication(target: computer, enrolling: false))
+    }
+
+
+    func testStoredFailureAndForgetSurviveRestart() throws {
+        let name = "AuthenticationHistoryRemovalTests.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        var history = AuthenticationHistory()
+        let id = UUID()
+        history.begin(id)
+        history.complete(id, approved: false, at: Date())
+        try history.save(to: defaults)
+        var restarted = try AuthenticationHistory(defaults: defaults)
+        XCTAssertEqual(restarted.result?.requestID, id)
+        XCTAssertNil(restarted.result?.approvedAt)
+        XCTAssertNil(restarted.result?.rssi)
+        restarted.forget()
+        try restarted.save(to: defaults)
+        XCTAssertNil(defaults.data(forKey: AuthenticationHistory.storageKey))
+        XCTAssertNil(try AuthenticationHistory(defaults: defaults).result)
+    }
+
+    func testUnreadableStoredHistoryReportsError() throws {
+        let name = "AuthenticationHistoryInvalidTests.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        defaults.set(Data("invalid".utf8), forKey: AuthenticationHistory.storageKey)
+        XCTAssertThrowsError(try AuthenticationHistory(defaults: defaults))
+    }
+
 }

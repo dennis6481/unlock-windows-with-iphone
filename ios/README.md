@@ -6,28 +6,34 @@ The iPhone app uses SwiftUI, CoreBluetooth and CryptoKit/Secure Enclave to respo
 
 ## Build and install on a device
 
-- Use **Xcode 27** as the current project baseline, on an Apple silicon Mac with a macOS version supported by that Xcode release. The checked-in project records tools/upgrade version 27 and object version 90; opening/building it in older Xcode versions has not been verified. The source uses iOS 18 APIs, and the app deployment target remains **iOS 18.0**.
-- Use a physical iPhone running iOS 18 or later. Secure Enclave availability is checked at runtime; there is no software-key fallback for the simulator.
-- The separate Swift Package policy tests require **Swift 6.0 or newer**. The app target currently uses Swift 5 language mode; the package tools version is a distinct requirement.
+- Use **Xcode 27** as the current project baseline, on an Apple silicon Mac with a macOS version supported by that Xcode release. The checked-in project records tools/upgrade version 27 and object version 90; opening/building it in older Xcode versions has not been verified. The app deployment target is **iOS 26.0**, including native SliderTick controls.
+- Use a physical iPhone running iOS 26 or later. Secure Enclave availability is checked at runtime; there is no software-key fallback for the simulator.
+- The separate Swift Package policy tests require **Swift 6.2 or newer** and **macOS 13 or later** for localized resources. The app target currently uses Swift 5 language mode; the package tools version is a distinct requirement.
 
 1. Open [ios.xcodeproj](ios.xcodeproj) in Xcode and select the `ios` app scheme.
 2. In **Signing & Capabilities**, choose your own development team for Debug and Release and enable automatic signing. Replace the checked-in bundle identifier (`com.ruima.unlock-windows`) with a unique identifier your team can sign. The checked-in team is not a distribution entitlement for other developers.
 3. Connect and trust the iPhone, enable Developer Mode if requested, select it as the run destination, and build/run the app. Follow the device's development-app trust prompts where applicable. Signing validity and renewal depend on your Apple account/provisioning.
-4. Grant Bluetooth permission. The app's Info.plist declares the Bluetooth usage description and `bluetooth-central` background mode.
+4. Grant Bluetooth permission. Xcode project settings generate the Bluetooth usage description. The minimal, Xcode-managed Info.plist supplies only the `bluetooth-central` background mode array.
 5. Install Windows from the same repository revision and register the computer as described below.
 
-The Home Screen name comes from `INFOPLIST_KEY_CFBundleDisplayName`; Info.plist references that setting. The in-app title is separate. No signing certificate, provisioning profile or private signing key is distributed in this repository.
+The Home Screen name comes from `INFOPLIST_KEY_CFBundleDisplayName`; Xcode generates the app information property list from project settings and merges the minimal background-mode array. The in-app title is separate. No signing certificate, provisioning profile or private signing key is distributed in this repository.
 
 ## Register and use
 
 1. On the unlocked Windows desktop select **Pair iPhone…** in the tray and approve UAC.
-2. In the app select **登记电脑** (Register computer), or Settings → re-register, then start registration. Confirm the full fingerprint and target account on Windows.
+2. In the app select **Add a Windows PC**, then **Continue**. Compare the full iPhone fingerprint and confirm the target account on Windows. The phone waits for the Windows result before showing pairing success.
 3. Complete registration only after a successful Windows enrollment result and a valid ComputerId. Cancelling, rejection or service reload failure preserves the previous valid phone target.
-4. Keep automatic response enabled in Settings. Lock Windows and press Enter / Unlock on the phone tile. The phone requires a new signal reading for each challenge before signing.
+4. The phone always responds automatically to eligible requests from its paired PC. Lock Windows and press Enter / Unlock on the phone tile. The phone requires a new signal reading for each challenge before signing.
 
 The app stores one registered computer record: its ComputerId, display name and last peripheral UUID. The name is display text; the peripheral UUID is a routing cache. A changed peripheral UUID alone does not require registration again. If Windows loses its ComputerId, register explicitly again.
 
-The automatic-response preference remains off when saved as off. Bluetooth interruptions, disconnection and registration errors do not silently change it. Settings also expose the signal threshold, registration metadata, diagnostics and Retry. The iOS UI currently includes Chinese text.
+The app always responds automatically; there is no automatic-response switch or saved preference. The home page exposes Unlock Distance with a native slider displaying five ticks at −100, −80, −60, −40 and −20 dBm, and connection retry. A separate SwiftUI text row below the slider displays the five values with dBm units from the same tick collection; it does not rely on the native tick labels rendering on iOS. The slider can be dragged freely between ticks to select any integer dBm in the range; values are rounded to an integer when saved, with no fractional display or storage. The ticks are visual references rather than the only selectable values. The footer explains that signal strength estimates distance. About contains a Privacy Policy link to this repository, Diagnostics and the installed version/build. Registration metadata remains in Diagnostics. Version/build values come directly from the app bundle, generated by Xcode from MARKETING_VERSION and CURRENT_PROJECT_VERSION, and appear in a transparent section footer. User-facing text uses English String Catalogs; no additional languages are included.
+
+To register another PC, first choose **Remove Paired PC**, then add it from the empty home page. Removal forgets the target only on this iPhone, stops its pending operations and clears request history. Remove the iPhone authorization separately on Windows. The phone key and RSSI threshold are retained.
+
+The home icon and **Request approved** message appear together for five seconds after a new approval received while the home page is visible. Ordinary connection changes and a return to waiting do not shorten or restart this timer; after five seconds the page displays the current state. A new authentication request, failure or leaving the home page interrupts this presentation; returning to the home page does not replay old approvals. **Last approval** shows the latest completed request’s approval time followed by its signal strength in dBm, separated by **/** and retained across app restarts. Failed requests or no result show **N/A**; a pending request leaves the previous result visible. There is no separate Signal strength row. The signal is associated with that request, not a live measurement. Approval does not confirm that Windows completed unlocking.
+
+Add a Windows PC opens one sheet containing a NavigationStack. The introduction page owns its close toolbar button independently of the navigation path. Continue pushes the full-fingerprint verification/waiting page; success, failure and cancellation are pushed as separate pages using the same reusable layout. Cancel Pairing invokes the existing cancellation action and shows the cancellation page without a Back button. Done remains its primary action and dismisses the sheet; the secondary Retry Pairing button starts pairing again through the existing entry point. Back from an active verification page cancels pairing. Bottom primary buttons use native SwiftUI flexible sizing, the glass prominent style and large control size, expanding within the horizontal page margins. Secondary actions use the native glass style. The introductory illustration is the native **pc** SF Symbol in multicolor rendering mode.
 
 ## Code responsibilities
 
@@ -52,13 +58,13 @@ Initialization requires ComputerId verification and both challenge/result notifi
 
 Service changes invalidate characteristics and pending authentication, then trigger serialized rediscovery. A confirmed missing service releases that connection and waits for fresh service advertising instead of immediately reconnecting the cache. Healthy usable connections are retained. Cancellation drains the old native terminal callback before reconnecting the same peripheral; late callbacks are checked against connection and generation.
 
-Foreground entry reconciles missing operations. Explicit Retry can start a new recovery cycle. Automatic response off and Bluetooth unavailable stop operations without changing the saved preference. Background restoration depends on native OS scheduling and is not guaranteed after force-quitting the app.
+Foreground entry reconciles missing operations. Explicit Retry can start a new recovery cycle. Bluetooth unavailable stops operations without changing the registered target. Background restoration depends on native OS scheduling and is not guaranteed after force-quitting the app.
 
 Each challenge requires a fresh RSSI read and signature within three seconds; old displayed readings are not reused. Waiting for the Windows result after sending a signature is a separate phase. The adjustable threshold defaults to −60 dBm and does not promise a fixed distance. Readiness and reconnects do not extend Windows' authentication deadline.
 
 ## Diagnostics and tests
 
-Settings diagnostics retain up to 64 recent entries with UTC/monotonic time, connection generation, route attempt, peripheral/native state, requestID, RSSI and raw errors. Passwords, private keys, nonces and signature bodies are not diagnostic output. Redact personal machine/device identifiers before sharing logs publicly.
+About → Diagnostics retains up to 64 recent entries with UTC/monotonic time, connection generation, route attempt, peripheral/native state, requestID, RSSI and raw errors. Passwords, private keys, nonces and signature bodies are not diagnostic output. Redact personal machine/device identifiers before sharing logs publicly.
 
 From the repository root:
 

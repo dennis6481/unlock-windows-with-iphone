@@ -55,8 +55,8 @@ CMake statically links the MSVC runtime (`/MT` for Release, `/MTd` for Debug). R
 2. Sign in to the target Microsoft Account at the physical console and run the versioned setup EXE; companion files are not needed. Setup requests UAC itself; follow its confirmation and restart instructions.
 3. After restart, sign in once with your usual native PIN/password. The service starts as LocalSystem; the ordinary-user tray starts through the target user's Run entry.
 4. On the verified installation result page choose **Start setup**, or choose **Later** and use tray **Continue setup…**. The existing password window requests UAC and verifies the installed target account without an additional lock/sign-in cycle. Save the actual MSA password, not the PIN. This stores a local copy; it does not change the account password. See [password management](SavedCredential/README.md#password-management).
-5. After the service confirms the saved copy, setup opens the existing pairing window. Allow UAC, start computer registration in the iOS app, and confirm the account and full fingerprint. Already completed steps are skipped; cancelled or failed password management cannot advance to pairing. The iOS UI currently labels registration **登记电脑**. See [pairing](GattHost/README.md#pairing).
-6. Lock Windows, select the phone tile and press **Enter / Unlock** once. With automatic response enabled and a sufficient fresh RSSI reading, the phone signs and Windows attempts native authentication.
+5. After the service confirms the saved copy, setup opens the existing pairing window. Allow UAC, choose **Add a Windows PC** and then **Continue** in the iOS app, and confirm the account and full fingerprint. Already completed steps are skipped; cancelled or failed password management cannot advance to pairing. See [pairing](GattHost/README.md#pairing).
+6. Lock Windows, select the phone tile and press **Enter / Unlock** once. With a sufficient fresh RSSI reading, the phone signs and Windows attempts native authentication.
 
 Starting Windows, signing out, or having no existing console session does not offer phone sign-in. Changing the online MSA password requires updating the saved copy. Removing phone registration does not remove the saved password; both have separate tray actions.
 
@@ -111,7 +111,7 @@ Manual enrollment still requires fingerprint confirmation; replacement requires 
 
 ## Troubleshooting
 
-Use tray **Status… → Technical details**, iOS Settings diagnostics and the [testing guide](../docs/Testing.md#diagnostics). From the repository root, the read-only component inspector is:
+Use tray **Status… → Technical details**, iOS About → Diagnostics and the [testing guide](../docs/Testing.md#diagnostics). From the repository root, the read-only component inspector is:
 
 ```powershell
 & '.\windows\Diagnostics\Get-ComponentsStatus.ps1'

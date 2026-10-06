@@ -1,3 +1,5 @@
+// Created by Rui MA on 26 Sep 2026
+
 import Foundation
 
 enum UnlockError: LocalizedError, Equatable {
@@ -12,19 +14,19 @@ enum UnlockError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .secureEnclaveUnavailable:
-            return "Secure Enclave 不可用。请使用实体 iPhone；本项目不会退回软件密钥。"
+            return String(localized: "Secure Enclave is unavailable. Use a physical iPhone; software keys are not supported.")
         case let .accessControlCreationFailed(message):
-            return "创建 Secure Enclave 访问控制失败：\(message)"
+            return String(localized: "Could not create Secure Enclave access control: \(message)")
         case let .keychainFailure(operation, status):
-            return "Keychain 操作“\(operation)”失败，OSStatus=\(status)。"
+            return String(localized: "Keychain operation “\(operation)” failed, OSStatus=\(status).")
         case let .storedKeyUnreadable(message):
-            return "Keychain 中已有密钥，但无法恢复为 Secure Enclave 私钥：\(message)"
+            return String(localized: "Could not restore the stored Secure Enclave key: \(message)")
         case let .keyGenerationFailed(message):
-            return "生成 Secure Enclave 私钥失败：\(message)"
+            return String(localized: "Could not generate the Secure Enclave key: \(message)")
         case let .signingFailed(message):
-            return "Secure Enclave 签名失败：\(message)"
+            return String(localized: "Secure Enclave signing failed: \(message)")
         case let .protocolEncodingFailed(message):
-            return "认证协议编码失败：\(message)"
+            return String(localized: "Authentication protocol encoding failed: \(message)")
         }
     }
 }

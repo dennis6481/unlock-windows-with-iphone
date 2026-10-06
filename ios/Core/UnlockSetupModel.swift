@@ -13,7 +13,11 @@ final class UnlockSetupModel {
     private(set) var bluetoothDiagnostics: [String] = []
     private let authenticator: BluetoothAuthenticator
 
-    init(keyStore: SecureEnclaveKeyStore = SecureEnclaveKeyStore()) {
+    convenience init() {
+        self.init(keyStore: SecureEnclaveKeyStore())
+    }
+
+    init(keyStore: SecureEnclaveKeyStore) {
         authenticator = BluetoothAuthenticator(keyStore: keyStore)
         authenticator.onUpdate = { [weak self] state in self?.bluetooth = state }
         authenticator.onDiagnostic = { [weak self] event in
@@ -27,8 +31,11 @@ final class UnlockSetupModel {
     }
 
     func setForeground(_ active: Bool) { authenticator.setForeground(active) }
-    func setAutomaticEnabled(_ enabled: Bool) { authenticator.setAutomaticEnabled(enabled) }
-    func setRSSIThreshold(_ value: Double) { authenticator.setThreshold(Int(value.rounded())) }
+    func forgetComputer() { authenticator.forgetComputer() }
+    var rssiThreshold: Double {
+        get { Double(bluetooth.threshold) }
+        set { authenticator.setThreshold(Int(newValue.rounded())) }
+    }
     func retryConnection() { authenticator.retryConnection() }
     func startEnrollment() { authenticator.startEnrollment() }
     func cancelEnrollment() { authenticator.cancelEnrollment() }

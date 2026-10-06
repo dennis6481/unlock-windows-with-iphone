@@ -6,7 +6,7 @@ This guide describes reusable checks, not a personal test diary or a record that
 
 ## Environment and evidence
 
-Use a physical iPhone, a BLE GATT-server-capable Windows PC and a password-backed MSA console account. Follow the [Windows](../windows/README.md) and [iOS](../ios/README.md) guides. Keep native Windows sign-in available. Use an isolated test environment for intrusive failure/caller/identity experiments; do not repeatedly submit incorrect real account passwords.
+Use a physical iPhone running iOS 26 or later, a BLE GATT-server-capable Windows PC and a password-backed MSA console account. Follow the [Windows](../windows/README.md) and [iOS](../ios/README.md) guides. Keep native Windows sign-in available. Use an isolated test environment for intrusive failure/caller/identity experiments; do not repeatedly submit incorrect real account passwords.
 
 For each result record:
 
@@ -75,7 +75,7 @@ Use a clean installation with matching binaries; these are acceptance procedures
 | Initial sign-in, signed-out account, other account or remote session | No eligible phone tile/credential claim; native sign-in remains available. |
 | Wrong key/signature, malformed/truncated assertion, wrong requestID or replay | Reject; do not create or restore approval. |
 | Preparation without full readiness, duplicate/wrong/expired receipt | Do not prematurely consume challenge, extend the deadline or approve twice. |
-| No phone response, automatic response off, below-threshold or missing RSSI | Distinct failure/waiting reason; no credential release. |
+| No phone response, below-threshold or missing RSSI | Distinct failure/waiting reason; no credential release. |
 | Account/SID/session/online identity change during a request | Reject mismatched saved identity and invalidate affected approval. |
 | Service restart or actual unlock | Old outstanding request/grant cannot be claimed afterward. |
 | CP re-enumeration/rebuild, notification loss, packing/native password failure | At most one eligible offer/claim; consumed approval is never restored. |
@@ -125,11 +125,19 @@ After completed uninstall verify the service, CP/main/setup files, password and 
 
 ## UI and accessibility
 
-Check Windows at 100/150/200/250% DPI and across monitors, including long account names/full fingerprints, keyboard/default focus and long logs. Check iOS light/dark appearance, large text, VoiceOver, Reduce Motion, long computer names, registration cancellation and approval-display timing. Error messages must distinguish current state from historical diagnostics and approval from completed unlock.
+On iOS, verify exactly five native slider ticks and the separate numeric row below them at −100, −80, −60, −40 and −20 dBm, with dBm shown on every label. Check that all five values remain visible in light/dark appearance and large text. Drag freely between ticks and select integers such as −73 and −57 dBm, then verify they remain selected after restarting the app. Values must not be restricted to the five ticks. The selected value and VoiceOver value must not show decimals. After approval, verify the icon and Request approved text remain synchronized for five seconds through ordinary disconnect/reconnect and waiting-state updates, then return to the current state. New authentication, failure and leaving the home page must interrupt the presentation; returning must not replay it.
+
+Check that Last approval displays the approval time and that request’s signal strength in dBm separated by **/**, with no separate Signal strength row. Failure or no result must show **N/A**, and a pending request must preserve the previous completed result.
+
+On iOS, push from the pairing introduction to verification, then return using both the system Back button and the interactive back gesture. Repeat the sequence without scrolling: the introduction’s close button must be visible immediately and dismiss the sheet. Cancelling an interactive back gesture must leave verification active with its system Back button.
+
+On the cancellation page, verify there is no Back button, Done is the prominent primary action and Retry Pairing is a secondary action below it. Done must dismiss the sheet; Retry Pairing must start a new pairing attempt and show verification using the existing navigation stack.
+
+Check Windows at 100/150/200/250% DPI and across monitors, including long account names/full fingerprints, keyboard/default focus and long logs. Check native slider ticks, numeric labels with dBm units and continuous adjustment, the pairing sheet/push/back flow and Cancel Pairing → cancellation page → Done dismissal, the Privacy Policy repository link and bundle-derived version/build in the transparent About footer. Check iOS light/dark appearance, large text, VoiceOver, Reduce Motion, long computer names, pairing success/failure/cancellation/retry and synchronized five-second icon/status presentation. Check removal clears only the phone target/history, retains its key/threshold and ignores late results. Check request-associated history survives restart, displays N/A after failure and is not replayed as a new approval. Error messages must distinguish current state from historical diagnostics and approval from completed unlock.
 
 ## Diagnostics
 
-Start with Windows tray **Status… → Technical details** and iOS Settings diagnostics. Run the read-only inspector from the repository root:
+Start with Windows tray **Status… → Technical details** and iOS About → Diagnostics. Run the read-only inspector from the repository root:
 
 ```powershell
 & '.\windows\Diagnostics\Get-ComponentsStatus.ps1'

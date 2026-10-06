@@ -1,3 +1,5 @@
+// Created by Rui MA on 26 Sep 2026
+
 import CryptoKit
 import Foundation
 
@@ -24,7 +26,7 @@ enum UnlockProtocol {
         do {
             return try JSONDecoder().decode(UnlockChallenge.self, from: data)
         } catch {
-            throw UnlockError.protocolEncodingFailed("解析 challenge 失败：\(error.localizedDescription)")
+            throw UnlockError.protocolEncodingFailed(String(localized: "Could not decode the challenge: \(error.localizedDescription)"))
         }
     }
 
@@ -34,16 +36,16 @@ enum UnlockProtocol {
             encoder.outputFormatting = [.sortedKeys]
             return try encoder.encode(assertion)
         } catch {
-            throw UnlockError.protocolEncodingFailed("编码 assertion 失败：\(error.localizedDescription)")
+            throw UnlockError.protocolEncodingFailed(String(localized: "Could not encode the assertion: \(error.localizedDescription)"))
         }
     }
 
     static func bytesToSign(for challenge: UnlockChallenge) throws -> Data {
         guard challenge.version == 1 else {
-            throw UnlockError.protocolEncodingFailed("不支持的协议版本：\(challenge.version)")
+            throw UnlockError.protocolEncodingFailed(String(localized: "Unsupported protocol version: \(challenge.version)"))
         }
         guard challenge.nonce.count == 32 else {
-            throw UnlockError.protocolEncodingFailed("nonce 必须是 32 字节。")
+            throw UnlockError.protocolEncodingFailed(String(localized: "The nonce must contain 32 bytes."))
         }
 
         var bytes = signatureContext
@@ -68,7 +70,7 @@ enum UnlockProtocol {
 
         let audience = Data(challenge.audience.utf8)
         guard audience.count <= UInt16.max else {
-            throw UnlockError.protocolEncodingFailed("audience 不能超过 UInt16 长度。")
+            throw UnlockError.protocolEncodingFailed(String(localized: "The audience length must fit UInt16."))
         }
 
         var audienceLength = UInt16(audience.count).bigEndian

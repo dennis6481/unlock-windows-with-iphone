@@ -20,7 +20,7 @@ flowchart TB
     end
     subgraph Phone["iPhone: CoreBluetooth central"]
         Ready["Verify ComputerId + both notification subscriptions"]
-        Sign["Automatic response + fresh RSSI + Secure Enclave signature"]
+        Sign["Fresh RSSI + Secure Enclave signature"]
         Ready --> Sign
     end
     subgraph Desktop["Windows: ordinary console user"]
@@ -73,7 +73,7 @@ The installer deploys the four components and manages startup, maintenance and r
 1. **Enter / Unlock** on the eligible phone tile calls `beginPhoneAuthentication`. Selecting the tile or locking the desktop alone does not start a request.
 2. The service verifies the current console, saved identity and registered SID, then creates a random requestID, 32-byte cryptographic nonce and timestamp. Its monotonic **30-second** deadline governs the entire request.
 3. The tray peeks at status, selects the unique connection subscribing to both challenge and result, and sends a readiness probe. Only a current connection/request receipt with valid subscriptions allows the tray to take and deliver the challenge once. Peeking does not consume it.
-4. The phone checks target identity, automatic response and challenge data, then obtains fresh RSSI and signs within a **three-second** RSSI/signing window. The adjustable default is **−60 dBm**. Result waiting after sending is separate.
+4. The phone checks target identity and challenge data, then obtains fresh RSSI and signs within a **three-second** RSSI/signing window. The adjustable default is **−60 dBm**. Result waiting after sending is separate.
 5. Windows reconstructs the payload from its outstanding challenge, matches the registered key/fingerprint and request/version/expiry, and verifies the signature. It does not trust assertion-supplied nonce or audience.
 6. A valid assertion creates an in-memory grant lasting at most **120 seconds**, bound to saved identity, console session and lock generation. Restarting the service, expiry, actual unlock or relevant session/identity changes invalidate outstanding state.
 7. The service offers automatic submission once to eligible LogonUI. CP re-enumerates and makes a qualified `claimCredential`: the service **irreversibly consumes the grant before decrypting and returning the password**. Packing failure or native password rejection does not restore it.
@@ -138,7 +138,7 @@ Full characteristic UUIDs use prefix `F1E2D3C4-B5A6-4789-8012-` plus the suffix 
 - Readiness: `0x04 || requestID[36 lowercase ASCII bytes]`, exactly 37 bytes; current selected connection and unexpired request only.
 - Phone failure: `0x03 || requestID[36 ASCII bytes] || reason[1]`, exactly 38 bytes; bound to the current authentication connection/request.
 
-Accepted phone failure reasons are `1` insufficient RSSI, `2` automatic response off, `3` fresh RSSI unavailable, `4` connection/subscription lost, and `6` signing failed. Reason `5` is an internal Windows delivery failure, not an accepted phone frame. Opcode `0x01` does not initiate authentication. Pairing excludes authentication request/assertion handling.
+Accepted phone failure reasons are `1` insufficient RSSI, `2` phone not eligible to approve (unpaired or pairing in progress), `3` fresh RSSI unavailable, `4` connection/subscription lost, and `6` signing failed. Reason `5` is an internal Windows delivery failure, not an accepted phone frame. Opcode `0x01` does not initiate authentication. Pairing excludes authentication request/assertion handling.
 
 ComputerId persists in the target user's `HKCU\Software\UnlockWindowsWithIPhone\GattHost`. An invalid existing value is an error, not silently replaced. Service discovery and transport recovery do not change the signing contract or registration. Messages must be complete; truncation/parsing failures are rejected. No application-level fragmentation support is promised.
 

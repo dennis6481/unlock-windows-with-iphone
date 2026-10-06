@@ -17,6 +17,12 @@
 		D10000010000000000000005 /* BluetoothAuthenticator.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000020000000000000005 /* BluetoothAuthenticator.swift */; };
 		D10000010000000000000006 /* BluetoothAuthenticationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000020000000000000006 /* BluetoothAuthenticationState.swift */; };
 		D10000010000000000000007 /* BluetoothConnectionRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000020000000000000007 /* BluetoothConnectionRecovery.swift */; };
+		D10000050000000000000001 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = D10000050000000000000002 /* Localizable.xcstrings */; };
+		D10000050000000000000003 /* InfoPlist.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = D10000050000000000000004 /* InfoPlist.xcstrings */; };
+		F10000020000000000000001 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000010000000000000001 /* HomeView.swift */; };
+		F10000020000000000000003 /* SetupSheetPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000010000000000000003 /* SetupSheetPage.swift */; };
+		F10000020000000000000004 /* EnrollmentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000010000000000000004 /* EnrollmentView.swift */; };
+		F10000020000000000000005 /* AboutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000010000000000000005 /* AboutView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -32,6 +38,12 @@
 		D10000020000000000000006 /* BluetoothAuthenticationState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BluetoothAuthenticationState.swift; sourceTree = "<group>"; };
 		D10000020000000000000007 /* BluetoothConnectionRecovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BluetoothConnectionRecovery.swift; sourceTree = "<group>"; };
 		D10000030000000000000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		D10000050000000000000002 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
+		D10000050000000000000004 /* InfoPlist.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = InfoPlist.xcstrings; sourceTree = "<group>"; };
+		F10000010000000000000001 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		F10000010000000000000003 /* SetupSheetPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupSheetPage.swift; sourceTree = "<group>"; };
+		F10000010000000000000004 /* EnrollmentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnrollmentView.swift; sourceTree = "<group>"; };
+		F10000010000000000000005 /* AboutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AboutView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -48,9 +60,11 @@
 			children = (
 				D10000040000000000000001 /* App */,
 				D10000040000000000000002 /* Core */,
+				F10000030000000000000001 /* UI */,
 				B57E0D943067DAE300E8280A /* Assets.xcassets */,
 				B57E0D953067DAE300E8280A /* ContentView.swift */,
 				B57E0D963067DAE300E8280A /* MyApp.swift */,
+				D10000050000000000000002 /* Localizable.xcstrings */,
 				000000000000000000000120 /* ios.app */,
 			);
 			sourceTree = "<group>";
@@ -59,6 +73,7 @@
 			isa = PBXGroup;
 			children = (
 				D10000030000000000000001 /* Info.plist */,
+				D10000050000000000000004 /* InfoPlist.xcstrings */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -75,6 +90,17 @@
 				D10000020000000000000007 /* BluetoothConnectionRecovery.swift */,
 			);
 			path = Core;
+			sourceTree = "<group>";
+		};
+		F10000030000000000000001 /* UI */ = {
+			isa = PBXGroup;
+			children = (
+				F10000010000000000000001 /* HomeView.swift */,
+				F10000010000000000000003 /* SetupSheetPage.swift */,
+				F10000010000000000000004 /* EnrollmentView.swift */,
+				F10000010000000000000005 /* AboutView.swift */,
+			);
+			path = UI;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -107,6 +133,11 @@
 				TargetAttributes = {
 					000000000000000100000000 = {
 						CreatedOnToolsVersion = 26.3;
+						SystemCapabilities = {
+							com.apple.BackgroundModes = {
+								enabled = 1;
+							};
+						};
 					};
 				};
 			};
@@ -133,6 +164,8 @@
 		000000000000000140000000 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
+				D10000050000000000000001 /* Localizable.xcstrings in Resources */,
+				D10000050000000000000003 /* InfoPlist.xcstrings in Resources */,
 				B57E0D993067DAE300E8280A /* Assets.xcassets in Resources */,
 			);
 		};
@@ -142,6 +175,10 @@
 		000000000000000120000000 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
+				F10000020000000000000001 /* HomeView.swift in Sources */,
+				F10000020000000000000003 /* SetupSheetPage.swift in Sources */,
+				F10000020000000000000004 /* EnrollmentView.swift in Sources */,
+				F10000020000000000000005 /* AboutView.swift in Sources */,
 				B57E0D973067DAE300E8280A /* ContentView.swift in Sources */,
 				B57E0D983067DAE300E8280A /* MyApp.swift in Sources */,
 				D10000010000000000000001 /* UnlockError.swift in Sources */,
@@ -210,7 +247,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
@@ -274,7 +311,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
@@ -298,10 +335,11 @@
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
-				GENERATE_INFOPLIST_FILE = NO;
+				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Unlock Windows";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Connect to your paired Windows PC for nearby authentication.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -311,10 +349,10 @@
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphoneos*]" = UIStatusBarStyleDefault;
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.ruima.unlock-windows";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -340,10 +378,11 @@
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
-				GENERATE_INFOPLIST_FILE = NO;
+				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Unlock Windows";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Connect to your paired Windows PC for nearby authentication.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -353,10 +392,10 @@
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphoneos*]" = UIStatusBarStyleDefault;
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.ruima.unlock-windows";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;

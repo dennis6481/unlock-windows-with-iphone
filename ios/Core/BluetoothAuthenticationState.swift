@@ -3,6 +3,7 @@
 import Foundation
 
 struct RegisteredComputer: Codable, Equatable {
+    static let storageKey = "registeredWindowsComputer"
     let computerID: UUID
     var name: String
     var peripheralID: UUID
@@ -13,18 +14,18 @@ enum BluetoothConnectionState: Equatable {
     case discovering, verifyingComputer, subscribing, ready, recovering
     case failed(String)
 
-    var title: String {
+    var title: LocalizedStringResource {
         switch self {
-        case .unregistered: "尚未登记电脑"
-        case .bluetoothUnavailable: "蓝牙不可用"
-        case .waitingComputer: "等待目标电脑广播"
-        case .connecting: "正在建立蓝牙连接"
-        case .discovering: "正在发现解锁服务"
-        case .verifyingComputer: "正在核对目标电脑"
-        case .subscribing: "正在准备通知订阅"
-        case .ready: "已连接，解锁通道就绪"
-        case .recovering: "正在恢复解锁服务"
-        case .failed: "通道初始化异常"
+        case .unregistered: "No Paired PC"
+        case .bluetoothUnavailable: "Bluetooth unavailable"
+        case .waitingComputer: "Searching for PC"
+        case .connecting: "Connecting"
+        case .discovering: "Preparing connection"
+        case .verifyingComputer: "Verifying PC"
+        case .subscribing: "Preparing connection"
+        case .ready: "Ready"
+        case .recovering: "Reconnecting"
+        case .failed: "Connection failed"
         }
     }
 
@@ -39,31 +40,30 @@ enum ComputerEnrollmentState: Equatable {
     case rejected(String), failed(String)
 
     var isActive: Bool { self == .searching || self == .waitingConfirmation }
-    var title: String {
+    var title: LocalizedStringResource {
         switch self {
-        case .idle: "未进行登记"
-        case .searching: "寻找 Windows 配对窗口"
-        case .waitingConfirmation: "等待 Windows 指纹确认"
-        case .succeeded: "电脑登记成功"
-        case .cancelled: "登记已取消，原目标保留"
-        case let .rejected(message), let .failed(message): message
+        case .idle: "Not pairing"
+        case .searching: "Searching for Windows pairing"
+        case .waitingConfirmation: "Waiting for confirmation on Windows"
+        case .succeeded: "PC paired"
+        case .cancelled: "Pairing cancelled. The previous PC was kept."
+        case let .rejected(message), let .failed(message): "\(message)"
         }
     }
 }
 
 enum PhoneAuthenticationState: Equatable {
-    case waiting, paused, readingRSSI, signing, awaitingWindows, approved
+    case waiting, readingRSSI, signing, awaitingWindows, approved
     case rejected(String)
 
-    var title: String {
+    var title: LocalizedStringResource {
         switch self {
-        case .waiting: "等待 Windows 请求"
-        case .paused: "自动响应已暂停"
-        case .readingRSSI: "正在读取本次请求的新 RSSI"
-        case .signing: "正在签名"
-        case .awaitingWindows: "签名已发送，等待 Windows 结果"
-        case .approved: "Windows 已批准，等待电脑完成解锁"
-        case let .rejected(message): message
+        case .waiting: "Waiting for request"
+        case .readingRSSI: "Checking signal"
+        case .signing: "Authenticating"
+        case .awaitingWindows: "Waiting for Windows"
+        case .approved: "Request approved"
+        case let .rejected(message): "\(message)"
         }
     }
 }
@@ -74,11 +74,24 @@ struct BluetoothViewState: Equatable {
     var authentication: PhoneAuthenticationState = .waiting
     var target: RegisteredComputer?
     var connectedComputer: RegisteredComputer?
-    var automaticEnabled = true
+    static let thresholdRange = -100 ... -20
     var threshold = -60
     var rssi: Int?
     var rssiMeasuredAt: Date?
     var issue: String?
+    var lastResult: AuthenticationHistory.Result?
+
+    mutating func forgetComputer() {
+        target = nil
+        connectedComputer = nil
+        lastResult = nil
+        rssi = nil
+        rssiMeasuredAt = nil
+        enrollment = .idle
+        authentication = .waiting
+        issue = nil
+        connection = .unregistered
+    }
 
     mutating func completeEnrollment(_ outcome: ComputerEnrollmentState,
                                      candidate: RegisteredComputer) -> RegisteredComputer? {
@@ -132,10 +145,6 @@ struct BluetoothAuthenticationState {
         return rssi >= threshold ? .approve : .tooLow
     }
 
-    static func automaticPreference(_ defaults: UserDefaults) -> Bool {
-        defaults.object(forKey: "automaticUnlockEnabled") as? Bool ?? BluetoothViewState().automaticEnabled
-    }
-
     static func computerID(from data: Data) -> UUID? {
         guard data.count == 36, let text = String(data: data, encoding: .utf8),
               let id = UUID(uuidString: text), id.uuidString.lowercased() == text.lowercased(),
@@ -148,15 +157,15 @@ struct BluetoothAuthenticationState {
         switch code {
         case "enrollment_saved", "enrollment_already_registered": outcome = .succeeded
         case "enrollment_cancelled": outcome = .cancelled
-        case "enrollment_rejected": outcome = .rejected("Windows 拒绝登记，请先开启托盘配对窗口")
-        case "enrollment_busy": outcome = .rejected("Windows 正在处理另一份登记")
-        case "enrollment_expired": outcome = .failed("Windows 配对窗口已过期")
-        case "enrollment_error": outcome = .failed("Windows 登记失败")
-        case "enrollment_removed": outcome = .failed("Windows 已移除登记，请重新登记")
+        case "enrollment_rejected": outcome = .rejected(String(localized: "Windows rejected pairing. Open Pair iPhone from the Windows tray."))
+        case "enrollment_busy": outcome = .rejected(String(localized: "Windows is processing another pairing request."))
+        case "enrollment_expired": outcome = .failed(String(localized: "The Windows pairing window expired."))
+        case "enrollment_error": outcome = .failed(String(localized: "Windows pairing failed."))
+        case "enrollment_removed": outcome = .failed(String(localized: "Windows removed the authorization. Forget this PC and pair again."))
         default: return nil
         }
         return detail == "saved_reload_failed"
-            ? .failed("Windows 登记已修改，但服务重新加载失败；请在 Windows 检查后重试") : outcome
+            ? .failed(String(localized: "Windows saved the pairing change, but the service could not reload. Check Windows and try again.")) : outcome
     }
 
     static func acceptsResult(requestID: UUID?, pending: UUID?, awaiting: UUID?) -> Bool {
@@ -268,8 +277,8 @@ struct BluetoothAuthenticationState {
         return true
     }
 
-    func acceptsAuthentication(target: UUID?, enabled: Bool, enrolling: Bool) -> Bool {
-        phase == .ready && verifiedComputerID == target && target != nil && enabled && !enrolling
+    func acceptsAuthentication(target: UUID?, enrolling: Bool) -> Bool {
+        phase == .ready && verifiedComputerID == target && target != nil && !enrolling
     }
 
     func isCurrentGeneration(_ value: UInt64) -> Bool { value == generation }
@@ -310,5 +319,56 @@ struct BluetoothAuthenticationState {
     mutating func failed() {
         resetTransport()
         phase = .failed
+    }
+}
+
+struct AuthenticationHistory {
+    struct Result: Codable, Equatable {
+        let requestID: UUID
+        let approvedAt: Date?
+        let rssi: Int?
+    }
+
+    static let storageKey = "lastWindowsAuthenticationResult"
+    private(set) var result: Result?
+    private var requestID: UUID?
+    private var signal: Int?
+
+    init(result: Result? = nil) { self.result = result }
+
+    init(defaults: UserDefaults) throws {
+        if let data = defaults.data(forKey: Self.storageKey) {
+            result = try JSONDecoder().decode(Result.self, from: data)
+        }
+    }
+
+    func save(to defaults: UserDefaults) throws {
+        if let result {
+            defaults.set(try JSONEncoder().encode(result), forKey: Self.storageKey)
+        } else { defaults.removeObject(forKey: Self.storageKey) }
+    }
+
+    mutating func begin(_ id: UUID) {
+        requestID = id
+        signal = nil
+    }
+
+    mutating func measured(_ value: Int, for id: UUID) {
+        guard requestID == id else { return }
+        signal = value
+    }
+
+    mutating func complete(_ id: UUID?, approved: Bool, at date: Date) {
+        guard let id, requestID == id else { return }
+        result = Result(requestID: id, approvedAt: approved ? date : nil,
+                        rssi: approved ? signal : nil)
+        requestID = nil
+        signal = nil
+    }
+
+    mutating func forget() {
+        result = nil
+        requestID = nil
+        signal = nil
     }
 }

@@ -1,4 +1,4 @@
-// Modified by Rui MA on 26 Sep 2026
+// Created by Rui MA on 26 Sep 2026
 
 import CryptoKit
 import Foundation
@@ -60,7 +60,7 @@ final class SecureEnclaveKeyStore {
             [.privateKeyUsage],
             &creationError
         ) else {
-            let message = creationError?.takeRetainedValue().localizedDescription ?? "系统没有提供详细错误。"
+            let message = creationError?.takeRetainedValue().localizedDescription ?? String(localized: "The system did not provide an error description.")
             throw UnlockError.accessControlCreationFailed(message)
         }
 
@@ -86,13 +86,13 @@ final class SecureEnclaveKeyStore {
         switch status {
         case errSecSuccess:
             guard let data = result as? Data else {
-                throw UnlockError.keychainFailure(operation: "读取密钥数据类型", status: errSecInternalError)
+                throw UnlockError.keychainFailure(operation: String(localized: "Read key data type"), status: errSecInternalError)
             }
             return data
         case errSecItemNotFound:
             return nil
         default:
-            throw UnlockError.keychainFailure(operation: "读取签名密钥", status: status)
+            throw UnlockError.keychainFailure(operation: String(localized: "Read signing key"), status: status)
         }
     }
 
@@ -104,7 +104,7 @@ final class SecureEnclaveKeyStore {
 
         let status = SecItemAdd(item as CFDictionary, nil)
         guard status == errSecSuccess else {
-            throw UnlockError.keychainFailure(operation: "保存签名密钥", status: status)
+            throw UnlockError.keychainFailure(operation: String(localized: "Save signing key"), status: status)
         }
     }
 }

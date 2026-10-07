@@ -8,7 +8,7 @@ The iPhone app uses SwiftUI, CoreBluetooth and CryptoKit/Secure Enclave to respo
 
 - Use **Xcode 27** as the current project baseline, on an Apple silicon Mac with a macOS version supported by that Xcode release. The checked-in project records tools/upgrade version 27 and object version 90; opening/building it in older Xcode versions has not been verified. The app deployment target is **iOS 26.0**, including native SliderTick controls.
 - Use a physical iPhone running iOS 26 or later. Secure Enclave availability is checked at runtime; there is no software-key fallback for the simulator.
-- The separate Swift Package policy tests require **Swift 6.2 or newer** and **macOS 13 or later** for localized resources. The app target currently uses Swift 5 language mode; the package tools version is a distinct requirement.
+- The `iosTests` target uses Swift Testing and is hosted by the iOS app.
 
 1. Open [ios.xcodeproj](ios.xcodeproj) in Xcode and select the `ios` app scheme.
 2. In **Signing & Capabilities**, choose your own development team for Debug and Release and enable automatic signing. Replace the checked-in bundle identifier (`com.ruima.unlock-windows`) with a unique identifier your team can sign. The checked-in team is not a distribution entitlement for other developers.
@@ -46,7 +46,7 @@ Add a Windows PC opens one sheet containing a NavigationStack. The introduction 
 | `Core/BluetoothAuthenticationState.swift` | Selected-connection initialization, readiness and per-request RSSI state. |
 | `Core/UnlockProtocol.swift` | Protocol decoding and canonical signing payload. |
 | `Core/SecureEnclaveKeyStore.swift` | Secure Enclave key creation, keychain persistence and signing. |
-| `Tests/`, `Package.swift` | Pure policy regression tests, independent of native BLE and Secure Enclave. |
+| `iosTests/` | Swift Testing policy regression tests, independent of native BLE and Secure Enclave. |
 
 Wire formats and identity rules live in [Protocol.md](../Protocol.md); security assumptions live in [SECURITY.md](../SECURITY.md).
 
@@ -66,11 +66,7 @@ Each challenge requires a fresh RSSI read and signature within three seconds; ol
 
 About → Diagnostics retains up to 64 recent entries with UTC/monotonic time, connection generation, route attempt, peripheral/native state, requestID, RSSI and raw errors. Passwords, private keys, nonces and signature bodies are not diagnostic output. Redact personal machine/device identifiers before sharing logs publicly.
 
-From the repository root:
-
-```sh
-swift test --package-path ./ios
-```
+In Xcode, select the `ios` scheme and choose **Product → Test** (`⌘U`).
 
 These policy tests do not simulate native CoreBluetooth callback delivery, cancellation, radio behavior or Secure Enclave operation. Follow the [device and background testing guide](../docs/Testing.md) to validate actual behavior.
 

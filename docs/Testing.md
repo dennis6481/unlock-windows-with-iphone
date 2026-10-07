@@ -36,11 +36,7 @@ ctest --test-dir '.\windows\build' -C Release --output-on-failure
 
 Adjust the test directory if using a separate architecture/configuration directory. Tests cover protocol/crypto, approval policy, enrollment storage, saved-credential IPC, CP policy and installer decisions. Test execution is different from verifying a native Windows installation or real BLE callbacks.
 
-For pure Swift policy tests on a system with Swift 6 or newer:
-
-```sh
-swift test --package-path ./ios
-```
+For the iOS policy tests, open `ios/ios.xcodeproj`, select the `ios` scheme and choose **Product → Test** (`⌘U`).
 
 These cover initialization/readiness, RSSI/request state, per-route recovery/retry and generation/cancellation decisions. They do not emulate CoreBluetooth, the Secure Enclave or overnight OS scheduling.
 

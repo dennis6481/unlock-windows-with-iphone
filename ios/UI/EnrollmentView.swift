@@ -142,9 +142,10 @@ private struct EnrollmentVerificationPage: View {
     var body: some View {
         SetupSheetPage(
             title: "Confirm on your PC",
-            description: "Compare this iPhone’s full fingerprint with the one shown on Windows, then confirm on your PC.",
+            description: "Compare this iPhone’s fingerprint with the one shown on Windows, then confirm on your PC.",
             symbol: "key.shield.fill",
             buttonTitle: isActive ? "Cancel Pairing" : "Done",
+            destructive: isActive,
             action: close
         ) {
             VStack(alignment: .leading, spacing: 14) {
@@ -191,4 +192,17 @@ private struct EnrollmentIssuesView: View {
             if let keyError { Text(keyError).foregroundStyle(.red).textSelection(.enabled) }
         }
     }
+}
+
+#Preview {
+    EnrollmentVerificationPage(
+        fingerprint: "xsncdnis-dsnbciez-cdqse<-àé888",
+        computerName: "Windows PC",
+        computerID: UUID(uuidString: "00000000-0000-0000-0000-000000000001"),
+        status: "status",
+        isActive: true,
+        issue: "issue",
+        keyError: "keyError",
+        close: {}
+    )
 }

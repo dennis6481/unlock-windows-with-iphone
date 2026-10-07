@@ -37,6 +37,7 @@ struct PairedHomeView: View {
             .frame(maxWidth: 600)
             .frame(maxWidth: .infinity)
         }
+        .scrollDisabled(true)
         .onChange(of: displayInput) { old, new in
             guard old.visible, new.visible else {
                 resetApproval()
@@ -191,7 +192,8 @@ private struct ComputerDisplayView: View {
 
     var body: some View {
         VStack(spacing: 24) {
-            Image(systemName: showingApproval ? "lock.open.desktopcomputer" : "desktopcomputer")
+            Image(systemName: showingApproval ? "lock.open.desktopcomputer" : "pc")
+                .symbolRenderingMode(showingApproval ? .monochrome : .multicolor)
                 .font(.system(size: symbolSize, weight: .light))
                 .foregroundStyle(Color.accentColor)
                 .contentTransition(.symbolEffect(.replace.magic(fallback: .downUp.wholeSymbol), options: .nonRepeating))

@@ -10,25 +10,28 @@ struct SetupSheetPage<Content: View>: View {
     var multicolor = false
     let buttonTitle: LocalizedStringResource
     var disabled = false
+    var destructive = false
     let action: () -> Void
     var secondaryAction: (title: LocalizedStringResource, disabled: Bool, action: () -> Void)? = nil
     @ViewBuilder let content: () -> Content
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                SetupSheetHeader(title: title, description: description, symbol: symbol,
-                                 color: color, multicolor: multicolor)
-                content()
-            }
-            .padding(24)
-            .frame(maxWidth: 600)
-            .frame(maxWidth: .infinity)
-        }
-        .safeAreaInset(edge: .bottom) {
-            SetupSheetActions(buttonTitle: buttonTitle, disabled: disabled, action: action,
-                              secondaryAction: secondaryAction)
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    SetupSheetHeader(title: title, description: description, symbol: symbol,
+                                     color: color, multicolor: multicolor)
+                    content()
+                }
                 .padding(24)
+                .frame(maxWidth: 600)
+                .frame(maxWidth: .infinity)
+            }
+            SetupSheetActions(buttonTitle: buttonTitle, disabled: disabled,
+                              destructive: destructive, action: action,
+                              secondaryAction: secondaryAction)
+                .padding(.horizontal, 24)
+                .padding(.bottom, 24)
         }
         .background(Color(uiColor: .systemBackground))
     }
@@ -38,16 +41,26 @@ struct SetupSheetPage<Content: View>: View {
 private struct SetupSheetActions: View {
     let buttonTitle: LocalizedStringResource
     let disabled: Bool
+    let destructive: Bool
     let action: () -> Void
     let secondaryAction: (title: LocalizedStringResource, disabled: Bool, action: () -> Void)?
 
     var body: some View {
         VStack(spacing: 12) {
-            Button(action: action) { Text(buttonTitle) }
-                .buttonSizing(.flexible)
-                .buttonStyle(.glassProminent)
-                .controlSize(.large)
-                .disabled(disabled)
+            if destructive {
+                Button(role: .destructive, action: action) { Text(buttonTitle) }
+                    .buttonSizing(.flexible)
+                    .buttonStyle(.glass)
+                    .controlSize(.large)
+                    .tint(.red)
+                    .disabled(disabled)
+            } else {
+                Button(action: action) { Text(buttonTitle) }
+                    .buttonSizing(.flexible)
+                    .buttonStyle(.glassProminent)
+                    .controlSize(.large)
+                    .disabled(disabled)
+            }
             if let secondaryAction {
                 Button(action: secondaryAction.action) { Text(secondaryAction.title) }
                     .buttonSizing(.flexible)

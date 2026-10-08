@@ -7,7 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		B57E0D973067DAE300E8280A /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B57E0D953067DAE300E8280A /* ContentView.swift */; };
+		B558C3403077DDE8003957DE /* AppTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B558C33F3077DDE8003957DE /* AppTabView.swift */; };
+		B558C3423077DDE8003957DE /* UnpairedHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B558C3413077DDE8003957DE /* UnpairedHomeView.swift */; };
+		B558C3443077DE14003957DE /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B558C3433077DE14003957DE /* SettingsView.swift */; };
 		B57E0D983067DAE300E8280A /* MyApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B57E0D963067DAE300E8280A /* MyApp.swift */; };
 		B57E0D993067DAE300E8280A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B57E0D943067DAE300E8280A /* Assets.xcassets */; };
 		D10000010000000000000001 /* UnlockError.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000020000000000000001 /* UnlockError.swift */; };
@@ -20,9 +22,7 @@
 		D10000050000000000000001 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = D10000050000000000000002 /* Localizable.xcstrings */; };
 		D10000050000000000000003 /* InfoPlist.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = D10000050000000000000004 /* InfoPlist.xcstrings */; };
 		F10000020000000000000001 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000010000000000000001 /* HomeView.swift */; };
-		F10000020000000000000003 /* SetupSheetPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000010000000000000003 /* SetupSheetPage.swift */; };
 		F10000020000000000000004 /* EnrollmentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000010000000000000004 /* EnrollmentView.swift */; };
-		F10000020000000000000005 /* AboutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000010000000000000005 /* AboutView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -38,8 +38,10 @@
 /* Begin PBXFileReference section */
 		000000000000000000000120 /* ios.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ios.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B51DE57C3075B59300E3BE8E /* iosTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = iosTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B558C33F3077DDE8003957DE /* AppTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTabView.swift; sourceTree = "<group>"; };
+		B558C3413077DDE8003957DE /* UnpairedHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnpairedHomeView.swift; sourceTree = "<group>"; };
+		B558C3433077DE14003957DE /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		B57E0D943067DAE300E8280A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		B57E0D953067DAE300E8280A /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		B57E0D963067DAE300E8280A /* MyApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyApp.swift; sourceTree = "<group>"; };
 		D10000020000000000000001 /* UnlockError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnlockError.swift; sourceTree = "<group>"; };
 		D10000020000000000000002 /* SecureEnclaveKeyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureEnclaveKeyStore.swift; sourceTree = "<group>"; };
@@ -52,9 +54,7 @@
 		D10000050000000000000002 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
 		D10000050000000000000004 /* InfoPlist.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = InfoPlist.xcstrings; sourceTree = "<group>"; };
 		F10000010000000000000001 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
-		F10000010000000000000003 /* SetupSheetPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupSheetPage.swift; sourceTree = "<group>"; };
 		F10000010000000000000004 /* EnrollmentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnrollmentView.swift; sourceTree = "<group>"; };
-		F10000010000000000000005 /* AboutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AboutView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -86,12 +86,12 @@
 				D10000040000000000000002 /* Core */,
 				F10000030000000000000001 /* UI */,
 				B57E0D943067DAE300E8280A /* Assets.xcassets */,
-				B57E0D953067DAE300E8280A /* ContentView.swift */,
 				B57E0D963067DAE300E8280A /* MyApp.swift */,
 				D10000050000000000000002 /* Localizable.xcstrings */,
 				000000000000000000000120 /* ios.app */,
 				B51DE57C3075B59300E3BE8E /* iosTests.xctest */,
 				B51DE57D3075B59300E3BE8E /* iosTests */,
+				B558C33F3077DDE8003957DE /* AppTabView.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -122,9 +122,9 @@
 			isa = PBXGroup;
 			children = (
 				F10000010000000000000001 /* HomeView.swift */,
-				F10000010000000000000003 /* SetupSheetPage.swift */,
 				F10000010000000000000004 /* EnrollmentView.swift */,
-				F10000010000000000000005 /* AboutView.swift */,
+				B558C3413077DDE8003957DE /* UnpairedHomeView.swift */,
+				B558C3433077DE14003957DE /* SettingsView.swift */,
 			);
 			path = UI;
 			sourceTree = "<group>";
@@ -232,11 +232,11 @@
 		000000000000000120000000 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
+				B558C3443077DE14003957DE /* SettingsView.swift in Sources */,
 				F10000020000000000000001 /* HomeView.swift in Sources */,
-				F10000020000000000000003 /* SetupSheetPage.swift in Sources */,
+				B558C3423077DDE8003957DE /* UnpairedHomeView.swift in Sources */,
 				F10000020000000000000004 /* EnrollmentView.swift in Sources */,
-				F10000020000000000000005 /* AboutView.swift in Sources */,
-				B57E0D973067DAE300E8280A /* ContentView.swift in Sources */,
+				B558C3403077DDE8003957DE /* AppTabView.swift in Sources */,
 				B57E0D983067DAE300E8280A /* MyApp.swift in Sources */,
 				D10000010000000000000001 /* UnlockError.swift in Sources */,
 				D10000010000000000000002 /* SecureEnclaveKeyStore.swift in Sources */,

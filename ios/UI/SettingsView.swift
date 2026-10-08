@@ -2,19 +2,29 @@
 
 import SwiftUI
 
-struct AboutView: View {
+struct SettingsView: View {
     let model: UnlockSetupModel
 
     var body: some View {
         Form {
             Section {
+                Link("About this project", destination: URL(string: "https://github.com/dennis6481/unlock-windows-with-iphone")!)
                 Link("Privacy Policy", destination: URL(string: "https://dennis6481.github.io/unlock-windows-with-iphone/")!)
+            }header: {
+                Text("About")
+            }
+            
+            Section {
+                
                 NavigationLink("Diagnostics") { DiagnosticsView(model: model) }
-            } footer: {
+                
+            }header: {
+                Text("Diagnostics")
+            }footer: {
                 AppVersionFooter()
             }
         }
-        .navigationTitle("About")
+        .navigationTitle("Settings")
     }
 }
 
@@ -42,7 +52,7 @@ private struct AppVersionFooter: View {
     var body: some View {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—"
-        Text("Version \(version) Build \(build)")
+        Text("Version \(version) (Build \(build))")
             .font(.footnote)
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity)

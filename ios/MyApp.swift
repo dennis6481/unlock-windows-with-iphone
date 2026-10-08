@@ -19,7 +19,7 @@ struct MyApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView(model: UnlockSetupModel.shared)
+            AppTabView(model: UnlockSetupModel.shared)
         }
         .onChange(of: scenePhase, initial: true) { _, phase in
             UnlockSetupModel.shared.setForeground(phase == .active)

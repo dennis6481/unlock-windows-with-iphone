@@ -95,6 +95,9 @@
         }
       }
     },
+    "About this project" : {
+
+    },
     "Add a Windows PC" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -560,6 +563,9 @@
         }
       }
     },
+    "Home" : {
+
+    },
     "Invalid public key length" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -658,6 +664,9 @@
           }
         }
       }
+    },
+    "More" : {
+
     },
     "Move closer to your PC and try again." : {
       "extractionState" : "manual",
@@ -1472,12 +1481,12 @@
         }
       }
     },
-    "Version %@ Build %@" : {
+    "Version %@ (Build %@)" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Version %1$@ Build %2$@"
+            "value" : "Version %1$@ (Build %2$@)"
           }
         }
       }

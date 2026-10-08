@@ -16,7 +16,8 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "000000000000000100000000"
-               BuildableName = "ios.app"
+               BuildableName = "Unlock PC.app"
+               BlueprintName = "Unlock PC"
                ReferencedContainer = "container:ios.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -35,7 +36,8 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "B51DE57B3075B59300E3BE8E"
-               BuildableName = "iosTests.xctest"
+               BuildableName = "UnlockPCTests.xctest"
+               BlueprintName = "UnlockPCTests"
                ReferencedContainer = "container:ios.xcodeproj">
             </BuildableReference>
          </TestableReference>
@@ -57,7 +59,8 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "000000000000000100000000"
-            BuildableName = "ios.app"
+            BuildableName = "Unlock PC.app"
+            BlueprintName = "Unlock PC"
             ReferencedContainer = "container:ios.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -73,7 +76,8 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "000000000000000100000000"
-            BuildableName = "ios.app"
+            BuildableName = "Unlock PC.app"
+            BlueprintName = "Unlock PC"
             ReferencedContainer = "container:ios.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -90,6 +94,15 @@
             <ActionContent
                title = "Run Script"
                scriptText = "# Type a script or drag a script file from your workspace to insert its path.&#10;cd &quot;${PROJECT_DIR}&quot;&#10;xcrun agvtool next-version -all&#10;">
+               <EnvironmentBuildable>
+                  <BuildableReference
+                     BuildableIdentifier = "primary"
+                     BlueprintIdentifier = "000000000000000100000000"
+                     BuildableName = "Unlock PC.app"
+                     BlueprintName = "Unlock PC"
+                     ReferencedContainer = "container:ios.xcodeproj">
+                  </BuildableReference>
+               </EnvironmentBuildable>
             </ActionContent>
          </ExecutionAction>
       </PostActions>

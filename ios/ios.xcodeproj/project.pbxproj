@@ -37,8 +37,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		000000000000000000000120 /* ios.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ios.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		B51DE57C3075B59300E3BE8E /* iosTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = iosTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		000000000000000000000120 /* Unlock PC.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Unlock PC.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		B51DE57C3075B59300E3BE8E /* UnlockPCTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = UnlockPCTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B558C33F3077DDE8003957DE /* AppTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTabView.swift; sourceTree = "<group>"; };
 		B558C3413077DDE8003957DE /* UnpairedHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnpairedHomeView.swift; sourceTree = "<group>"; };
 		B558C3433077DE14003957DE /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
@@ -90,8 +90,8 @@
 				B57E0D943067DAE300E8280A /* Assets.xcassets */,
 				B57E0D963067DAE300E8280A /* MyApp.swift */,
 				D10000050000000000000002 /* Localizable.xcstrings */,
-				000000000000000000000120 /* ios.app */,
-				B51DE57C3075B59300E3BE8E /* iosTests.xctest */,
+				000000000000000000000120 /* Unlock PC.app */,
+				B51DE57C3075B59300E3BE8E /* UnlockPCTests.xctest */,
 				B51DE57D3075B59300E3BE8E /* iosTests */,
 				B558C33F3077DDE8003957DE /* AppTabView.swift */,
 			);
@@ -135,9 +135,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		000000000000000100000000 /* ios */ = {
+		000000000000000100000000 /* Unlock PC */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 000000000000000110000000 /* Build configuration list for PBXNativeTarget "ios" */;
+			buildConfigurationList = 000000000000000110000000 /* Build configuration list for PBXNativeTarget "Unlock PC" */;
 			buildPhases = (
 				000000000000000120000000 /* Sources */,
 				000000000000000130000000 /* Frameworks */,
@@ -145,14 +145,14 @@
 			);
 			buildRules = (
 			);
-			name = ios;
+			name = "Unlock PC";
 			productName = MyApp;
-			productReference = 000000000000000000000120 /* ios.app */;
+			productReference = 000000000000000000000120 /* Unlock PC.app */;
 			productType = "com.apple.product-type.application";
 		};
-		B51DE57B3075B59300E3BE8E /* iosTests */ = {
+		B51DE57B3075B59300E3BE8E /* UnlockPCTests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = B51DE5823075B59300E3BE8E /* Build configuration list for PBXNativeTarget "iosTests" */;
+			buildConfigurationList = B51DE5823075B59300E3BE8E /* Build configuration list for PBXNativeTarget "UnlockPCTests" */;
 			buildPhases = (
 				B51DE5783075B59300E3BE8E /* Sources */,
 				B51DE5793075B59300E3BE8E /* Frameworks */,
@@ -166,9 +166,9 @@
 			fileSystemSynchronizedGroups = (
 				B51DE57D3075B59300E3BE8E /* iosTests */,
 			);
-			name = iosTests;
+			name = UnlockPCTests;
 			productName = iosTests;
-			productReference = B51DE57C3075B59300E3BE8E /* iosTests.xctest */;
+			productReference = B51DE57C3075B59300E3BE8E /* UnlockPCTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
@@ -209,8 +209,8 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				000000000000000100000000 /* ios */,
-				B51DE57B3075B59300E3BE8E /* iosTests */,
+				000000000000000100000000 /* Unlock PC */,
+				B51DE57B3075B59300E3BE8E /* UnlockPCTests */,
 			);
 		};
 /* End PBXProject section */
@@ -261,7 +261,7 @@
 /* Begin PBXTargetDependency section */
 		B51DE5813075B59300E3BE8E /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = 000000000000000100000000 /* ios */;
+			target = 000000000000000100000000 /* Unlock PC */;
 			targetProxy = B51DE5803075B59300E3BE8E /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
@@ -332,6 +332,7 @@
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				TVOS_DEPLOYMENT_TARGET = 27.0;
+				VERSIONING_SYSTEM = "apple-generic";
 				WATCHOS_DEPLOYMENT_TARGET = 27.0;
 				XROS_DEPLOYMENT_TARGET = 27.0;
 			};
@@ -394,17 +395,18 @@
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				TVOS_DEPLOYMENT_TARGET = 27.0;
+				VERSIONING_SYSTEM = "apple-generic";
 				WATCHOS_DEPLOYMENT_TARGET = 27.0;
 				XROS_DEPLOYMENT_TARGET = 27.0;
 			};
 			name = Release;
 		};
-		000000000000000111000000 /* Debug configuration for PBXNativeTarget "ios" */ = {
+		000000000000000111000000 /* Debug configuration for PBXNativeTarget "Unlock PC" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = 6SQCAPYZW7;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_PREVIEWS = YES;
@@ -443,12 +445,12 @@
 			};
 			name = Debug;
 		};
-		000000000000000112000000 /* Release configuration for PBXNativeTarget "ios" */ = {
+		000000000000000112000000 /* Release configuration for PBXNativeTarget "Unlock PC" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = 6SQCAPYZW7;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_PREVIEWS = YES;
@@ -487,12 +489,12 @@
 			};
 			name = Release;
 		};
-		B51DE5833075B59300E3BE8E /* Debug configuration for PBXNativeTarget "iosTests" */ = {
+		B51DE5833075B59300E3BE8E /* Debug configuration for PBXNativeTarget "UnlockPCTests" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = 6SQCAPYZW7;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
@@ -513,12 +515,12 @@
 			};
 			name = Debug;
 		};
-		B51DE5843075B59300E3BE8E /* Release configuration for PBXNativeTarget "iosTests" */ = {
+		B51DE5843075B59300E3BE8E /* Release configuration for PBXNativeTarget "UnlockPCTests" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = 6SQCAPYZW7;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
@@ -550,19 +552,19 @@
 			);
 			defaultConfigurationName = Release;
 		};
-		000000000000000110000000 /* Build configuration list for PBXNativeTarget "ios" */ = {
+		000000000000000110000000 /* Build configuration list for PBXNativeTarget "Unlock PC" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				000000000000000111000000 /* Debug configuration for PBXNativeTarget "ios" */,
-				000000000000000112000000 /* Release configuration for PBXNativeTarget "ios" */,
+				000000000000000111000000 /* Debug configuration for PBXNativeTarget "Unlock PC" */,
+				000000000000000112000000 /* Release configuration for PBXNativeTarget "Unlock PC" */,
 			);
 			defaultConfigurationName = Release;
 		};
-		B51DE5823075B59300E3BE8E /* Build configuration list for PBXNativeTarget "iosTests" */ = {
+		B51DE5823075B59300E3BE8E /* Build configuration list for PBXNativeTarget "UnlockPCTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				B51DE5833075B59300E3BE8E /* Debug configuration for PBXNativeTarget "iosTests" */,
-				B51DE5843075B59300E3BE8E /* Release configuration for PBXNativeTarget "iosTests" */,
+				B51DE5833075B59300E3BE8E /* Debug configuration for PBXNativeTarget "UnlockPCTests" */,
+				B51DE5843075B59300E3BE8E /* Release configuration for PBXNativeTarget "UnlockPCTests" */,
 			);
 			defaultConfigurationName = Release;
 		};

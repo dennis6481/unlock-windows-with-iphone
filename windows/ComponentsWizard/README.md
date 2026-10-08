@@ -6,7 +6,7 @@ The native Components Wizard installs, updates, reinstalls and removes the four 
 
 ## Package and deployment
 
-The build produces a self-contained `windows/dist/UnlockWithIPhone_<version>_setup.exe` for the selected target architecture; the version is read automatically from [ProductVersion.h](../ProductVersion.h). The service, CP DLL and desktop app are embedded as resources after their builds complete. Component changes regenerate the resource and SHA-256 manifest and rebuild setup. The installed/staged maintenance program is named `setup.exe` and retains the embedded payload. Fixed component names are defined in [ComponentFiles.h](../ComponentFiles.h).
+The build produces a self-contained `windows/dist/UnlockWithIPhone_<version>_<architecture>_setup.exe` with `x64` or `arm64` as the compiler target architecture suffix; the version is read automatically from [ProductVersion.h](../ProductVersion.h). The service, CP DLL and desktop app are embedded as resources after their builds complete. Component changes regenerate the resource and SHA-256 manifest and rebuild setup. The installed/staged maintenance program is named `setup.exe` and retains the embedded payload. Fixed component names are defined in [ComponentFiles.h](../ComponentFiles.h).
 
 Release statically links the MSVC runtime; target machines are intended to require neither development tools nor a separate VC++ Redistributable. Single-file packaging, static runtime linkage and clean-machine operation are source changes pending an authorized build and runtime acceptance.
 

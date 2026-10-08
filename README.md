@@ -47,7 +47,7 @@ The [protocol and architecture](Protocol.md) describe the complete data flow and
 
 Build both platforms from the same revision. Do not mix service, Credential Provider and desktop binaries from different builds. A simulator can be useful for UI work, but cannot exercise the Secure Enclave signing path.
 
-Windows distribution is a single `windows/dist/UnlockWithIPhone_<version>_setup.exe` for the selected native target architecture, with the desktop app, service and Credential Provider embedded. The version remains automatic from `ProductVersion.h`. Release uses a static C/C++ runtime to avoid requiring development tools or a separate VC++ Redistributable on the target PC. This packaging change is statically inspected only; Release dependencies and clean-machine installation/runtime remain unverified. Complete and uninstall older companion-file installations with their original installer before installing this package.
+Windows distribution is a single `windows/dist/UnlockWithIPhone_<version>_<architecture>_setup.exe` with the desktop app, service and Credential Provider embedded. The architecture suffix is `x64` or `arm64`, derived from the compiler target. The version remains automatic from `ProductVersion.h`. Release uses a static C/C++ runtime to avoid requiring development tools or a separate VC++ Redistributable on the target PC. This packaging change is statically inspected only; Release dependencies and clean-machine installation/runtime remain unverified. Complete and uninstall older companion-file installations with their original installer before installing this package.
 
 ## Repository guide
 

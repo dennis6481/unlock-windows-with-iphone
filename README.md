@@ -1,43 +1,72 @@
 <!-- Created by Rui MA on 26 Sep 2026 -->
+> [!WARNING]
+> **Developer technical preview**
+>
+> - **iPhone installation requires a Mac and Xcode.** The iOS app is not yet available on the App Store or TestFlight. You must build and sign it yourself to install it on your iPhone. See the [iOS development guide](ios/README.md).
+> - **Currently supports only Windows users who sign in with a Microsoft account (MSA).** The account must have a password. Local Windows accounts are not supported. See Microsoft's guide to [switching from a local account to a Microsoft account](https://support.microsoft.com/en-us/accounts-billing/manage/change-from-a-local-account-to-a-microsoft-account-in-windows).
+
+
+
+
+<p align="center">
+  <img src="docs/logo.PNG" alt="Unlock with iPhone logo" width="120">
+</p>
 
 # Unlock with iPhone®
 
-Unlock an existing Windows desktop session using a signature from your iPhone's Secure Enclave over Bluetooth Low Energy (BLE).
+Unlock Windows session using your iPhone in proximity.
 
-**Developer technical preview.** There is currently no App Store or TestFlight distribution for the iOS app: you need a Mac, Xcode and your own signing configuration to install it on a physical iPhone. This is an experimental open-source project, not a ready-to-use consumer release.
+## Get started
 
-The author reports that the primary unlock workflow is relatively stable on their setup with one Windows user and a password-backed Microsoft Account (MSA). This is experience on that setup, not acceptance of every scenario or the latest packaging changes; see the [testing guide](docs/Testing.md).
+### System requirements
+
+The *Unlock with iPhone* requires Windows 10 version **1703, build 15063**, or later, including Windows 11. Both x64 and ARM64 architecture are supported (althought the app has not yet been tested on a physical ARM64 machine).
+
+The *Unlock PC* iOS app requires iOS 26 or later, and currently only supports iPhone and iPhone Duo. 
+
 
 ## What it does
 
-- Registers one iPhone public key with the current Windows console account after fingerprint confirmation.
-- Keeps the phone's signing private key in the Secure Enclave. The phone does not receive the Windows password.
-- Stores an encrypted copy of the Windows Microsoft Account (MSA) password in a dedicated LocalSystem service.
-- Uses a Credential Provider to submit that password to Windows' native authentication after a valid, one-time phone approval.
-- Provides a Windows tray app for status, phone pairing and saved-password management, plus an installer for install, update and removal.
+- Unlock your locked Windows session using your paired iPhone over Bluetooth. Select the phone unlock tile on the Windows lock screen; your iPhone responds automatically when its configured conditions are met.
+- Adjust the proximity setting on your iPhone to control how close it needs to be to respond.
+- Keep an encrypted copy of your Microsoft account password on your PC. Your password is never sent to your iPhone.
+- Manage pairing, the saved password and connection status from the Windows tray app.
+- Install, update or remove the Windows app using its installer.
 
-## The workflow
+After restarting your PC or signing out, sign in once with your usual Windows password or PIN before using iPhone unlock again.
 
-1. Install the Windows components, restart and sign in once using your usual Windows PIN/password.
-2. On the verified installation result page, choose **Start setup**. Save the actual account password in the existing management window, then pair the iPhone and confirm its full fingerprint. **Continue setup…** in the tray resumes unfinished configuration.
-3. Lock Windows and press **Enter / Unlock** on the phone credential tile.
-4. The phone checks the registered computer, automatic-response setting and a fresh signal reading, then signs the request.
-5. The Windows service verifies the signature; the Credential Provider submits the saved password and Windows performs the actual unlock.
+### Installation
 
-Phone approval is automatic when its configured conditions are met; selecting the tile or merely being nearby does not create an approval. Restarting or signing out requires a native Windows sign-in before phone unlock is available again.
+1. ~~Search and install *Unlock PC* on App Store.~~ The *Unlock PC* app is not yet avaliable on App Store, you will need to build and run the app from `ios/` with Xcode.
+2. Get the latest Unlock with iPhone [Windows installer](https://github.com/dennis6481/unlock-windows-with-iphone/releases) at GitHub release and follow the steps in installer. Once restarted, a message box should appear. Choose **Start setup** to continue.
 
-The [protocol and architecture](Protocol.md) describe the complete data flow and trust boundaries.
+3. You will need to enter your **Microsoft account** password. This password will be ecrypted and store on your PC. (For the moment you have to be logged in with your Microsoft account to use the app. Local account support will be added later).
 
-## Requirements
+4. On iPhone's *Unlock PC* app, tap *Add a Windows PC*, and *Continue*, than you should see your PC name under the SHA fingerprint.
 
-| Component | Requirement |
-|---|---|
-| Windows | Windows 10 version **1703, build 15063**, or later, including Windows 11. This is the API-derived minimum, not a tested compatibility matrix; see the [Windows compatibility notes](windows/README.md#compatibility). |
-| Windows architecture | Native **x64 (64-bit x86)** or **ARM64**. ARM64 has not been tested on physical hardware. 32-bit x86 and ARM32 are not supported. |
-| PC Bluetooth | BLE-capable adapter and driver with Windows GATT server / peripheral advertising support. BLE support alone does not guarantee that the adapter can publish this service. |
-| Phone | Physical iPhone with **iOS 18 or later**, Bluetooth enabled and Secure Enclave available. |
-| Windows account | One configured Windows user with an existing physical-console session and a password-backed Microsoft Account (MSA). Local accounts, multiple Windows users and remote sessions are not supported. |
-| Development | Windows C++ tools for the Windows components; a Mac and Xcode for the iPhone app. See the platform guides below. |
+5. On your PC, verify that the SHA 256 fingerprint matches the one on iPhone, than click *Confirm*. You will see a confirmation page on your iPhone and you're all set.
+
+## Uninstall
+
+Open Windows **Settings → Apps**, find *Unlock with iPhone* and select **Uninstall**. Follow the uninstaller's instructions, including restarting if prompted.
+
+Uninstalling removes the Windows components, the saved password copy and the iPhone pairing information stored on your PC. It does not change your Microsoft account password. If you reinstall, you will need to set up the app again.
+
+The PC entry in the iPhone app is kept. You can remove it separately from *Unlock PC*.
+
+## Repository guide
+
+```text
+.
+├── ios/           SwiftUI app, CoreBluetooth coordination, Secure Enclave signing and pure policy tests.
+├── windows/       Desktop app, credential service, Credential Provider, installer, shared code and C++ tests.
+├── docs/
+│   └── Testing.md Reproducible checks and release evidence requirements.
+├── Protocol.md    Cross-platform protocol and overall architecture.
+└── SECURITY.md    Credential protection, security assumptions and limitations.
+```
+
+The [Windows module index](windows/README.md#module-index) explains the source directories. Source modules are not separate installed programs.
 
 ## Build and set up
 
@@ -45,41 +74,38 @@ The [protocol and architecture](Protocol.md) describe the complete data flow and
 - [iOS: Xcode signing, device installation and app settings](ios/README.md)
 - [Testing and diagnostics](docs/Testing.md)
 
-Build both platforms from the same revision. Do not mix service, Credential Provider and desktop binaries from different builds. A simulator can be useful for UI work, but cannot exercise the Secure Enclave signing path.
+Build both platforms from the same revision. Do not mix service, Credential Provider and desktop binaries from different builds. A iOS simulator can be useful for UI work, but cannot exercise the Secure Enclave signing path.
 
-Windows distribution is a single `windows/dist/UnlockWithIPhone_<version>_<architecture>_setup.exe` with the desktop app, service and Credential Provider embedded. The architecture suffix is `x64` or `arm64`, derived from the compiler target. The version remains automatic from `ProductVersion.h`. Release uses a static C/C++ runtime to avoid requiring development tools or a separate VC++ Redistributable on the target PC. This packaging change is statically inspected only; Release dependencies and clean-machine installation/runtime remain unverified. Complete and uninstall older companion-file installations with their original installer before installing this package.
+Windows distribution is a single `windows/dist/UnlockWithIPhone_<version>_<architecture>_setup.exe` with the desktop app, service and Credential Provider embedded. 
 
-Pushing a `v<major>.<minor>.<patch>` tag runs the [Windows Release workflow](.github/workflows/windows-release.yml) for x64 and ARM64 without a branch restriction. After both builds succeed, it automatically publishes a GitHub Release for the tag with both setup EXEs attached. The installers also remain available in that run's Actions artifacts. The installer version must match the tag. CI builds and checks the packages; it does not establish installation or physical-device acceptance.
-
-## Repository guide
-
-| Location | Purpose |
-|---|---|
-| `ios/` | SwiftUI app, CoreBluetooth coordination, Secure Enclave signing and pure policy tests. |
-| `windows/` | Desktop app, credential service, Credential Provider, installer, shared code and C++ tests. |
-| [Protocol.md](Protocol.md) | Cross-platform protocol and overall architecture. |
-| [SECURITY.md](SECURITY.md) | Credential protection, security assumptions and limitations. |
-| [docs/Testing.md](docs/Testing.md) | Reproducible checks and release evidence requirements. |
-
-The [Windows module index](windows/README.md#module-index) explains the source directories. Source modules are not separate installed programs.
 
 ## Known limitations
 
-- **Distribution:** There is no iOS distribution channel; device installation and signing are the developer's responsibility. Production signing and distribution are not guaranteed.
-- **Windows sessions and accounts:** Only an existing physical-console session can be unlocked. Initial sign-in after boot or sign-out uses the original Windows password/PIN path. Currently, only password-backed Microsoft Account (MSA) accounts are supported; local Windows accounts are not supported. Account changes or an outdated saved password can cause native authentication to fail.
-- **Bluetooth and proximity:** Background BLE recovery depends on the iPhone, Windows adapter, driver and OS. Overnight operation, sleep/resume and failure scenarios need broader device testing. Force-quitting the iOS app is not a promised recovery path. RSSI is an adjustable proximity heuristic, not a reliable distance measurement or protection against relay attacks.
-- **Validation and security assurance:** ARM64 hardware, the oldest supported Windows build and the full negative-path matrix have not been validated. There has been no independent security audit.
+- **Distribution:** There is not yet an iOS distribution channel; device installation and signing are the developer's responsibility. Production signing and distribution are not guaranteed.
+- **Windows sessions and accounts:** Currently, only Microsoft Account (MSA) accounts are supported; local Windows accounts are not supported. Account changes or an outdated saved password can cause native authentication to fail.
+- **Multi-users:** The Windows app does not currently support multi-users. I can only be configured for one MSA user on the PC.
+
 
 The testing guide describes how to report results without treating a successful normal-path trial as full acceptance.
 
 ## To Do
 
+- [ ] Modernize the Windows UI and setup guidance
 - [ ] Support multiple Windows users.
 - [ ] Support local Windows accounts.
-- [ ] Modernize the iOS and Windows UI and setup guidance
 - [ ] Integrate iOS AccessorySetupKit.
+- [ ] watchOS supported.
 - [ ] Move Windows installer packaging to an MSI architecture.
 - [ ] Investigate LSA-based Windows authentication to replace the current implementation that stores a local Windows password copy.
+
+## Security
+
+Inspired by the fact that an Apple Watch can unlock a Mac seemlessly, the software is an exploration for the possibility to unlock Windows PC with an iPhone (or Apple Watch). Therefore this is not a commercial or professional secutity solution. I will deny all the liabilities in case of security breach. 
+Please refer to [SECURITY.md](SECURITY.md) for more details.
+
+## Contributions
+
+A contribution is welcome. Feel free to open an issue if you would like to continue where I've left off, or simply if you found some bugs, or some improvements.
 
 ## License and acknowledgements
 

@@ -94,3 +94,4 @@ The project uses the [MIT License](LICENSE.md). This is an independent project; 
 - [CMake: MSVC runtime library selection](https://cmake.org/cmake/help/latest/variable/CMAKE_MSVC_RUNTIME_LIBRARY.html)
 - [Microsoft: /MD and /MT runtime linkage](https://learn.microsoft.com/en-us/cpp/build/reference/md-mt-ld-use-run-time-library)
 - [Microsoft: Finding and loading resources](https://learn.microsoft.com/en-us/windows/win32/menurc/finding-and-loading-resources)
+- [Unlock PC: Privacy Policy](https://dennis6481.github.io/unlock-windows-with-iphone/)

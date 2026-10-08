@@ -8,7 +8,7 @@ struct AboutView: View {
     var body: some View {
         Form {
             Section {
-                Link("Privacy Policy", destination: URL(string: "https://github.com/dennis6481/unlock-windows-with-iphone")!)
+                Link("Privacy Policy", destination: URL(string: "https://dennis6481.github.io/unlock-windows-with-iphone/")!)
                 NavigationLink("Diagnostics") { DiagnosticsView(model: model) }
             } footer: {
                 AppVersionFooter()

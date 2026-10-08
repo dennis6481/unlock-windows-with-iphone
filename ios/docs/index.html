@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="description" content="Privacy Policy for Unlock Windows, an offline iOS companion app that uses Bluetooth to authenticate with your Windows PC.">
+    <title>Privacy Policy — Unlock Windows</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#policy">Skip to privacy policy</a>
+    <main>
+      <header class="policy-header">
+        <div class="shield" aria-hidden="true">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 3 4.5 6v5.5c0 4.3 2.8 7.6 7.5 9.5 4.7-1.9 7.5-5.2 7.5-9.5V6L12 3Z"/>
+            <path d="m8.5 12 2.3 2.3 4.7-4.6"/>
+          </svg>
+        </div>
+        <p class="app-name">Unlock Windows</p>
+        <h1>Privacy Policy</h1>
+        <p class="effective-date">Effective date: <time datetime="2026-10-08">October 8, 2026</time></p>
+      </header>
+
+      <article id="policy" tabindex="-1" aria-label="Privacy policy for Unlock Windows">
+        <p>Unlock Windows is an iOS companion app for the Windows software in the <a href="https://github.com/dennis6481/unlock-windows-with-iphone">Unlock Windows with iPhone</a> project. It uses Bluetooth to pair with your PC and respond to authentication requests. Its core functionality works without an internet connection.</p>
+
+        <section aria-labelledby="collection">
+          <h2 id="collection">1. No data collection</h2>
+          <p>We, the developer, do not collect or upload data from the app. We do not sell or share your data. The app has no developer-operated server, user accounts, advertising, tracking, or analytics SDKs.</p>
+        </section>
+
+        <section aria-labelledby="bluetooth">
+          <h2 id="bluetooth">2. Bluetooth communication</h2>
+          <p>The app needs Bluetooth permission to discover and connect to the Windows companion software. During pairing and authentication, it exchanges necessary information with your PC, including computer identifiers, the iPhone's public key, authentication challenges, digital signatures, and results. This communication takes place over Bluetooth, not through an internet service.</p>
+          <p>Bluetooth signal strength is used to check your configured unlock distance. It is not a GPS location measurement. Bluetooth background access allows the app to respond when iOS permits it; it is not used for tracking.</p>
+        </section>
+
+        <section aria-labelledby="local-storage">
+          <h2 id="local-storage">3. Information stored on your iPhone</h2>
+          <p>To provide its features, the app stores pairing information locally, including the paired computer's identifier, display name, and Bluetooth peripheral identifier. It also stores your unlock signal-strength setting and the latest authentication result, including the approval time and associated signal strength when available.</p>
+          <p>The Diagnostics screen shows up to 64 recent local diagnostic entries, such as connection events, device and request identifiers, signal strength, and errors. These entries are kept in app memory and are not automatically uploaded. Passwords, private keys, authentication nonces, and signature contents are not included in these diagnostic entries.</p>
+        </section>
+
+        <section aria-labelledby="keys">
+          <h2 id="keys">4. Authentication keys and passwords</h2>
+          <p>The app uses the iPhone's Secure Enclave to create and use its private signing key, with protected key material stored in the iOS Keychain. The private key is not sent to Windows or to the developer. Its Keychain item is configured for this device only and is not synchronized through iCloud Keychain.</p>
+          <p>The Windows software receives the public key and authentication signatures needed to verify requests. The iOS app does not receive or store your Windows password.</p>
+        </section>
+
+        <section aria-labelledby="control">
+          <h2 id="control">5. Your controls</h2>
+          <p>You can revoke Bluetooth permission in iOS Settings. Without it, the app cannot pair with or authenticate to your PC.</p>
+          <p>Choosing <strong>Remove Paired PC</strong> clears the pairing record and request history on this iPhone. The signing key and unlock signal-strength setting are retained. To revoke the iPhone's authorization on Windows, remove it separately in the Windows software.</p>
+          <p>Deleting the app does not necessarily remove its Keychain item. This policy does not promise that uninstalling the app deletes the signing key.</p>
+        </section>
+
+        <section aria-labelledby="external-links">
+          <h2 id="external-links">6. External links and this page</h2>
+          <p>Opening an external link, such as the project repository or GitHub Issues, takes you to a separate service that uses the internet and has its own privacy policy. The app does not automatically send its stored information or diagnostics when you open a link.</p>
+          <p>This privacy page contains no JavaScript, cookies, analytics, or externally loaded fonts or other resources. If you view it on a website, the hosting service may process ordinary web request information under its own policies.</p>
+        </section>
+
+        <section aria-labelledby="updates">
+          <h2 id="updates">7. Changes to this policy</h2>
+          <p>If the app's data practices change, we will update this policy and its effective date.</p>
+        </section>
+
+        <section aria-labelledby="contact">
+          <h2 id="contact">8. Contact</h2>
+          <p>For questions about this policy, contact the developer through <a href="https://github.com/dennis6481/unlock-windows-with-iphone/issues">the project's GitHub Issues</a>. Issues are public, so do not include passwords, private keys, or sensitive device identifiers. Any information you choose to post is handled by GitHub under its own policies.</p>
+        </section>
+      </article>
+      <footer>Unlock Windows <span aria-hidden="true">·</span> Privacy Policy</footer>
+    </main>
+  </body>
+</html>

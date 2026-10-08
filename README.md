@@ -49,6 +49,8 @@ Build both platforms from the same revision. Do not mix service, Credential Prov
 
 Windows distribution is a single `windows/dist/UnlockWithIPhone_<version>_<architecture>_setup.exe` with the desktop app, service and Credential Provider embedded. The architecture suffix is `x64` or `arm64`, derived from the compiler target. The version remains automatic from `ProductVersion.h`. Release uses a static C/C++ runtime to avoid requiring development tools or a separate VC++ Redistributable on the target PC. This packaging change is statically inspected only; Release dependencies and clean-machine installation/runtime remain unverified. Complete and uninstall older companion-file installations with their original installer before installing this package.
 
+Pushing a `v<major>.<minor>.<patch>` tag runs the [Windows Release workflow](.github/workflows/windows-release.yml) for x64 and ARM64 without a branch restriction. After both builds succeed, it automatically publishes a GitHub Release for the tag with both setup EXEs attached. The installers also remain available in that run's Actions artifacts. The installer version must match the tag. CI builds and checks the packages; it does not establish installation or physical-device acceptance.
+
 ## Repository guide
 
 | Location | Purpose |

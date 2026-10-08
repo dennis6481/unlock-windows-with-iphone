@@ -42,6 +42,8 @@ These cover initialization/readiness, RSSI/request state, per-route recovery/ret
 
 Repository automation must continue to follow [AGENTS.md](../AGENTS.md), including its separate build/test authorization rule; the commands here are developer instructions, not recorded execution results.
 
+The [Windows Release workflow](../.github/workflows/windows-release.yml) is authorized to build Release packages when a `v<major>.<minor>.<patch>` tag is pushed, without a branch restriction. It builds x64 and ARM64 separately with tests disabled, checks the installer version against the tag and verifies its PE architecture before uploading Actions artifacts. Only after both builds succeed does it automatically publish a GitHub Release containing both installers, with commit/build information and validation boundaries in the release notes. Record each architecture's actual job result; CI packaging or publication success does not replace the installation or physical-device checks below.
+
 ## First-install setup
 
 Use a clean installation with matching binaries; these are acceptance procedures, not recorded results.

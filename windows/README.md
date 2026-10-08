@@ -49,6 +49,14 @@ The build directory contains `UnlockWithIPhone.exe`, `unlock_saved_credential_se
 
 CMake statically links the MSVC runtime (`/MT` for Release, `/MTd` for Debug). Release packaging is intended to run without Visual Studio, CMake or a separately installed VC++ Redistributable. The build checks embedded component versions/architecture and generates their SHA-256 manifest before linking setup. These source changes have only been statically checked; Release import inspection and clean-machine installation/runtime acceptance are pending. Debug output is not the distribution artifact.
 
+## Tag builds
+
+Push a `v<major>.<minor>.<patch>` tag matching [ProductVersion.h](ProductVersion.h), such as `v0.1.0`, to trigger the [Windows Release workflow](../.github/workflows/windows-release.yml). There is no branch restriction; the tagged revision must contain the workflow and product sources.
+
+Separate `windows-2022` x64 and `windows-11-arm` ARM64 jobs use the existing Visual Studio helper and CMake to build the Release installer and its embedded components with `BUILD_TESTING=OFF`. Each job checks the resulting installer's version against the tag and its PE architecture against the selected target, then uploads the setup EXE as an Actions artifact named `windows-<tag>-<architecture>`.
+
+After both jobs succeed, a publishing job with `contents: write` permission downloads the installers, creates a draft GitHub Release for the existing tag, uploads both setup EXEs and automatically publishes it as a regular release. The release notes include the commit, workflow run and validation boundaries. An existing release for that tag causes creation to fail; the workflow does not overwrite published assets. This workflow does not run tests or install the product. A successful run does not establish clean-machine, BLE, native-unlock or ARM64 physical-device acceptance.
+
 ## Install and configure
 
 1. Build Windows and iOS from matching revisions. Keep a working native Windows password/PIN available.

@@ -13,8 +13,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/dennis6481/unlock-windows-with-iphone/releases/latest">
-    <img src="https://img.shields.io/github/v/release/dennis6481/unlock-windows-with-iphone?logo=github" alt="GitHub Release">
+  <a href="https://github.com/dennis6481/unlock-windows-with-iphone/releases">
+    <img src="https://img.shields.io/github/v/release/dennis6481/unlock-windows-with-iphone?include_prereleases&amp;sort=date&amp;logo=github" alt="GitHub Release (including pre-releases)">
   </a>
   <a href="https://buymeacoffee.com/dennis6481">
     <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" height="20">

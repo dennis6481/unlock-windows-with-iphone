@@ -5,6 +5,7 @@
 #include "AdvertisingLifecycle.h"
 #include "TransportReadiness.h"
 #include "../DesktopApp/DesktopApp.h"
+#include "../DesktopApp/TrayManager.h"
 #include "EnrollmentStore.h"
 #include "../Enrollment/EnrollmentSession.h"
 #include "../Enrollment/EnrollmentChannel.h"
@@ -59,7 +60,6 @@ constexpr std::uint8_t kRejectRequest = 0x03;
 constexpr std::uint8_t kEnrollmentRequest = 0x02;
 
 constexpr UINT kDispatch = WM_APP + 1;
-constexpr UINT kTray = WM_APP + 2;
 
 struct CallbackState final {
     std::mutex mutex;
@@ -808,7 +808,11 @@ private:
 
 class TrayHost final {
 public:
-    TrayHost() : state_(std::make_shared<CallbackState>()), host_(state_) {
+    TrayHost() : state_(std::make_shared<CallbackState>()), host_(state_),
+        tray_([this](unlock_windows::desktop_app::TrayCommand command) { trayCommand(command); },
+            [this] { return unlock_windows::desktop_app::TrayMenuState{
+                pairing_ || launchOutstanding_ || setupPasswordPending_}; },
+            [this](const std::wstring& message, bool error) { state_->record(message, error); }) {
         host_.enrollmentRequest = [this](const auto& bytes, const auto& session, ULONGLONG receivedAt) {
             receiveEnrollment(bytes, session, receivedAt);
         };
@@ -834,11 +838,11 @@ public:
             }
             return 0;
         }
-        loadTrayIcon(instance);
+        tray_.loadIcon(instance);
 
         WNDCLASSW windowClass{};
         windowClass.hInstance = instance;
-        windowClass.hIcon = trayIcon_;
+        windowClass.hIcon = tray_.icon();
         windowClass.lpszClassName = unlock_windows::desktop_app::kTrayWindowClass;
         windowClass.lpfnWndProc = windowProcedure;
         requireWin32(RegisterClassW(&windowClass), L"RegisterClassW");
@@ -846,9 +850,7 @@ public:
             0, 0, 0, 0, 0, nullptr, nullptr, instance, this);
         if (!window_) requireWin32(FALSE, L"CreateWindowExW");
         state_->window = window_;
-        taskbarCreated_ = RegisterWindowMessageW(L"TaskbarCreated");
-        if (!taskbarCreated_) requireWin32(FALSE, L"RegisterWindowMessageW");
-        addTray();
+        tray_.bind(window_, condition_);
         if (!SetTimer(window_, 1, 1000, nullptr)) requireWin32(FALSE, L"SetTimer");
         try {
             host_.initialize([this] { reconcile(false); });
@@ -869,12 +871,6 @@ public:
     }
 
 private:
-    void loadTrayIcon(HINSTANCE instance) {
-        trayIcon_ = static_cast<HICON>(LoadImageW(instance, MAKEINTRESOURCEW(IDI_UNLOCK_APP), IMAGE_ICON,
-            GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR));
-        requireWin32(trayIcon_ != nullptr, L"LoadImageW(tray icon)");
-    }
-
     struct Pairing final {
         unlock_windows::enrollment::Console target;
         ULONGLONG deadline = 0;
@@ -1197,43 +1193,7 @@ private:
         if (!currentError.empty() && currentError != lastError_) state_->record(currentError, false);
         if (lifecycleConfirmed) lastError_.clear();
         else if (!currentError.empty()) lastError_ = currentError;
-        updateTray();
-    }
-
-    NOTIFYICONDATAW trayData() const {
-        NOTIFYICONDATAW data{};
-        data.cbSize = sizeof(data);
-        data.hWnd = window_;
-        data.uID = 1;
-        data.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
-        data.uCallbackMessage = kTray;
-        data.hIcon = trayIcon_;
-        const auto text = !lastError_.empty() ? L"Needs attention: " + condition_ : condition_;
-        wcsncpy_s(data.szTip, text.c_str(), _TRUNCATE);
-        return data;
-    }
-
-    void addTray() {
-        auto data = trayData();
-        if (!Shell_NotifyIconW(NIM_ADD, &data)) {
-            trayAdded_ = false;
-            if (!trayUnavailable_) state_->record(L"Shell_NotifyIconW(NIM_ADD) failed; waiting for the taskbar and retrying.", true);
-            trayUnavailable_ = true;
-            return;
-        }
-        trayAdded_ = true;
-        if (trayUnavailable_) state_->record(L"Taskbar is ready; tray icon registered.", false);
-        trayUnavailable_ = false;
-    }
-
-    void updateTray() {
-        if (!trayAdded_) return;
-        auto data = trayData();
-        if (!Shell_NotifyIconW(NIM_MODIFY, &data)) {
-            trayAdded_ = false;
-            trayUnavailable_ = true;
-            state_->record(L"Shell_NotifyIconW(NIM_MODIFY) failed; tray registration will be retried.", true);
-        }
+        tray_.update(!lastError_.empty() ? L"Needs attention: " + condition_ : condition_);
     }
 
     std::wstring statusSummary() {
@@ -1399,34 +1359,24 @@ private:
         } catch (...) { setupPasswordPending_ = false; throw; }
     }
 
-    void menu() {
-        HMENU popup = CreatePopupMenu();
-        if (!popup) requireWin32(FALSE, L"CreatePopupMenu");
-        struct MenuHandle final { HMENU value; ~MenuHandle() { DestroyMenu(value); } } handle{popup};
-        requireWin32(AppendMenuW(popup, MF_STRING, 1, L"Status\u2026"), L"AppendMenuW");
-        const UINT available = pairing_ || launchOutstanding_ || setupPasswordPending_ ? MF_GRAYED : 0;
-        requireWin32(AppendMenuW(popup, MF_STRING | available, 8, L"Continue setup\u2026"), L"AppendMenuW");
-        requireWin32(AppendMenuW(popup, MF_STRING | available, 4, L"Pair iPhone\u2026"), L"AppendMenuW");
-        requireWin32(AppendMenuW(popup, MF_STRING | available, 5, L"Manage saved password\u2026"), L"AppendMenuW");
-        requireWin32(AppendMenuW(popup, MF_STRING | available, 7, L"Remove paired iPhone\u2026"), L"AppendMenuW");
-        requireWin32(AppendMenuW(popup, MF_SEPARATOR, 0, nullptr), L"AppendMenuW");
-        requireWin32(AppendMenuW(popup, MF_STRING, 3, L"Quit"), L"AppendMenuW");
-        POINT point{};
-        requireWin32(GetCursorPos(&point), L"GetCursorPos");
-        SetForegroundWindow(window_);
-        const auto command = TrackPopupMenu(popup, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
-            point.x, point.y, 0, window_, nullptr);
-        if (command == 1) showDetails();
-        if (command == 3) requireWin32(PostMessageW(window_, WM_CLOSE, 0, 0), L"PostMessageW(WM_CLOSE)");
-        if (command == 4) startPairing();
-        if (command == 5) manageSavedPassword();
-        if (command == 7) startPairing(true);
-        if (command == 8) requireWin32(PostMessageW(window_, unlock_windows::desktop_app::kSetupMessage, 0, 0), L"Continue setup");
-        requireWin32(PostMessageW(window_, WM_NULL, 0, 0), L"PostMessageW(WM_NULL)");
+    void trayCommand(unlock_windows::desktop_app::TrayCommand command) {
+        using unlock_windows::desktop_app::TrayCommand;
+        switch (command) {
+        case TrayCommand::status: showDetails(); break;
+        case TrayCommand::quit:
+            requireWin32(PostMessageW(window_, WM_CLOSE, 0, 0), L"PostMessageW(WM_CLOSE)");
+            break;
+        case TrayCommand::pairPhone: startPairing(); break;
+        case TrayCommand::managePassword: manageSavedPassword(); break;
+        case TrayCommand::removePhone: startPairing(true); break;
+        case TrayCommand::continueSetup:
+            requireWin32(PostMessageW(window_, unlock_windows::desktop_app::kSetupMessage, 0, 0), L"Continue setup");
+            break;
+        }
     }
 
     void dispatch() {
-        if (!closing_ && !trayAdded_) addTray();
+        if (!closing_) tray_.retryRegistration();
         std::deque<std::function<void()>> pending;
         { std::lock_guard lock(state_->mutex); pending.swap(state_->pending); }
         for (auto& action : pending) {
@@ -1446,14 +1396,11 @@ private:
             if (sessionRegistered_ && !WTSUnRegisterSessionNotification(window_))
                 state_->record(L"WTSUnRegisterSessionNotification Win32=" + std::to_wstring(GetLastError()), true);
             KillTimer(window_, 1);
-            if (trayAdded_) {
-                auto data = trayData();
-                if (!Shell_NotifyIconW(NIM_DELETE, &data)) state_->record(L"Shell_NotifyIconW(NIM_DELETE) failed", true);
-            }
+            tray_.stop();
             DestroyWindow(window_);
             window_ = nullptr;
         }
-        if (trayIcon_) { DestroyIcon(trayIcon_); trayIcon_ = nullptr; }
+        tray_.releaseIcon();
         if (singleton_) { CloseHandle(singleton_); singleton_ = nullptr; }
     }
 
@@ -1465,9 +1412,7 @@ private:
         }
         if (!self) return DefWindowProcW(window, message, wparam, lparam);
         try {
-            if (message == self->taskbarCreated_ && self->taskbarCreated_) {
-                self->trayAdded_ = false; self->addTray(); return 0;
-            }
+            if (const auto result = self->tray_.handleMessage(message, wparam, lparam)) return *result;
             switch (message) {
             case unlock_windows::desktop_app::kSetupMessage:
                 try { self->continueSetup(); }
@@ -1499,10 +1444,6 @@ private:
                 if (wparam) self->close();
                 else { self->endingSession_ = false; self->reconcile(false); }
                 return 0;
-            case kTray:
-                if (lparam == WM_RBUTTONUP) self->menu();
-                if (lparam == WM_LBUTTONDBLCLK) self->showDetails();
-                return 0;
             case WM_CLOSE: self->close(); return 0;
             case WM_DESTROY: PostQuitMessage(0); return 0;
             }
@@ -1518,14 +1459,11 @@ private:
 
     std::shared_ptr<CallbackState> state_;
     GattHost host_;
+    unlock_windows::desktop_app::TrayManager tray_;
     HWND window_ = nullptr;
     HANDLE singleton_ = nullptr;
-    HICON trayIcon_ = nullptr;
     DWORD session_ = 0;
-    UINT taskbarCreated_ = 0;
     bool sessionRegistered_ = false;
-    bool trayAdded_ = false;
-    bool trayUnavailable_ = false;
     bool closing_ = false;
     bool suspended_ = false;
     bool endingSession_ = false;

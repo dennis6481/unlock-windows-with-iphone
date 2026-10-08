@@ -2,7 +2,9 @@
 
 # Tray and GATT transport
 
-`GattHost` runs inside the no-argument, ordinary-user role of `UnlockWithIPhone.exe`. It owns the tray, physical-console monitoring, BLE publication and pairing transport. It does not hold a password or create trusted approval. Role dispatch and startup are documented in the [Windows guide](../README.md#desktop-app-roles); wire messages are defined in [PROTOCOL.md](../../PROTOCOL.md#ble-messages).
+`GattHost` runs inside the no-argument, ordinary-user role of `UnlockWithIPhone.exe`. It owns the host lifecycle, physical-console monitoring, BLE publication and pairing transport. It does not hold a password or create trusted approval. Role dispatch and startup are documented in the [Windows guide](../README.md#desktop-app-roles); wire messages are defined in [PROTOCOL.md](../../PROTOCOL.md#ble-messages).
+
+`DesktopApp/TrayManager` handles the Win32 tray through menu-state, command and diagnostic callbacks. The host retains its HWND and controls shutdown; Quit posts an asynchronous close after the menu is released. Unhandled messages return `std::nullopt`; handled messages return their Windows result.
 
 ## Lock-aware publication
 

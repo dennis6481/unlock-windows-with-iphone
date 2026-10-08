@@ -66,8 +66,8 @@ It does not start services/tasks, repair installations or mount offline user hiv
 
 ```text
 windows/
-├── DesktopApp/         Main EXE entry point and role dispatch.
-├── GattHost/           Tray, lock-aware advertising, BLE and pairing transport.
+├── DesktopApp/         Main EXE entry point, role dispatch and Win32 TrayManager.
+├── GattHost/           Host lifecycle, lock-aware advertising, BLE and pairing transport.
 ├── Enrollment/         Elevated enrollment and fingerprint confirmation.
 ├── SavedCredential/    Credential service, IPC, encrypted password storage and management UI.
 ├── CredentialProvider/ Windows sign-in tile and native credential submission.

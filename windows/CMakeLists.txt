@@ -142,6 +142,7 @@ endif()
 
 add_executable(unlock_desktop_app WIN32
     DesktopApp/main.cpp
+    DesktopApp/TrayManager.cpp
     GattHost/GattHost.cpp
     Enrollment/Enrollment.cpp
     SavedCredential/CredentialManagement.cpp

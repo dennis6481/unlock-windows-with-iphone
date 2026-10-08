@@ -1,0 +1,1730 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "%@" : {
+
+    },
+    "%@ (stage: %@); waiting for the PC to recover" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ (stage: %@); waiting for the PC to recover"
+          }
+        }
+      }
+    },
+    "%@ / %lld dBm" : {
+      "comment" : "Last approval history. The first placeholder is the relative approval time; the second is that request’s RSSI in dBm.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ / %2$lld dBm"
+          }
+        }
+      }
+    },
+    "%@ / N/A" : {
+      "comment" : "Last approval time followed by unavailable signal strength. The placeholder is the relative approval time."
+    },
+    "%@; pairing was not confirmed and the previous PC was kept" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@; pairing was not confirmed and the previous PC was kept"
+          }
+        }
+      }
+    },
+    "%@; the previous PC was kept" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@; the previous PC was kept"
+          }
+        }
+      }
+    },
+    "%@; waiting for PC advertising" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@; waiting for PC advertising"
+          }
+        }
+      }
+    },
+    "%lld dBm" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld dBm"
+          }
+        }
+      }
+    },
+    "A new request replaced the previous request." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A new request replaced the previous request."
+          }
+        }
+      }
+    },
+    "About" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "About"
+          }
+        }
+      }
+    },
+    "About this project" : {
+
+    },
+    "Add a Windows PC" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add a Windows PC"
+          }
+        }
+      }
+    },
+    "Approval signal threshold" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Approval signal threshold"
+          }
+        }
+      }
+    },
+    "Authenticating" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Authenticating"
+          }
+        }
+      }
+    },
+    "Authentication protocol encoding failed: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Authentication protocol encoding failed: %@"
+          }
+        }
+      }
+    },
+    "Authentication was not completed. Try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Authentication was not completed. Try again."
+          }
+        }
+      }
+    },
+    "Bluetooth Diagnostics · Latest 64 Entries" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bluetooth Diagnostics · Latest 64 Entries"
+          }
+        }
+      }
+    },
+    "Bluetooth disconnected" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bluetooth disconnected"
+          }
+        }
+      }
+    },
+    "Bluetooth disconnected. This authentication is no longer valid." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bluetooth disconnected. This authentication is no longer valid."
+          }
+        }
+      }
+    },
+    "Bluetooth is unavailable. Check Bluetooth permission and the system Bluetooth switch." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bluetooth is unavailable. Check Bluetooth permission and the system Bluetooth switch."
+          }
+        }
+      }
+    },
+    "Bluetooth is unavailable. Pairing was not completed; the previous PC was kept." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bluetooth is unavailable. Pairing was not completed; the previous PC was kept."
+          }
+        }
+      }
+    },
+    "Bluetooth is unavailable. This request is no longer valid." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bluetooth is unavailable. This request is no longer valid."
+          }
+        }
+      }
+    },
+    "Bluetooth unavailable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bluetooth unavailable"
+          }
+        }
+      }
+    },
+    "Cancel" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancel"
+          }
+        }
+      }
+    },
+    "Cancel Pairing" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancel Pairing"
+          }
+        }
+      }
+    },
+    "Checking signal" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Checking signal"
+          }
+        }
+      }
+    },
+    "Close pairing" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Close pairing"
+          }
+        }
+      }
+    },
+    "Compare this iPhone’s fingerprint with the one shown on Windows, then confirm on your PC." : {
+
+    },
+    "Computer ID" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Computer ID"
+          }
+        }
+      }
+    },
+    "Confirm on your PC" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Confirm on your PC"
+          }
+        }
+      }
+    },
+    "Connecting" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connecting"
+          }
+        }
+      }
+    },
+    "Connection and Authentication" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connection and Authentication"
+          }
+        }
+      }
+    },
+    "Connection cancelled" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connection cancelled"
+          }
+        }
+      }
+    },
+    "Connection failed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connection failed"
+          }
+        }
+      }
+    },
+    "Continue" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Continue"
+          }
+        }
+      }
+    },
+    "Copy fingerprint" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copy fingerprint"
+          }
+        }
+      }
+    },
+    "Could not create Secure Enclave access control: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Could not create Secure Enclave access control: %@"
+          }
+        }
+      }
+    },
+    "Could not decode the challenge: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Could not decode the challenge: %@"
+          }
+        }
+      }
+    },
+    "Could not deliver the iPhone rejection to Windows." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Could not deliver the iPhone rejection to Windows."
+          }
+        }
+      }
+    },
+    "Could not encode the assertion: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Could not encode the assertion: %@"
+          }
+        }
+      }
+    },
+    "Could not establish a Bluetooth connection" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Could not establish a Bluetooth connection"
+          }
+        }
+      }
+    },
+    "Could not generate the Secure Enclave key: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Could not generate the Secure Enclave key: %@"
+          }
+        }
+      }
+    },
+    "Could not read the signal for this request." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Could not read the signal for this request."
+          }
+        }
+      }
+    },
+    "Could not restore the stored Secure Enclave key: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Could not restore the stored Secure Enclave key: %@"
+          }
+        }
+      }
+    },
+    "Could not save PC information: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Could not save PC information: %@"
+          }
+        }
+      }
+    },
+    "Could not send the pairing request. The previous PC was kept." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Could not send the pairing request. The previous PC was kept."
+          }
+        }
+      }
+    },
+    "Could not send the signature. Start a new request on Windows." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Could not send the signature. Start a new request on Windows."
+          }
+        }
+      }
+    },
+    "Could not send the unlock channel readiness acknowledgment." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Could not send the unlock channel readiness acknowledgment."
+          }
+        }
+      }
+    },
+    "Could not submit pairing: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Could not submit pairing: %@"
+          }
+        }
+      }
+    },
+    "Diagnostics" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diagnostics"
+          }
+        }
+      }
+    },
+    "Done" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Done"
+          }
+        }
+      }
+    },
+    "Enjoy unlocking with iPhone!" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enjoy unlocking with iPhone!"
+          }
+        }
+      }
+    },
+    "Fingerprint copied" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fingerprint copied"
+          }
+        }
+      }
+    },
+    "Forget %@ on this iPhone? You must remove the iPhone authorization separately on Windows." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Forget %@ on this iPhone? You must remove the iPhone authorization separately on Windows."
+          }
+        }
+      }
+    },
+    "Home" : {
+
+    },
+    "Invalid public key length" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invalid public key length"
+          }
+        }
+      }
+    },
+    "Invalid signal reading for this request." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invalid signal reading for this request."
+          }
+        }
+      }
+    },
+    "Invalid Windows challenge format." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invalid Windows challenge format."
+          }
+        }
+      }
+    },
+    "Invalid Windows request format." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invalid Windows request format."
+          }
+        }
+      }
+    },
+    "iPhone key unavailable: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iPhone key unavailable: %@"
+          }
+        }
+      }
+    },
+    "iPhone public key fingerprint" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iPhone public key fingerprint"
+          }
+        }
+      }
+    },
+    "iPhone SHA-256 fingerprint" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iPhone SHA-256 fingerprint"
+          }
+        }
+      }
+    },
+    "Keychain operation “%@” failed, OSStatus=%d." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keychain operation “%@” failed, OSStatus=%d."
+          }
+        }
+      }
+    },
+    "Last approval" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last approval"
+          }
+        }
+      }
+    },
+    "More" : {
+
+    },
+    "Move closer to your PC and try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Move closer to your PC and try again."
+          }
+        }
+      }
+    },
+    "N/A" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "N/A"
+          }
+        }
+      }
+    },
+    "No diagnostic entries" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No diagnostic entries"
+          }
+        }
+      }
+    },
+    "No Paired PC" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Paired PC"
+          }
+        }
+      }
+    },
+    "No signal reading was received for this request." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No signal reading was received for this request."
+          }
+        }
+      }
+    },
+    "Not pairing" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not pairing"
+          }
+        }
+      }
+    },
+    "OK" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OK"
+          }
+        }
+      }
+    },
+    "On your unlocked Windows desktop, right-click the Unlock with iPhone tray icon and select Pair iPhone. Continue here, then verify the fingerprint on your PC." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On your unlocked Windows desktop, right-click the Unlock with iPhone tray icon and select Pair iPhone. Continue here, then verify the fingerprint on your PC."
+          }
+        }
+      }
+    },
+    "Pair your PC" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pair your PC"
+          }
+        }
+      }
+    },
+    "Paired Windows PC" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paired Windows PC"
+          }
+        }
+      }
+    },
+    "Pairing" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pairing"
+          }
+        }
+      }
+    },
+    "Pairing Cancelled" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pairing Cancelled"
+          }
+        }
+      }
+    },
+    "Pairing cancelled. The previous PC was kept." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pairing cancelled. The previous PC was kept."
+          }
+        }
+      }
+    },
+    "Pairing could not be completed. Check your PC and try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pairing could not be completed. Check your PC and try again."
+          }
+        }
+      }
+    },
+    "Pairing Failed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pairing Failed"
+          }
+        }
+      }
+    },
+    "Pairing started. The current authentication was cancelled." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pairing started. The current authentication was cancelled."
+          }
+        }
+      }
+    },
+    "Pairing was cancelled on this iPhone." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pairing was cancelled on this iPhone."
+          }
+        }
+      }
+    },
+    "PC information was not saved. The previous PC was kept." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PC information was not saved. The previous PC was kept."
+          }
+        }
+      }
+    },
+    "PC paired" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PC paired"
+          }
+        }
+      }
+    },
+    "Preparing connection" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Preparing connection"
+          }
+        }
+      }
+    },
+    "Previous Bluetooth writes are unconfirmed. The connection needs recovery." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Previous Bluetooth writes are unconfirmed. The connection needs recovery."
+          }
+        }
+      }
+    },
+    "Privacy Policy" : {
+
+    },
+    "Read key data type" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Read key data type"
+          }
+        }
+      }
+    },
+    "Read signing key" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Read signing key"
+          }
+        }
+      }
+    },
+    "Ready" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ready"
+          }
+        }
+      }
+    },
+    "Reconnecting" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reconnecting"
+          }
+        }
+      }
+    },
+    "Remove %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove %@"
+          }
+        }
+      }
+    },
+    "Remove Paired PC" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove Paired PC"
+          }
+        }
+      }
+    },
+    "Remove Paired PC confirmation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove Paired PC?"
+          }
+        }
+      }
+    },
+    "Request approved" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Request approved"
+          }
+        }
+      }
+    },
+    "Request history could not be saved: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Request history could not be saved: %@"
+          }
+        }
+      }
+    },
+    "Retry Connection" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retry Connection"
+          }
+        }
+      }
+    },
+    "Retry Pairing" : {
+      "comment" : "Secondary action on the cancellation page that starts a new pairing attempt.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retry Pairing"
+          }
+        }
+      }
+    },
+    "Save signing key" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Save signing key"
+          }
+        }
+      }
+    },
+    "Saved PC information could not be read. Add your PC again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved PC information could not be read. Add your PC again."
+          }
+        }
+      }
+    },
+    "Saved request history could not be read: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved request history could not be read: %@"
+          }
+        }
+      }
+    },
+    "Searching for PC" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Searching for PC"
+          }
+        }
+      }
+    },
+    "Searching for Windows pairing" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Searching for Windows pairing"
+          }
+        }
+      }
+    },
+    "Secure Enclave is unavailable. Use a physical iPhone; software keys are not supported." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Secure Enclave is unavailable. Use a physical iPhone; software keys are not supported."
+          }
+        }
+      }
+    },
+    "Secure Enclave signing failed: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Secure Enclave signing failed: %@"
+          }
+        }
+      }
+    },
+    "Service initialization exceeded 10 seconds after connecting." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Service initialization exceeded 10 seconds after connecting."
+          }
+        }
+      }
+    },
+    "Service recovery exceeded 10 seconds." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Service recovery exceeded 10 seconds."
+          }
+        }
+      }
+    },
+    "Settings" : {
+
+    },
+    "Signal reading and signing exceeded 3 seconds." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Signal reading and signing exceeded 3 seconds."
+          }
+        }
+      }
+    },
+    "Signal strength is unavailable. Try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Signal strength is unavailable. Try again."
+          }
+        }
+      }
+    },
+    "Signing failed: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Signing failed: %@"
+          }
+        }
+      }
+    },
+    "Start by adding a PC" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start by adding a PC"
+          }
+        }
+      }
+    },
+    "Status" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Status"
+          }
+        }
+      }
+    },
+    "The audience length must fit UInt16." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The audience length must fit UInt16."
+          }
+        }
+      }
+    },
+    "The connection ended. This authentication is no longer valid." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The connection ended. This authentication is no longer valid."
+          }
+        }
+      }
+    },
+    "The current connection is closing. Please wait." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The current connection is closing. Please wait."
+          }
+        }
+      }
+    },
+    "The current connection is closing. Wait before pairing." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The current connection is closing. Wait before pairing."
+          }
+        }
+      }
+    },
+    "The nonce must contain 32 bytes." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The nonce must contain 32 bytes."
+          }
+        }
+      }
+    },
+    "The pairing connection was interrupted. The previous PC was kept." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The pairing connection was interrupted. The previous PC was kept."
+          }
+        }
+      }
+    },
+    "The pairing service was not found. Open Pair iPhone on Windows; the previous PC was kept." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The pairing service was not found. Open Pair iPhone on Windows; the previous PC was kept."
+          }
+        }
+      }
+    },
+    "The PC is not paired or pairing is in progress." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The PC is not paired or pairing is in progress."
+          }
+        }
+      }
+    },
+    "The service changed during pairing. The result is unconfirmed; the previous PC was kept." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The service changed during pairing. The result is unconfirmed; the previous PC was kept."
+          }
+        }
+      }
+    },
+    "The service changed. Authentication was cancelled; start a new request on Windows." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The service changed. Authentication was cancelled; start a new request on Windows."
+          }
+        }
+      }
+    },
+    "The signal reading timed out. The connection needs recovery." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The signal reading timed out. The connection needs recovery."
+          }
+        }
+      }
+    },
+    "The system did not provide an error description." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The system did not provide an error description."
+          }
+        }
+      }
+    },
+    "The unlock service is unavailable. This authentication is no longer valid." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The unlock service is unavailable. This authentication is no longer valid."
+          }
+        }
+      }
+    },
+    "The Windows authentication result has no request ID. Start a new request." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The Windows authentication result has no request ID. Start a new request."
+          }
+        }
+      }
+    },
+    "The Windows authentication service is unavailable." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The Windows authentication service is unavailable."
+          }
+        }
+      }
+    },
+    "The Windows pairing window expired." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The Windows pairing window expired."
+          }
+        }
+      }
+    },
+    "The Windows session changed. Start a new request." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The Windows session changed. Start a new request."
+          }
+        }
+      }
+    },
+    "The Windows unlock service is missing required characteristics." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The Windows unlock service is missing required characteristics."
+          }
+        }
+      }
+    },
+    "There is a connection problem with your PC. Try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "There is a connection problem with your PC. Try again."
+          }
+        }
+      }
+    },
+    "This connection is not eligible to approve requests." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This connection is not eligible to approve requests."
+          }
+        }
+      }
+    },
+    "This is not the paired PC. No signature was sent." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This is not the paired PC. No signature was sent."
+          }
+        }
+      }
+    },
+    "This request expired before signing completed." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This request expired before signing completed."
+          }
+        }
+      }
+    },
+    "This signal reading expired." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This signal reading expired."
+          }
+        }
+      }
+    },
+    "Try Again" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Try Again"
+          }
+        }
+      }
+    },
+    "Unlock Distance" : {
+
+    },
+    "Unlock with iPhone®" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unlock with iPhone®"
+          }
+        }
+      }
+    },
+    "Unsupported protocol version: %lld" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unsupported protocol version: %lld"
+          }
+        }
+      }
+    },
+    "Verifying PC" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verifying PC"
+          }
+        }
+      }
+    },
+    "Version %@ (Build %@)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Version %1$@ (Build %2$@)"
+          }
+        }
+      }
+    },
+    "Waiting for confirmation on Windows" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Waiting for confirmation on Windows"
+          }
+        }
+      }
+    },
+    "Waiting for request" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Waiting for request"
+          }
+        }
+      }
+    },
+    "Waiting for Windows" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Waiting for Windows"
+          }
+        }
+      }
+    },
+    "Windows authentication timed out. Press Enter again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Windows authentication timed out. Press Enter again."
+          }
+        }
+      }
+    },
+    "Windows Computer ID is missing or invalid." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Windows Computer ID is missing or invalid."
+          }
+        }
+      }
+    },
+    "Windows does not provide a stable Computer ID. Update the Windows components." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Windows does not provide a stable Computer ID. Update the Windows components."
+          }
+        }
+      }
+    },
+    "Windows is not ready to unlock." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Windows is not ready to unlock."
+          }
+        }
+      }
+    },
+    "Windows is processing another pairing request." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Windows is processing another pairing request."
+          }
+        }
+      }
+    },
+    "Windows notification contains no data." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Windows notification contains no data."
+          }
+        }
+      }
+    },
+    "Windows notification subscriptions are no longer valid." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Windows notification subscriptions are no longer valid."
+          }
+        }
+      }
+    },
+    "Windows pairing failed." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Windows pairing failed."
+          }
+        }
+      }
+    },
+    "Windows PC" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Windows PC"
+          }
+        }
+      }
+    },
+    "Windows rejected authentication: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Windows rejected authentication: %@"
+          }
+        }
+      }
+    },
+    "Windows rejected pairing. Open Pair iPhone from the Windows tray." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Windows rejected pairing. Open Pair iPhone from the Windows tray."
+          }
+        }
+      }
+    },
+    "Windows removed the authorization. Forget this PC and pair again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Windows removed the authorization. Forget this PC and pair again."
+          }
+        }
+      }
+    },
+    "Windows reported that automatic authentication is unavailable." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Windows reported that automatic authentication is unavailable."
+          }
+        }
+      }
+    },
+    "Windows returned an invalid result format." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Windows returned an invalid result format."
+          }
+        }
+      }
+    },
+    "Windows returned an unknown pairing result. The previous PC was not changed." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Windows returned an unknown pairing result. The previous PC was not changed."
+          }
+        }
+      }
+    },
+    "Windows saved the pairing change, but the service could not reload. Check Windows and try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Windows saved the pairing change, but the service could not reload. Check Windows and try again."
+          }
+        }
+      }
+    },
+    "You’re all set!" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "You’re all set!"
+          }
+        }
+      }
+    },
+    "Your iPhone uses signal strength to estimate its distance from your PC." : {
+
+    },
+    "Your paired PC has been removed from this iPhone." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your paired PC has been removed from this iPhone."
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

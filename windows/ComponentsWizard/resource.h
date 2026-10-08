@@ -1,0 +1,13 @@
+// Created by Rui MA on 28 Sep 2026
+
+#pragma once
+
+#define IDD_WIZARD_PAGE 101
+#define IDC_MAIN_INSTRUCTION 1001
+#define IDC_DETAILS 1002
+#define IDC_PROGRESS 1003
+#define IDC_BACK 1004
+#define IDC_ACTION 1005
+#define IDC_CANCEL_ACTION 1006
+#define IDC_PAGE_DESCRIPTION 1007
+#define IDC_STATUS_ICON 1009

@@ -375,7 +375,8 @@ try{
             $key.GetValue($sidKey)-ne $userSid -or $key.GetValue($phaseKey)-ne $fp -or
             $key.GetValue($pvKey)-ne $version -or($key.GetValue($opKey)-eq $uo)-ne $uninstall){throw 'Sealed transaction mismatch.'}
         foreach($name in $key.GetValueNames()){$saved[$name]=@($key.GetValue($name),$key.GetValueKind($name))}
-}finally{$key.Dispose()}
+}finally{$key.Dispose()})ps"
+        LR"ps(
     $prior=Read-Result
     if($prior){$log=$prior[$logKey]}
     $scheduler=New-Object -ComObject 'Schedule.Service';$scheduler.Connect();$folder=$scheduler.GetFolder('\')

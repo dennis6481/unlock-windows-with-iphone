@@ -10,6 +10,7 @@
 		B558C3403077DDE8003957DE /* AppTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B558C33F3077DDE8003957DE /* AppTabView.swift */; };
 		B558C3423077DDE8003957DE /* UnpairedHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B558C3413077DDE8003957DE /* UnpairedHomeView.swift */; };
 		B558C3443077DE14003957DE /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B558C3433077DE14003957DE /* SettingsView.swift */; };
+		B558C3463077E1B7003957DE /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = B558C3453077E1B7003957DE /* PrivacyInfo.xcprivacy */; };
 		B57E0D983067DAE300E8280A /* MyApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B57E0D963067DAE300E8280A /* MyApp.swift */; };
 		B57E0D993067DAE300E8280A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B57E0D943067DAE300E8280A /* Assets.xcassets */; };
 		D10000010000000000000001 /* UnlockError.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000020000000000000001 /* UnlockError.swift */; };
@@ -41,6 +42,7 @@
 		B558C33F3077DDE8003957DE /* AppTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTabView.swift; sourceTree = "<group>"; };
 		B558C3413077DDE8003957DE /* UnpairedHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnpairedHomeView.swift; sourceTree = "<group>"; };
 		B558C3433077DE14003957DE /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		B558C3453077E1B7003957DE /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		B57E0D943067DAE300E8280A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B57E0D963067DAE300E8280A /* MyApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyApp.swift; sourceTree = "<group>"; };
 		D10000020000000000000001 /* UnlockError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnlockError.swift; sourceTree = "<group>"; };
@@ -100,6 +102,7 @@
 			children = (
 				D10000030000000000000001 /* Info.plist */,
 				D10000050000000000000004 /* InfoPlist.xcstrings */,
+				B558C3453077E1B7003957DE /* PrivacyInfo.xcprivacy */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -218,6 +221,7 @@
 			files = (
 				D10000050000000000000001 /* Localizable.xcstrings in Resources */,
 				D10000050000000000000003 /* InfoPlist.xcstrings in Resources */,
+				B558C3463077E1B7003957DE /* PrivacyInfo.xcprivacy in Resources */,
 				B57E0D993067DAE300E8280A /* Assets.xcassets in Resources */,
 			);
 		};

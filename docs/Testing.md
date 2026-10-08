@@ -2,7 +2,7 @@
 
 # Testing and diagnostics
 
-This guide describes reusable checks, not a personal test diary or a record that every scenario has passed. The author reports a relatively stable primary unlock workflow on their setup with one Windows user and a password-backed Microsoft Account (MSA). This report does not establish acceptance of the latest self-contained packaging changes. Broader compatibility, negative paths, oldest-Windows and ARM64 hardware remain to be established. See the [supported account scope](../README.md#requirements) and record results for the exact revision and matching binaries under test.
+This guide defines acceptance checks, not recorded results. Packaging, broader compatibility, failure scenarios, oldest-Windows and ARM64 hardware validation remain pending. Follow the [system requirements](../README.md#system-requirements) and record results for the exact revision under test.
 
 ## Environment and evidence
 
@@ -34,36 +34,35 @@ This builds first and runs CTest. To run previously built Release tests without 
 ctest --test-dir '.\windows\build' -C Release --output-on-failure
 ```
 
-Adjust the test directory if using a separate architecture/configuration directory. Tests cover protocol/crypto, approval policy, enrollment storage, saved-credential IPC, CP policy and installer decisions. Test execution is different from verifying a native Windows installation or real BLE callbacks.
+Adjust the test directory as needed. Windows tests cover protocol/crypto, approval policy, enrollment storage, saved-credential IPC, CP policy and installer decisions.
 
 For the iOS policy tests, open `ios/ios.xcodeproj`, select the `ios` scheme and choose **Product → Test** (`⌘U`).
 
-These cover initialization/readiness, RSSI/request state, per-route recovery/retry and generation/cancellation decisions. They do not emulate CoreBluetooth, the Secure Enclave or overnight OS scheduling.
+These cover readiness, RSSI/request state, recovery and cancellation. Policy tests do not replace native installation, BLE, Secure Enclave or background device testing.
 
-Repository automation must continue to follow [AGENTS.md](../AGENTS.md), including its separate build/test authorization rule; the commands here are developer instructions, not recorded execution results.
+Build/test authorization follows [AGENTS.md](../AGENTS.md).
 
-The [Windows Release workflow](../.github/workflows/windows-release.yml) is authorized to build Release packages when a `v<major>.<minor>.<patch>` tag is pushed, without a branch restriction. It builds x64 and ARM64 separately with tests disabled, checks the installer version against the tag and verifies its PE architecture before uploading Actions artifacts. Only after both builds succeed does it automatically publish a GitHub Release containing both installers, with commit/build information and validation boundaries in the release notes. Record each architecture's actual job result; CI packaging or publication success does not replace the installation or physical-device checks below.
+The [Release workflow](../.github/workflows/release.yml) builds and checks packages only; it does not run tests, sign the IPA or verify device operation.
 
 ## First-install setup
 
-Use a clean installation with matching binaries; these are acceptance procedures, not recorded results.
+Alongside the end-to-end check below, verify these setup cases:
 
-1. Install, restart and complete exactly one native Windows sign-in. The phone tile must remain absent before that sign-in. Do not lock/unlock merely to obtain identity.
-2. After verified installation completion, select **Start setup**. Confirm the displayed target account, save the actual account password and verify that the existing pairing window opens only after the service confirms storage.
-3. Cancel UAC, close password management, reject saving and exercise a save error separately: none may launch pairing. Choose **Later** on the result page and resume with tray **Continue setup…**; the installation notification must not recur after acknowledgment.
-4. Repeat Continue setup while a step is active: only one sequence may run. Existing credentials matching SID, QualifiedUserName and ProviderID skip saving; a mismatched saved identity requires updating the copy. Matching phone registration skips pairing only after a confirmed service reload; reload failure must remain retryable without advancing. Failed or cancelled pairing must remain resumable.
-5. Wait beyond five minutes and Refresh the verified account without another sign-in. Inspect identity diagnostics on rejection. Verify service startup delay is handled by candidate transport retry; a service restart after LogonUI has gone must report missing identity rather than inventing it.
-6. Switch accounts, log off, disconnect the physical console and use a different administrator for UAC. Stale candidates/nonces must not authorize a different user; elevation must not change the installed target. Resume only from the target's unlocked ordinary-user tray.
-7. Finish pairing, lock Windows and exercise native password acceptance. A saved copy or phone approval is not proof of unlock. Check update/reinstall retain data and show their ordinary completion result; failures and uninstall must not start configuration.
+- Pairing opens only after the service confirms password storage. UAC cancellation, closing password management, rejected saving and save errors must not launch pairing.
+- **Later** allows resuming through tray **Continue setup…**, without repeating the acknowledged installation notification. Repeated Continue setup starts only one sequence; failed/cancelled pairing remains resumable.
+- Matching SID, QualifiedUserName and ProviderID skip password saving. Mismatched identity requires updating the copy. Existing pairing is skipped only after confirmed service reload; reload failure must allow retry without advancing.
+- After five minutes, Refresh renews the verified identity without another sign-in. Startup delay permits transport retry; a service restart after LogonUI exits reports missing identity rather than inventing it.
+- Account changes, sign-out, console disconnection and another administrator's UAC must not let stale candidates/nonces authorize another user or change the installation target. Resume only from the target's unlocked tray.
+- Update/reinstall retain data and show their normal completion result. Failures and uninstall must not start configuration.
 
 ## Minimum end-to-end check
 
 1. Build both platforms from the same revision, install all four matching Windows components and complete any restart. Sign in with native Windows credentials.
-2. Confirm ordinary-user tray startup, LocalSystem service and the single product entry. Choose Start setup after the first native sign-in and configure the saved password without an additional lock/sign-in cycle.
+2. Confirm ordinary-user tray startup, LocalSystem service and the single product entry. Choose **Start setup**, confirm the target account and save its password without an additional lock/sign-in cycle.
 3. Pair the phone; check the target console account and full fingerprint. Confirm ComputerId and the completed enrollment result in the iOS app.
 4. Lock Windows, press Enter / Unlock once, and confirm the actual desktop returns to the same account/session. Phone `unlock_approved` alone is insufficient.
 5. Lock again without a new request/approval: remain locked. Start a fresh request and confirm another successful unlock. Check rapid repeated locking has no fixed approval cooldown and no old-grant reuse.
-6. Restart Windows: initial sign-in must use the original password/PIN provider. After sign-in, verify tray startup and phone unlock of the next locked session.
+6. Restart Windows: the phone tile must be absent before the first native password/PIN sign-in. After sign-in, verify tray startup and phone unlock of the next locked session.
 7. Uninstall through Settings, honor the restart/result handoff, then inspect complete removal as described below. Delete the iPhone's computer record separately.
 
 ## Authentication and security boundaries
@@ -107,9 +106,9 @@ Force-quit recovery is not promised. Collect both platforms' timelines to separa
 
 ## Installer and removal
 
-Self-contained packaging acceptance is pending. After explicit build authorization, build Release for the current target architecture and inspect normal and delay-load imports of setup and all three embedded components. There must be no Debug CRT, dynamic VC++ runtime or unprovided non-system dependencies. Copy only the setup EXE from `windows/dist/` to a clean machine of the same architecture without Visual Studio, CMake or VC++ Redistributable; verify installation, native sign-in after restart, service/tray startup and physical-device unlock. Older companion-file installations must first complete their transactions and be uninstalled with their original installer.
+Inspect normal and delay-load imports of Release setup and all three embedded components: no Debug CRT, dynamic VC++ runtime or unprovided non-system dependencies. Copy only the setup EXE to a clean machine of the same architecture without development tools or VC++ Redistributable, then run the end-to-end check. See the [installer guide](../windows/ComponentsWizard/README.md) for installation compatibility.
 
-Check that rebuilding a changed component refreshes setup's embedded resource/manifest. Test missing/corrupt resources, mixed versions and wrong architecture before deployment; interrupt protected extraction and confirm preparation resumes with the same transaction and only marks `payloadReady` after every component is verified. Package resource hashes check integrity, not publisher identity. These checks do not authorize running builds or installers by themselves.
+Check that component changes refresh setup's embedded resources/manifest. Reject missing/corrupt resources, mixed versions and wrong architecture before deployment. Interrupted extraction must resume the same transaction and set `payloadReady` only after every component is verified. Resource hashes verify integrity, not publisher identity.
 
 Test a clean install, same-version Reinstall, higher-version Update, downgrade rejection, restart continuation and explicit Uninstall. Confirm all four files match native architecture/version and the documented paths, and there is only one Settings entry. Cancellation before execution must preserve installation and records.
 
@@ -121,21 +120,9 @@ After completed install/update and Finish, verify staging and one-time result ta
 
 After completed uninstall verify the service, CP/main/setup files, password and registration data, target user's ComputerId/Run entry, transaction staging/tasks/records and Settings entry are absent. Unknown files must block a full-removal success claim. No mounted offline hive or surviving product task should be overlooked. Removal does not erase iPhone data, backups or SSD history.
 
-## UI and accessibility
-
-On iOS, verify exactly five native slider ticks and the separate numeric row below them at −100, −80, −60, −40 and −20 dBm, with dBm shown on every label. Check that all five values remain visible in light/dark appearance and large text. Drag freely between ticks and select integers such as −73 and −57 dBm, then verify they remain selected after restarting the app. Values must not be restricted to the five ticks. The selected value and VoiceOver value must not show decimals. After approval, verify the icon and Request approved text remain synchronized for five seconds through ordinary disconnect/reconnect and waiting-state updates, then return to the current state. New authentication, failure and leaving the home page must interrupt the presentation; returning must not replay it.
-
-Check that Last approval displays the approval time and that request’s signal strength in dBm separated by **/**, with no separate Signal strength row. Failure or no result must show **N/A**, and a pending request must preserve the previous completed result.
-
-On iOS, push from the pairing introduction to verification, then return using both the system Back button and the interactive back gesture. Repeat the sequence without scrolling: the introduction’s close button must be visible immediately and dismiss the sheet. Cancelling an interactive back gesture must leave verification active with its system Back button.
-
-On the cancellation page, verify there is no Back button, Done is the prominent primary action and Retry Pairing is a secondary action below it. Done must dismiss the sheet; Retry Pairing must start a new pairing attempt and show verification using the existing navigation stack.
-
-Check Windows at 100/150/200/250% DPI and across monitors, including long account names/full fingerprints, keyboard/default focus and long logs. Check native slider ticks, numeric labels with dBm units and continuous adjustment, the pairing sheet/push/back flow and Cancel Pairing → cancellation page → Done dismissal, the published Privacy Policy link and bundle-derived version/build in the transparent About footer. Check iOS light/dark appearance, large text, VoiceOver, Reduce Motion, long computer names, pairing success/failure/cancellation/retry and synchronized five-second icon/status presentation. Check removal clears only the phone target/history, retains its key/threshold and ignores late results. Check request-associated history survives restart, displays N/A after failure and is not replayed as a new approval. Error messages must distinguish current state from historical diagnostics and approval from completed unlock.
-
 ## Diagnostics
 
-Start with Windows tray **Status… → Technical details** and iOS About → Diagnostics. Run the read-only inspector from the repository root:
+Start with Windows tray **Status… → Technical details** and iOS Settings → Diagnostics. Run the read-only inspector from the repository root:
 
 ```powershell
 & '.\windows\Diagnostics\Get-ComponentsStatus.ps1'

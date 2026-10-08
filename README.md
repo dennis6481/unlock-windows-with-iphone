@@ -2,7 +2,7 @@
 > [!WARNING]
 > **Developer technical preview**
 >
-> - **iPhone installation requires a Mac and Xcode.** The iOS app is not yet available on the App Store or TestFlight. You must build and sign it yourself to install it on your iPhone. See the [iOS development guide](ios/README.md).
+> - **The iOS app requires your own signing.** It is not yet available on the App Store or TestFlight. Download the unsigned IPA from [Releases](https://github.com/dennis6481/unlock-windows-with-iphone/releases) and sign it yourself, or build and sign it using a Mac and Xcode. See the [iOS development guide](ios/README.md).
 > - **Currently supports only Windows users who sign in with a Microsoft account (MSA).** The account must have a password. Local Windows accounts are not supported. See Microsoft's guide to [switching from a local account to a Microsoft account](https://support.microsoft.com/en-us/accounts-billing/manage/change-from-a-local-account-to-a-microsoft-account-in-windows).
 
 
@@ -22,6 +22,8 @@ Unlock Windows session using your iPhone in proximity.
 
 The *Unlock with iPhone* requires Windows 10 version **1703, build 15063**, or later, including Windows 11. Both x64 and ARM64 architecture are supported (althought the app has not yet been tested on a physical ARM64 machine).
 
+Your PC must have Bluetooth enabled, with an adapter and driver that support **Bluetooth Low Energy (BLE) peripheral advertising**.
+
 The *Unlock PC* iOS app requires iOS 26 or later, and currently only supports iPhone and iPhone Duo. 
 
 
@@ -37,8 +39,8 @@ After restarting your PC or signing out, sign in once with your usual Windows pa
 
 ### Installation
 
-1. ~~Search and install *Unlock PC* on App Store.~~ The *Unlock PC* app is not yet avaliable on App Store, you will need to build and run the app from `ios/` with Xcode.
-2. Get the latest Unlock with iPhone [Windows installer](https://github.com/dennis6481/unlock-windows-with-iphone/releases) at GitHub release and follow the steps in installer. Once restarted, a message box should appear. Choose **Start setup** to continue.
+1. Download the unsigned *Unlock PC* IPA from [Releases](https://github.com/dennis6481/unlock-windows-with-iphone/releases) and sign it before installing, or build and run the app from `ios/` with Xcode. Choose the Windows installer from the same release so both apps use the same revision.
+2. Get the latest Unlock with iPhone [Windows installer](https://github.com/dennis6481/unlock-windows-with-iphone/releases) at GitHub release and follow the steps in installer. After restarting, sign in once with your usual Windows password or PIN. iPhone unlock is available only for subsequent unlocks of that session. When the installation result page appears, choose **Start setup** to continue.
 
 3. You will need to enter your **Microsoft account** password. This password will be ecrypted and store on your PC. (For the moment you have to be logged in with your Microsoft account to use the app. Local account support will be added later).
 
@@ -62,7 +64,7 @@ The PC entry in the iPhone app is kept. You can remove it separately from *Unloc
 ├── windows/       Desktop app, credential service, Credential Provider, installer, shared code and C++ tests.
 ├── docs/
 │   └── Testing.md Reproducible checks and release evidence requirements.
-├── Protocol.md    Cross-platform protocol and overall architecture.
+├── PROTOCOL.md    Cross-platform protocol and overall architecture.
 └── SECURITY.md    Credential protection, security assumptions and limitations.
 ```
 
@@ -81,7 +83,7 @@ Windows distribution is a single `windows/dist/UnlockWithIPhone_<version>_<archi
 
 ## Known limitations
 
-- **Distribution:** There is not yet an iOS distribution channel; device installation and signing are the developer's responsibility. Production signing and distribution are not guaranteed.
+- **Distribution:** There is no App Store or TestFlight distribution. Release builds provide an unsigned IPA that requires your own signing before installation.
 - **Windows sessions and accounts:** Currently, only Microsoft Account (MSA) accounts are supported; local Windows accounts are not supported. Account changes or an outdated saved password can cause native authentication to fail.
 - **Multi-users:** The Windows app does not currently support multi-users. I can only be configured for one MSA user on the PC.
 

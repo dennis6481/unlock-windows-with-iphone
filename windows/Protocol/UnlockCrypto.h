@@ -41,7 +41,7 @@ struct VerificationResult {
 
 // Verifies an iOS CryptoKit P-256 signature.
 //
-// message is the fixed binary signing payload defined in Protocol.md.
+// message is the fixed binary signing payload defined in PROTOCOL.md.
 // The function hashes message with SHA-256 before calling BCryptVerifySignature,
 // because the Windows CNG ECDSA verifier consumes the pre-hash.
 //

@@ -12,7 +12,7 @@ This protection does not resist an administrator who obtains SYSTEM or a comprom
 
 ## Authentication and IPC
 
-`unlockEligibility` checks an existing physical-console token, SID, session and explicit locked state. An eligible LogonUI caller can create a request only when its captured identity, saved identity and registration agree. The service owns all request/grant deadlines; the [protocol](../../Protocol.md#request-and-one-time-approval) specifies their lifetimes.
+`unlockEligibility` checks an existing physical-console token, SID, session and explicit locked state. An eligible LogonUI caller can create a request only when its captured identity, saved identity and registration agree. The service owns all request/grant deadlines; the [protocol](../../PROTOCOL.md#request-and-one-time-approval) specifies their lifetimes.
 
 The phone pipe allows only status peek, one-time challenge delivery, phone failure reports and assertion submission. It cannot begin a request or access a password. Peeking neither returns nor consumes the challenge. Late failures cannot overwrite a later request.
 

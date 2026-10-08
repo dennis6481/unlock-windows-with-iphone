@@ -2,59 +2,64 @@
 
 # Protocol and architecture
 
-This document defines the current iPhone–Windows protocol, signing version **v1**, and the overall trust boundaries. Implementations are [iOS UnlockProtocol.swift](ios/Core/UnlockProtocol.swift) and the [Windows Protocol module](windows/Protocol). JSON is the transport envelope, not the signature input.
+This document defines the current iPhone–Windows protocol, signing version **v1**, and the overall trust boundaries. Implementations are [iOS UnlockProtocol.swift](ios/Core/UnlockProtocol.swift) and the [Windows Protocol module](windows/Protocol). 
 
 The scope is an existing locked physical-console session. Initial sign-in after boot or sign-out uses native Windows credentials. This specification describes behavior and contracts; [device testing](docs/Testing.md) is required to establish runtime results.
 
 ## Architecture
 
+### Pairing and password setup
+
 ```mermaid
 flowchart TB
-    subgraph Provisioning["Provisioning on the unlocked desktop"]
-        Pair["Elevated pairing: console account + full fingerprint"]
-        Registration["Protected registration: phone public key + SID"]
-        Manager["Elevated saved-password management"]
-        Vault["Encrypted password: LocalSystem user-scope DPAPI"]
-        Pair --> Registration
-        Manager --> Vault
-    end
-    subgraph Phone["iPhone: CoreBluetooth central"]
-        Ready["Verify ComputerId + both notification subscriptions"]
-        Sign["Fresh RSSI + Secure Enclave signature"]
-        Ready --> Sign
-    end
-    subgraph Desktop["Windows: ordinary console user"]
-        Tray["Tray GATT transport: no password or approval authority"]
-    end
-    subgraph Authority["Windows: LocalSystem credential service"]
-        Request["Check identity/session; create 30-second request"]
-        Verify["Match current challenge + registration; verify signature"]
-        Grant["One-time grant: identity + session + lock generation; 120 seconds"]
-        Claim["Eligible LogonUI claim: consume first, then decrypt"]
-        Request --> Verify --> Grant --> Claim
-    end
-    subgraph Logon["Windows: LogonUI"]
-        Tile["Phone tile: Enter / Unlock"]
-        Offer["One auto-submit offer; CredentialsChanged"]
-        Pack["CP captures identity and packs credentials"]
-        Native["Native Negotiate checks the password"]
-        Session["Windows restores the existing session"]
-        Pack --> Native --> Session
-    end
-    Tile -->|"Restricted IPC: beginPhoneAuthentication"| Request
-    Request -->|"Phone IPC: peek; take challenge only after readiness"| Tray
-    Tray <-->|"ComputerId + subscriptions + readiness probe/receipt"| Ready
-    Tray -->|"Challenge notification"| Sign
-    Sign -->|"Assertion write"| Tray
-    Tray -->|"Unmodified assertion over restricted IPC"| Verify
-    Registration --> Verify
-    Vault -->|"Saved identity must match"| Request
-    Grant -->|"No password in offer"| Offer
-    Offer -->|"CP verifies current capture and claims"| Claim
-    Vault --> Claim
-    Claim -->|"Password goes only to eligible CP"| Pack
-    Verify -.->|"Approval result, not proof of unlock"| Tray
-    Tray -.->|"Result notification"| Sign
+    Pair["Elevated pairing<br/>Unlocked console + full fingerprint"]
+    Registration["Protected registration<br/>Phone public key + account SID"]
+    Manager["Elevated password<br/>setup"]
+    Vault["Encrypted password<br/>LocalSystem user-scope DPAPI"]
+    Pair --> Registration
+    Manager --> Vault
+```
+
+### Phone communication
+
+```mermaid
+sequenceDiagram
+    participant Phone as iPhone
+    participant Tray as Windows app (user session)
+    participant Service as LocalSystem service
+    Tray->>Phone: ComputerId + challenge/result subscriptions
+    Tray->>Phone: Readiness probe
+    Phone->>Tray: Readiness receipt
+    Tray->>Service: Peek and take challenge only after readiness
+    Service->>Tray: Current challenge
+    Tray->>Phone: Challenge notification
+    Phone->>Phone: Fresh RSSI + Secure Enclave signature
+    Phone->>Tray: Signed assertion
+    Tray->>Service: Unmodified assertion over restricted IPC
+    Service->>Service: Match challenge + registration and verify signature
+    Service-->>Tray: Approval result
+    Tray-->>Phone: Result notification
+    Note over Service,Phone: Approval is not proof of Windows unlock. The tray has no password or approval authority.
+```
+
+### Windows unlock
+
+```mermaid
+flowchart TB
+    Tile["Windows phone tile<br/>Enter / Unlock"]
+    Request["LocalSystem service<br/>Check identity + session<br/>30-second request"]
+    Verify["Service verifies signature<br/>See phone flow above"]
+    Grant["One-time grant<br/>Identity + session<br/>+ lock generation<br/>120 seconds"]
+    Offer["LogonUI auto-submit offer<br/>CredentialsChanged<br/>No password"]
+    Claim["Service checks CP claim<br/>Consume grant<br/>Then decrypt password"]
+    Pack["Credential Provider<br/>Check captured identity<br/>Pack credentials"]
+    Native["Native Negotiate<br/>Check password"]
+    Session["Windows restores<br/>the existing session"]
+    Tile -->|"Restricted IPC"| Request
+    Request --> Verify --> Grant --> Offer
+    Offer -->|"CP checks identity<br/>and claims"| Claim
+    Claim -->|"Password to<br/>eligible CP only"| Pack
+    Pack --> Native --> Session
 ```
 
 The installer deploys the four components and manages startup, maintenance and removal. It does not verify phone signatures or perform Windows authentication. See the [Windows guide](windows/README.md).
@@ -79,7 +84,7 @@ The installer deploys the four components and manages startup, maintenance and r
 7. The service offers automatic submission once to eligible LogonUI. CP re-enumerates and makes a qualified `claimCredential`: the service **irreversibly consumes the grant before decrypting and returning the password**. Packing failure or native password rejection does not restore it.
 8. CP packs credentials inside LogonUI with `CRED_PACK_PROTECTED_CREDENTIALS | CRED_PACK_ID_PROVIDER_CREDENTIALS`, then submits to native Negotiate. Only Windows' successful password verification actually unlocks the session.
 
-There is no fixed cooldown between valid approvals; every new lock/request still requires a new signature. The five-minute password-management identity snapshot is separate from the request and grant lifetimes. First-sign-in provisioning records only LogonUI identity metadata; the service must verify the installed target against the signed-in physical-console token before issuing a management snapshot. Refresh can renew that snapshot within the same verified logon; provisioning never creates phone approval. Native PIN/password providers remain available.
+Each new lock/request requires a fresh signature, with no fixed cooldown. Password management uses a separate five-minute identity snapshot, issued only after the service verifies the signed-in console user and renewable within that logon. Initial provisioning records identity metadata only and grants no phone approval. Windows PIN/password sign-in remains available.
 
 ## Challenge and signing bytes
 

@@ -25,7 +25,7 @@ RSSI is only a configurable signal-strength heuristic. It does not prove a fixed
 
 Automatic response does not require fresh Face ID/Touch ID or a confirmation tap for each signature. The key can be usable after the first phone unlock following restart, even while the phone is subsequently locked. Physical possession and phone settings therefore matter.
 
-`unlock_approved` reports a service grant, not proof that the desktop unlocked. Expired requests, consumed grants, stale callbacks or native password failure cannot authorize a second attempt without a fresh request/signature. The [protocol](Protocol.md) specifies the exact boundaries.
+`unlock_approved` reports a service grant, not proof that the desktop unlocked. Expired requests, consumed grants, stale callbacks or native password failure cannot authorize a second attempt without a fresh request/signature. The [protocol](PROTOCOL.md) specifies the exact boundaries.
 
 ## Diagnostics and reporting
 

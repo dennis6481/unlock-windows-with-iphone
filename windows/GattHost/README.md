@@ -2,9 +2,9 @@
 
 # Tray and GATT transport
 
-`GattHost` runs inside the no-argument, ordinary-user role of `UnlockWithIPhone.exe`. It owns the host lifecycle, physical-console monitoring, BLE publication and pairing transport. It does not hold a password or create trusted approval. Role dispatch and startup are documented in the [Windows guide](../README.md#desktop-app-roles); wire messages are defined in [PROTOCOL.md](../../PROTOCOL.md#ble-messages).
+`GattHost` runs inside the ordinary-user desktop role of `UnlockWithIPhone.exe`. It owns the host lifecycle, physical-console monitoring, BLE publication and pairing transport. It does not hold a password or create trusted approval. Role dispatch and startup are documented in the [Windows guide](../README.md#desktop-app-roles); wire messages are defined in [PROTOCOL.md](../../PROTOCOL.md#ble-messages).
 
-`DesktopApp/TrayManager` handles the Win32 tray through menu-state, command and diagnostic callbacks. The host retains its HWND and controls shutdown; Quit posts an asynchronous close after the menu is released. Unhandled messages return `std::nullopt`; handled messages return their Windows result.
+`DesktopApp/TrayManager` handles the Win32 tray through menu-state, command and diagnostic callbacks. The MTA host retains its HWND and controls shutdown; WinUI runs on its STA thread and receives host-generated snapshots. Refresh posts back to the host. Quit posts an asynchronous close after the menu is released. Unhandled messages return `std::nullopt`; handled messages return their Windows result.
 
 ## Lock-aware publication
 
@@ -39,7 +39,7 @@ Registration is validated as a P-256 point, written to a protected same-director
 
 | Action | Effect |
 |---|---|
-| Status… | Current registration, connection/publication state, Refresh and technical diagnostics. |
+| Status… | WinUI Status and Diagnostics, including Refresh and diagnostic history. |
 | Pair iPhone… | First enrollment, already-registered confirmation or explicit phone replacement. |
 | Manage saved password… | Elevated password-management role in a separate instance. |
 | Remove paired iPhone… | Removes registration and reloads the service; does not remove the password, ComputerId or OS Bluetooth pairing. |

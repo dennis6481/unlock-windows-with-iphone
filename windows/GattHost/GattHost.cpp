@@ -10,6 +10,7 @@
 #include "../Enrollment/EnrollmentSession.h"
 #include "../Enrollment/EnrollmentChannel.h"
 #include "../Resources/DesktopUi.h"
+#include "../DesktopApp/Dashboard/Dashboard.h"
 
 #include <Windows.h>
 #include <WtsApi32.h>
@@ -60,6 +61,7 @@ constexpr std::uint8_t kRejectRequest = 0x03;
 constexpr std::uint8_t kEnrollmentRequest = 0x02;
 
 constexpr UINT kDispatch = WM_APP + 1;
+constexpr UINT kShowDashboard = WM_APP + 4;
 
 struct CallbackState final {
     std::mutex mutex;
@@ -811,7 +813,7 @@ public:
     TrayHost() : state_(std::make_shared<CallbackState>()), host_(state_),
         tray_([this](unlock_windows::desktop_app::TrayCommand command) { trayCommand(command); },
             [this] { return unlock_windows::desktop_app::TrayMenuState{
-                pairing_ || launchOutstanding_ || setupPasswordPending_}; },
+                busy()}; },
             [this](const std::wstring& message, bool error) { state_->record(message, error); }) {
         host_.enrollmentRequest = [this](const auto& bytes, const auto& session, ULONGLONG receivedAt) {
             receiveEnrollment(bytes, session, receivedAt);
@@ -819,12 +821,12 @@ public:
     }
     ~TrayHost() { close(); }
 
-    int run(HINSTANCE instance, bool setup) {
+    int run(HINSTANCE instance, bool setup, bool background) {
         requireWin32(ProcessIdToSessionId(GetCurrentProcessId(), &session_), L"ProcessIdToSessionId");
         singleton_ = CreateMutexW(nullptr, FALSE, L"Local\\UnlockWindowsWithIPhone-GattHost");
         if (!singleton_) requireWin32(FALSE, L"CreateMutexW");
         if (GetLastError() == ERROR_ALREADY_EXISTS) {
-            if (setup) {
+            if (setup || !background) {
                 HWND existing = nullptr;
                 for (int attempt = 0; attempt < 40 && !existing; ++attempt) {
                     existing = FindWindowW(unlock_windows::desktop_app::kTrayWindowClass, nullptr);
@@ -834,7 +836,11 @@ public:
                 DWORD pid = 0, session = 0xffffffff;
                 GetWindowThreadProcessId(existing, &pid);
                 requireWin32(pid && ProcessIdToSessionId(pid, &session) && session == session_, L"Verify setup tray session");
-                requireWin32(PostMessageW(existing, unlock_windows::desktop_app::kSetupMessage, 0, 0), L"Request setup from tray");
+                UINT request = unlock_windows::desktop_app::kSetupMessage;
+                if (!setup) {
+                    request = kShowDashboard;
+                }
+                requireWin32(PostMessageW(existing, request, 0, 0), L"Request setup from tray");
             }
             return 0;
         }
@@ -850,6 +856,22 @@ public:
             0, 0, 0, 0, 0, nullptr, nullptr, instance, this);
         if (!window_) requireWin32(FALSE, L"CreateWindowExW");
         state_->window = window_;
+        dashboard_ = std::make_unique<unlock_windows::desktop_app::Dashboard>(
+            [this, state = state_](bool remove) {
+                state->post([this, remove] {
+                    startPairing(remove);
+                    publishDashboard(true);
+                });
+            },
+            [this, state = state_] {
+                state->post([this] { reconcile(true); publishDashboard(true); });
+            },
+            [this, state = state_](std::wstring error) {
+                state->record(L"Dashboard: " + error, true);
+                state->post([this, error = std::move(error)] {
+                    if (!closing_) MessageBoxW(window_, error.c_str(), L"Dashboard needs attention", MB_OK | MB_ICONERROR);
+                });
+            });
         tray_.bind(window_, condition_);
         if (!SetTimer(window_, 1, 1000, nullptr)) requireWin32(FALSE, L"SetTimer");
         try {
@@ -860,6 +882,7 @@ public:
         }
         reconcile(true);
         if (setup) requireWin32(PostMessageW(window_, unlock_windows::desktop_app::kSetupMessage, 0, 0), L"Begin setup");
+        else if (!background) showDetails();
         MSG message{};
         BOOL result;
         while ((result = GetMessageW(&message, nullptr, 0, 0)) > 0) {
@@ -1194,20 +1217,7 @@ private:
         if (lifecycleConfirmed) lastError_.clear();
         else if (!currentError.empty()) lastError_ = currentError;
         tray_.update(!lastError_.empty() ? L"Needs attention: " + condition_ : condition_);
-    }
-
-    std::wstring statusSummary() {
-        std::wstring result = condition_ + L"\r\n\r\n" + host_.connectionSummary();
-        try {
-            const auto registration = unlock_windows::phone_approval::EnrollmentStore{}.load();
-            result += registration ? L"\r\nPaired iPhone: one registered." : L"\r\nPaired iPhone: none.";
-        } catch (...) {
-            const auto error = exceptionText();
-            result += L"\r\nPaired iPhone: registration could not be checked.";
-            state_->record(L"Registration status: " + error, true);
-        }
-        if (!lastError_.empty()) result += L"\r\n\r\nPhone connectivity needs attention. See Technical details.";
-        return result;
+        publishDashboard();
     }
 
     std::wstring technicalDetails() {
@@ -1224,46 +1234,34 @@ private:
             L"\r\n\r\nDiagnostic history:\r\n" + state_->diagnostics;
     }
 
-    static HRESULT CALLBACK statusCallback(HWND dialog, UINT notification, WPARAM command, LPARAM, LONG_PTR data) {
-        if (notification != TDN_BUTTON_CLICKED || command != IDC_UI_REFRESH) return S_OK;
-        auto* self = reinterpret_cast<TrayHost*>(data);
-        try {
-            self->reconcile(true);
-            const auto summary = self->statusSummary();
-            const auto details = self->technicalDetails();
-            SendMessageW(dialog, TDM_SET_ELEMENT_TEXT, TDE_CONTENT, reinterpret_cast<LPARAM>(summary.c_str()));
-            SendMessageW(dialog, TDM_SET_ELEMENT_TEXT, TDE_EXPANDED_INFORMATION, reinterpret_cast<LPARAM>(details.c_str()));
-        } catch (...) {
-            const auto error = exceptionText();
-            self->state_->record(L"Status refresh: " + error, true);
-            SendMessageW(dialog, TDM_SET_ELEMENT_TEXT, TDE_CONTENT,
-                reinterpret_cast<LPARAM>(L"Status could not be refreshed. See Technical details."));
-            SendMessageW(dialog, TDM_SET_ELEMENT_TEXT, TDE_EXPANDED_INFORMATION, reinterpret_cast<LPARAM>(error.c_str()));
+    bool busy() const { return pairing_ || launchOutstanding_ || setupPasswordPending_; }
+
+    void publishDashboard(bool force = false) {
+        if (!dashboard_ || (!force && !dashboard_->visible())) return;
+        unlock_windows::desktop_app::DashboardSnapshot snapshot;
+        snapshot.busy = busy();
+        snapshot.status = condition_;
+        snapshot.diagnostics = technicalDetails();
+        snapshot.error = lastError_.empty() ? initializationError_ : lastError_;
+        try { snapshot.connection = host_.connectionSummary(); }
+        catch (...) { snapshot.error += L"\n" + exceptionText(); }
+        try { snapshot.paired = unlock_windows::phone_approval::EnrollmentStore{}.load().has_value(); }
+        catch (...) {
+            snapshot.error += L"\nCould not read the paired iPhone: " + exceptionText();
         }
-        return S_FALSE;
+        dashboard_->update(std::move(snapshot));
     }
 
     void showDetails() {
-        const auto summary = statusSummary();
-        const auto details = technicalDetails();
-        const TASKDIALOG_BUTTON buttons[]{{IDC_UI_REFRESH, L"Refresh"}, {IDCANCEL, L"Close"}};
-        TASKDIALOGCONFIG config{sizeof(config)};
-        config.hwndParent = window_;
-        config.hInstance = GetModuleHandleW(nullptr);
-        config.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_EXPAND_FOOTER_AREA;
-        config.pszWindowTitle = UNLOCK_PRODUCT_DISPLAY_NAME;
-        config.pszMainInstruction = L"iPhone unlock status";
-        config.pszContent = summary.c_str();
-        config.pszExpandedInformation = details.c_str();
-        config.pszExpandedControlText = L"Hide technical details";
-        config.pszCollapsedControlText = L"Technical details";
-        config.cButtons = static_cast<UINT>(std::size(buttons));
-        config.pButtons = buttons;
-        config.nDefaultButton = IDC_UI_REFRESH;
-        config.pfCallback = statusCallback;
-        config.lpCallbackData = reinterpret_cast<LONG_PTR>(this);
-        config.cxWidth = 340;
-        check_hresult(TaskDialogIndirect(&config, nullptr, nullptr, nullptr));
+        try {
+            reconcile(true);
+            publishDashboard(true);
+            dashboard_->show();
+        } catch (...) {
+            const auto error = exceptionText();
+            state_->record(L"Dashboard: " + error, true);
+            MessageBoxW(window_, error.c_str(), L"Could not open Dashboard", MB_OK | MB_ICONERROR);
+        }
     }
 
     void manageSavedPassword() {
@@ -1309,7 +1307,7 @@ private:
     }
 
     void continueSetup() {
-        if (setupPasswordPending_ || pairing_ || launchOutstanding_) return;
+        if (busy()) return;
         const auto target = unlock_windows::enrollment::queryConsole();
         if (target.locked || target.session != session_ ||
             target.sid != unlock_windows::phone_approval::EnrollmentStore::currentUserSid() ||
@@ -1389,6 +1387,7 @@ private:
     void close() {
         if (closing_) return;
         closing_ = true;
+        if (dashboard_) dashboard_->stop();
         try { finishPairing("enrollment_cancelled"); }
         catch (...) { state_->record(L"Pairing shutdown: " + exceptionText(), true); }
         host_.shutdown();
@@ -1414,6 +1413,7 @@ private:
         try {
             if (const auto result = self->tray_.handleMessage(message, wparam, lparam)) return *result;
             switch (message) {
+            case kShowDashboard: self->showDetails(); return 0;
             case unlock_windows::desktop_app::kSetupMessage:
                 try { self->continueSetup(); }
                 catch (...) {
@@ -1460,6 +1460,7 @@ private:
     std::shared_ptr<CallbackState> state_;
     GattHost host_;
     unlock_windows::desktop_app::TrayManager tray_;
+    std::unique_ptr<unlock_windows::desktop_app::Dashboard> dashboard_;
     HWND window_ = nullptr;
     HANDLE singleton_ = nullptr;
     DWORD session_ = 0;
@@ -1480,13 +1481,13 @@ private:
 
 } // namespace
 
-int unlock_windows::desktop_app::runTray(HINSTANCE instance, bool setup) {
+int unlock_windows::desktop_app::runTray(HINSTANCE instance, bool setup, bool background) {
     try {
         unlock_windows::desktop_ui::initialize();
         init_apartment(apartment_type::multi_threaded);
         struct Apartment final { ~Apartment() { uninit_apartment(); } } apartment;
         TrayHost app;
-        return app.run(instance, setup);
+        return app.run(instance, setup, background);
     } catch (...) {
         const auto error = exceptionText();
         MessageBoxW(nullptr, error.c_str(), L"Could not start phone connectivity", MB_OK | MB_ICONERROR);

@@ -6,14 +6,14 @@ The Windows side contains four installed components: the desktop app, LocalSyste
 
 ## Compatibility
 
-- **Windows:** Windows 10 version 1703, build 15063, or later, including Windows 11. The minimum is based on API requirements and has not been tested on that build.
+- **Windows:** Windows 10 version 1809, build 17763, or later, including Windows 11. The minimum is based on API requirements and has not been tested on that build.
 - **Architecture:** Native x64 or ARM64; all components must match the OS architecture. ARM64 has not been tested on physical hardware. 32-bit x86 and ARM32 are not supported.
 - **Bluetooth:** The adapter and driver must support BLE GATT server / peripheral advertising.
 
 ## Build prerequisites
 
 - Windows and Visual Studio 2022 / Build Tools 2022 with **Desktop development with C++**, MSVC C++20 support and the target architecture's tools. ARM64 requires the ARM64 C++ tools component.
-- Windows SDK **10.0.18362.0 or newer** with C++/WinRT headers; a recent SDK is recommended.
+- Windows SDK **10.0.22621.0 or newer** with C++/WinRT headers; a recent SDK is recommended.
 - **CMake 3.25 or newer**, `ctest`, and **GNU Make** available on `PATH`. `make` here is GNU Make; the CMake generator uses the separate MSVC `nmake` supplied by Visual Studio.
 - Run from a native Windows PowerShell or command prompt. The Makefile uses Windows commands and is not a WSL build workflow.
 
@@ -30,18 +30,20 @@ make -C windows build-release
 To select a target and separate build directories explicitly:
 
 ```powershell
-make -C windows build-release TARGET_ARCH=x64 BUILD_DIR=build/x64
-make -C windows build-release TARGET_ARCH=arm64 BUILD_DIR=build/arm64
+make -C windows build-release TARGET_ARCH=x64 BUILD_DIR=build/x64-release
+make -C windows build-release TARGET_ARCH=arm64 BUILD_DIR=build/arm64-release
 ```
 
 
-The installer is generated at `windows/dist/UnlockWithIPhone_<version>_<architecture>_setup.exe`, with `x64` or `arm64` matching the compiler target and the version read from [ProductVersion.h](ProductVersion.h). Distribute only the **Release** setup EXE; it embeds the desktop app, service and Credential Provider. Debug and Release share the same output path.
+The installer is generated at `windows/dist/UnlockWithIPhone_<version>_<architecture>_setup.exe`, with `x64` or `arm64` matching the compiler target and the version read from [ProductVersion.h](ProductVersion.h). Distribute only the **Release** setup EXE; it embeds the desktop app and its runtime files, service and Credential Provider. Use separate build directories per architecture/configuration; the active desktop EXE remains at the build root for existing make commands.
 
-Release statically links the MSVC runtime to avoid requiring a separate VC++ Redistributable. Packaging verifies component versions and architectures and generates SHA-256 hashes. Dependency inspection and clean-machine installation/runtime validation remain pending.
+The desktop build follows make → CMake → MSBuild. CMake compiles the native desktop and shared libraries; MSBuild compiles the entry point and WinUI, links the generated library paths and uses pinned Windows App SDK packages with Hybrid CRT. Other components retain their runtime policy. `DesktopApp.files` comes from MSBuild output; packaging embeds one dependency manifest for paths, sizes, SHA-256 and PE machine types. Third-party files retain their versions. The revised build integration, packaging and clean-machine deployment remain unverified.
 
 ## Install and configure
 
 For installation and setup, see the [main guide](../README.md#installation).
+
+Open **Unlock with iPhone** from the Start Menu to show the main window. Install/update creates the all-users shortcut; uninstall removes it.
 
 - Save your Microsoft account password, not your PIN. Update the saved copy whenever the account password changes; see [password management](SavedCredential/README.md#password-management).
 - Removing the paired iPhone and deleting the saved password are separate tray actions.
@@ -54,7 +56,7 @@ For uninstall instructions, see the [main guide](../README.md#uninstall). For in
 
 ## Troubleshooting
 
-Use tray **Status… → Technical details**, iOS Settings → Diagnostics and the [testing guide](../docs/Testing.md#diagnostics). From the repository root, the read-only component inspector is:
+Use tray **Status… → Diagnostics**, iOS Settings → Diagnostics and the [testing guide](../docs/Testing.md#diagnostics). From the repository root, the read-only component inspector is:
 
 ```powershell
 & '.\windows\Diagnostics\Get-ComponentsStatus.ps1'
@@ -66,7 +68,7 @@ It does not start services/tasks, repair installations or mount offline user hiv
 
 ```text
 windows/
-├── DesktopApp/         Main EXE entry point, role dispatch and Win32 TrayManager.
+├── DesktopApp/         MSBuild desktop EXE, role dispatch, WinUI and Win32 TrayManager.
 ├── GattHost/           Host lifecycle, lock-aware advertising, BLE and pairing transport.
 ├── Enrollment/         Elevated enrollment and fingerprint confirmation.
 ├── SavedCredential/    Credential service, IPC, encrypted password storage and management UI.
@@ -85,14 +87,15 @@ Module guides: [GattHost](GattHost/README.md), [SavedCredential](SavedCredential
 
 | Arguments | Role |
 |---|---|
-| None | Ordinary-user single-instance tray, BLE and session monitoring; elevated execution is rejected. |
+| None | Ordinary-user tray and WinUI main window; repeated launch activates it. Elevated execution is rejected. |
+| `--background` | Login startup without opening the main window; repeated launch leaves an existing window unchanged. |
 | `--saved-password` | Temporary elevated password-management window. |
 | `--setup` | Ordinary-user setup request handled by the existing single-instance tray. |
 | `--saved-password --setup` | Internal elevated password step; an explicit readiness result permits the ordinary tray to continue to pairing. |
 | `--bluetooth` plus internal arguments | Temporary elevated pairing/removal role, launched by the tray. Not a public manual command. |
 | `--key-hex <public-key> [--replace]`, `--key-clipboard [--replace]`, `--clear` | Elevated manual public-key enrollment using the calling console. |
 
-Closing an operation window does not exit the tray. Role parsing is defined in [DesktopApp.h](DesktopApp/DesktopApp.h); role arguments do not grant permission.
+The WinUI main window and its native title bar follow the Windows app theme. Closing the WinUI main window hides it to the tray; Quit exits the host. Recoverable UI errors are reported without restarting UI or stopping BLE; fatal process faults are outside this guarantee. Closing an operation window does not exit the tray. Role parsing is defined in [DesktopApp.h](DesktopApp/DesktopApp.h); role arguments do not grant permission.
 
 For manual enrollment, use an elevated PowerShell console on the unlocked target desktop, place the phone's 65-byte uncompressed P-256 public key as 130 hexadecimal digits on the clipboard, then run:
 
@@ -111,6 +114,6 @@ Windows installers are automatically built and published when a version tag is p
 ## References
 
 - [GattServiceProvider requirements](https://learn.microsoft.com/en-us/uwp/api/windows.devices.bluetooth.genericattributeprofile.gattserviceprovider)
-- [PerMonitorV2 and Windows 10 1703](https://blogs.windows.com/windowsdeveloper/2017/04/04/high-dpi-scaling-improvements-desktop-applications-windows-10-creators-update/)
+- [Windows App SDK self-contained deployment](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/self-contained-deploy/deploy-self-contained-apps)
 - [GetDpiForWindow requirements](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getdpiforwindow)
 - [Advertisement enum version history](https://learn.microsoft.com/en-us/uwp/api/windows.devices.bluetooth.genericattributeprofile.gattserviceprovideradvertisementstatus)

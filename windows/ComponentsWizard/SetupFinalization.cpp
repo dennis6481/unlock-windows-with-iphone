@@ -9,6 +9,7 @@
 #include "../SavedCredential/SavedCredentialVault.h"
 #include <Windows.h>
 #include <array>
+#include <map>
 
 namespace unlock::components {
 namespace {
@@ -300,16 +301,33 @@ std::wstring finalizationScript(const WindowsAdapter& adapter, const WizardState
         L"\n$created=" + std::to_wstring(stamp.QuadPart) + L"\n$image=" + literal(adapter.wizardPath().wstring()) +
         L"\n$productDir=" + literal(productDataDirectory().wstring()) + L"\n$desktopDir=" + literal(desktopDirectory().wstring()) +
         L"\n$vaultDir=" + literal((setupKnownFolder(FOLDERID_ProgramData) / unlock_windows::saved_credential::kVaultDirectoryName).wstring()) + L"\n$names=@(";
-    for (size_t i = 0; i < kComponentFiles.size(); ++i) {
-        if (i) script += L",";
-        script += literal(kComponentFiles[i].name);
+    std::map<std::wstring, std::vector<std::wstring>> groups;
+    for (const auto& entry : packageFiles()) {
+        (void)adapter.componentTarget(entry.component());
+        const std::filesystem::path path(entry.name);
+        groups[path.filename().wstring()].push_back(path.parent_path().wstring());
     }
-    script += L")\n$targets=@(";
-    for (size_t i = 0; i < kComponentFiles.size(); ++i) {
-        if (i) script += L",";
-        script += literal(adapter.componentTarget(kComponentFiles[i]).wstring());
+    for (const auto& [filename, parents] : groups) {
+        if (parents.size() == 1) script += literal((std::filesystem::path(parents[0]) / filename).wstring()) + L";";
+        else {
+            script += L"@(";
+            for (size_t index = 0; index < parents.size(); ++index) {
+                if (index) script += L",";
+                script += literal(parents[index]);
+            }
+            script += L")|ForEach-Object{if($_){Join-Path $_ " + literal(filename) +
+                L"}else{" + literal(filename) + L"}};";
+        }
     }
-    script += LR"ps()
+    script += L")\n$systemTargets=@{";
+    for (const auto& entry : packageFiles())
+        if (!entry.desktopTool)
+            script += literal(entry.name) + L"=" + literal(adapter.componentTarget(entry.component()).wstring()) + L";";
+    script += LR"ps(}
+$targets=@(foreach($name in $names){if($systemTargets.ContainsKey($name)){$systemTargets[$name]}else{Join-Path $desktopDir $name}})
+$dirs=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+foreach($name in $names){$dir=Split-Path $name -Parent;while($dir){[void]$dirs.Add($dir);$dir=Split-Path $dir -Parent}}
+$dirs=@($dirs|Sort-Object -Property Length -Descending)
 $lock=$null;$locked=$false;$saved=@{};$app=@{};$taskXml=$null;$folder=$null;$events=@();$log=''
 function Write-Result([string]$message,[string]$log,[bool]$finished,[bool]$success){
     $r=@{};$r[$tidKey]=$id;$r[$sidKey]=$userSid;$r[$msgKey]=$message;$r[$logKey]=$log
@@ -400,10 +418,18 @@ try{
         Check-Dir(Split-Path -Path(Split-Path -Path $stage -Parent)-Parent)
         Check-Dir(Split-Path -Path $stage -Parent)
         Check-Dir $stage
-        foreach($file in Get-ChildItem -LiteralPath $stage -Force){
-            if($file.Name -notin $names -or $file.PSIsContainer -or($file.Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'Unknown staged file.'}
+        foreach($relative in (@('')+$dirs)){
+            $parent=if($relative){Join-Path $stage $relative}else{$stage}
+            if(!(Test-Path -LiteralPath $parent)){continue}
+            Check-Dir $parent
+            foreach($file in Get-ChildItem -LiteralPath $parent -Force){
+                $child=if($relative){Join-Path $relative $file.Name}else{$file.Name}
+                if(($file.Attributes -band [IO.FileAttributes]::ReparsePoint)-or
+                    ($file.PSIsContainer -and $child -notin $dirs)-or(!$file.PSIsContainer -and $child -notin $names)){throw 'Unknown staged file.'}
+}
 }
         foreach($name in $names){Remove-File(Join-Path -Path $stage -ChildPath $name)}
+        foreach($dir in $dirs){Remove-Dir(Join-Path $stage $dir)}
         Remove-Dir $stage
 }
     Remove-Dir(Split-Path -Path $stage -Parent)
@@ -413,6 +439,7 @@ try{
         if(Test-Path -LiteralPath($path+'.update')){throw "Replacement remains: $path.update"}
 }
     if($uninstall){
+        foreach($dir in $dirs){Remove-Dir(Join-Path $desktopDir $dir)}
         Remove-Dir $desktopDir;Remove-Dir $vaultDir;Remove-Dir $productDir
         $key=$hk.OpenSubKey($stPath,$true)
         try{$key.SetValue($frKey,1,[Microsoft.Win32.RegistryValueKind]::DWord);$key.Flush()}finally{$key.Dispose()}

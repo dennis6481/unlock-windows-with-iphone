@@ -14,11 +14,13 @@
 #include <wtsapi32.h>
 #include <taskschd.h>
 #include <shlobj.h>
+#include <shobjidl.h>
 #include <wrl/client.h>
 #include <array>
 #include <cstring>
 #include <memory>
 #include <vector>
+#include <set>
 
 namespace unlock::components {
 namespace {
@@ -290,7 +292,10 @@ void withUserHive(const std::wstring& sid, const std::function<void(HKEY)>& oper
     regCheck(RegUnLoadKeyW(HKEY_USERS, mount.c_str()), L"Unload target user registry hive");
     restore.restore(); backup.restore();
 }
-std::wstring startupCommand() { return L"\"" + (desktopDirectory() / kMainAppFile).wstring() + L"\""; }
+std::wstring startupCommand() {
+    return L"\"" + (desktopDirectory() / kMainAppFile).wstring() + L"\" " +
+        unlock_windows::desktop_app::kBackgroundRole;
+}
 void removeUserStartup(const std::wstring& sid) {
     withUserHive(sid, [](HKEY hive) {
         Registry key;
@@ -412,13 +417,15 @@ bool WindowsAdapter::userStartupPresent() const {
     return present;
 }
 bool WindowsAdapter::toolsPresent() const {
-    for (const auto& component : kComponentFiles)
-        if (component.desktopTool && !std::filesystem::is_regular_file(componentTarget(component))) return false;
+    if (!std::filesystem::is_regular_file(desktopDirectory() / kInstallerFile)) return false;
+    for (const auto& entry : installedPackageFiles())
+        if (entry.desktopTool && !std::filesystem::is_regular_file(componentTarget(entry.component()))) return false;
     return true;
 }
 bool WindowsAdapter::desktopArtifactsPresent() const {
-    for (const auto& component : kComponentFiles)
-        if (component.desktopTool && std::filesystem::exists(componentTarget(component))) return true;
+    if (std::filesystem::exists(startMenuShortcut())) return true;
+    for (const auto& entry : packageFiles())
+        if (entry.desktopTool && std::filesystem::exists(componentTarget(entry.component()))) return true;
     return std::filesystem::exists(desktopDirectory()) && !std::filesystem::is_empty(desktopDirectory());
 }
 bool WindowsAdapter::trayRunning() const {
@@ -446,15 +453,46 @@ void WindowsAdapter::stopTray(const WizardState& state) const {
         throw ComponentError(L"A main application instance started during maintenance. Close it before continuing. No process was killed.");
 }
 void WindowsAdapter::removeTools() const {
-    for (const auto& component : kComponentFiles)
-        if (component.desktopTool) deleteBinaryIfPresent(componentTarget(component));
+    std::set<std::filesystem::path> directories;
+    for (const auto& entry : packageFiles())
+        if (entry.desktopTool) {
+            const auto target = componentTarget(entry.component());
+            deleteBinaryIfPresent(target);
+            deleteBinaryIfPresent(target.wstring() + L".update");
+            auto parent = std::filesystem::path(entry.name).parent_path();
+            while (!parent.empty()) {
+                directories.insert(desktopDirectory() / parent);
+                parent = parent.parent_path();
+            }
+        }
+    for (auto directory = directories.rbegin(); directory != directories.rend(); ++directory) {
+        if (!std::filesystem::exists(*directory)) continue;
+        const auto attributes = GetFileAttributesW(directory->c_str());
+        if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_REPARSE_POINT))
+            throw ComponentError(L"Unsafe runtime directory: " + directory->wstring());
+        win(RemoveDirectoryW(directory->c_str()), L"Remove runtime directory " + directory->wstring());
+    }
 }
 void WindowsAdapter::installDesktopIntegration(const WizardState& state) const {
+    Com apartment;
+    ComPtr<IShellLinkW> shortcut;
+    hr(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
+        IID_PPV_ARGS(&shortcut)), L"Create Start Menu shortcut");
+    const auto executable = desktopDirectory() / kMainAppFile;
+    hr(shortcut->SetPath(executable.c_str()), L"Set Start Menu shortcut executable");
+    hr(shortcut->SetWorkingDirectory(desktopDirectory().c_str()), L"Set Start Menu shortcut working directory");
+    hr(shortcut->SetIconLocation(executable.c_str(), 0), L"Set Start Menu shortcut icon");
+    hr(shortcut->SetShowCmd(SW_SHOWNORMAL), L"Set Start Menu shortcut window state");
+    ComPtr<IPersistFile> file;
+    hr(shortcut.As(&file), L"Get Start Menu shortcut persistence");
+    hr(file->Save(startMenuShortcut().c_str(), TRUE), L"Save Start Menu shortcut");
+    logOperation(L"Start Menu shortcut registered.");
     registerUserStartup(state);
     registerApplicationUninstall(desktopDirectory() / kInstallerFile);
     logOperation(L"Bluetooth Run startup registered; the ordinary completion UI starts the tray once, then Windows starts it at later sign-ins.");
 }
 void WindowsAdapter::removeDesktopIntegration() const {
+    deleteBinaryIfPresent(startMenuShortcut());
     logOperation(L"Delete target-user Run startup.");
     const auto state = readState();
     if (state && !state->targetSid.empty()) removeUserStartup(state->targetSid);

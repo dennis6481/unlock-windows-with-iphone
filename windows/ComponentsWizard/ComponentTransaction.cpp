@@ -121,6 +121,8 @@ OperationResult ComponentTransaction::beginUninstall(const ProgressCallback& pro
             return failure(L"Uninstall requires a verified installation without a pending transaction.", old.has_value());
         auto state = newState(WizardPhase::preparing, old->targetSid);
         state.operation = SetupOperation::uninstall; state.installedVersion = old->installedVersion;
+        state.sourcePath = old->wizardPath;
+        state.packageVersion = old->installedVersion;
         adapter_.writeState(state);
         return prepare(state, progress);
     } catch (const std::exception& error) { return failure(errorText(error), true); }
@@ -161,7 +163,7 @@ OperationResult ComponentTransaction::completeUpdate(const ProgressCallback& pro
         state->phase = WizardPhase::updating; adapter_.writeState(*state);
         adapter_.stopTray(*state); adapter_.removeCredentialProviderRegistration();
         adapter_.configureSavedCredentialServiceForUpdate(true);
-        report(progress, 40, L"Replace and byte-verify the four fixed component targets.");
+        report(progress, 40, L"Replace and verify files from the package dependency manifest.");
         adapter_.applyStagedUpdate(*state); adapter_.configureSavedCredentialServiceForUpdate(false);
         adapter_.createCredentialProviderRegistration(adapter_.credentialProviderTarget());
         finishDeployment(*state);
@@ -186,8 +188,9 @@ OperationResult ComponentTransaction::completeUninstall(const ProgressCallback& 
         adapter_.deleteBinaryIfPresent(adapter_.credentialProviderTarget());
         adapter_.deleteBinaryIfPresent(adapter_.savedCredentialServiceTarget());
         adapter_.removeProductData(*state);
-        for (const auto& component : kComponentFiles) {
-            auto temporary = adapter_.componentTarget(component); temporary += L".update";
+        for (const auto& entry : packageFiles()) {
+            if (entry.desktopTool) continue;
+            auto temporary = adapter_.componentTarget(entry.component()); temporary += L".update";
             adapter_.deleteBinaryIfPresent(temporary);
         }
         auto remaining = adapter_.inspect();

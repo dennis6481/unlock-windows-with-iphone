@@ -29,7 +29,7 @@ Unlock Windows session using your iPhone in proximity.
 
 ### System requirements
 
-The *Unlock with iPhone* requires Windows 10 version **1703, build 15063**, or later, including Windows 11. Both x64 and ARM64 architecture are supported (althought the app has not yet been tested on a physical ARM64 machine).
+The *Unlock with iPhone* requires Windows 10 version **1809, build 17763**, or later, including Windows 11. Both x64 and ARM64 architecture are supported (althought the app has not yet been tested on a physical ARM64 machine).
 
 Your PC must have Bluetooth enabled, with an adapter and driver that support **Bluetooth Low Energy (BLE) peripheral advertising**.
 
@@ -61,7 +61,7 @@ After restarting your PC or signing out, sign in once with your usual Windows pa
 
 Open Windows **Settings → Apps**, find *Unlock with iPhone* and select **Uninstall**. Follow the uninstaller's instructions, including restarting if prompted.
 
-Uninstalling removes the Windows components, the saved password copy and the iPhone pairing information stored on your PC. It does not change your Microsoft account password. If you reinstall, you will need to set up the app again.
+Uninstalling removes the Windows components, the Start Menu shortcut, the saved password copy and the iPhone pairing information stored on your PC. It does not change your Microsoft account password. If you reinstall, you will need to set up the app again.
 
 The PC entry in the iPhone app is kept. You can remove it separately from *Unlock PC*.
 

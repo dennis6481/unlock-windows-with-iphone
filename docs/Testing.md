@@ -110,7 +110,9 @@ Inspect normal and delay-load imports of Release setup and all three embedded co
 
 Check that component changes refresh setup's embedded resources/manifest. Reject missing/corrupt resources, mixed versions and wrong architecture before deployment. Interrupted extraction must resume the same transaction and set `payloadReady` only after every component is verified. Resource hashes verify integrity, not publisher identity.
 
-Test a clean install, same-version Reinstall, higher-version Update, downgrade rejection, restart continuation and explicit Uninstall. Confirm all four files match native architecture/version and the documented paths, and there is only one Settings entry. Cancellation before execution must preserve installation and records.
+Test a clean install, same-version Reinstall, higher-version Update, downgrade rejection, restart continuation and explicit Uninstall. Confirm all four files match native architecture/version and the documented paths, and there is only one Settings entry. Check the all-users Start Menu shortcut opens/activates the main window without elevation after install/update and is removed on uninstall. Cancellation before execution must preserve installation and records.
+
+Version 0.1.0 installations and pending transactions must be rejected without modification. Use their original installer to complete and uninstall them. For the current schema, interrupt replacement before and after the resident installer is replaced; continuation must verify staging and finish without rollback backups or obsolete runtime files.
 
 During update, hold an operation window open or start another installed-app instance: maintenance must wait/pause rather than forcibly kill it or claim files released. Check ordinary-user Run startup after native sign-in and preservation of a user's startup-disable choice.
 
@@ -122,7 +124,7 @@ After completed uninstall verify the service, CP/main/setup files, password and 
 
 ## Diagnostics
 
-Start with Windows tray **Status… → Technical details** and iOS Settings → Diagnostics. Run the read-only inspector from the repository root:
+Start with Windows tray **Status… → Diagnostics** and iOS Settings → Diagnostics. Run the read-only inspector from the repository root:
 
 ```powershell
 & '.\windows\Diagnostics\Get-ComponentsStatus.ps1'

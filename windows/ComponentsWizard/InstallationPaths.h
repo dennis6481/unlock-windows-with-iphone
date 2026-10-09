@@ -3,6 +3,7 @@
 #pragma once
 
 #include "WindowsAdapter.h"
+#include "../Resources/resource.h"
 #include "../PhoneApproval/EnrollmentStore.h"
 #include <Windows.h>
 #include <shlobj.h>
@@ -19,6 +20,9 @@ namespace unlock::components {
 }
 [[nodiscard]] inline std::filesystem::path desktopDirectory() {
     return setupKnownFolder(FOLDERID_ProgramFiles) / kDesktopDirectoryName;
+}
+[[nodiscard]] inline std::filesystem::path startMenuShortcut() {
+    return setupKnownFolder(FOLDERID_CommonPrograms) / (std::wstring(UNLOCK_PRODUCT_DISPLAY_NAME) + L".lnk");
 }
 [[nodiscard]] inline std::filesystem::path productDataDirectory() {
     return setupKnownFolder(FOLDERID_ProgramData) / unlock_windows::phone_approval::kEnrollmentDataDirectoryName;

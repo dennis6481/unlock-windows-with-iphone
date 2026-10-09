@@ -140,41 +140,45 @@ if(BUILD_TESTING)
     add_test(NAME unlock_enrollment_store_tests COMMAND unlock_enrollment_store_tests)
 endif()
 
-add_executable(unlock_desktop_app WIN32
-    DesktopApp/main.cpp
+add_library(unlock_desktop_native STATIC
     DesktopApp/TrayManager.cpp
     GattHost/GattHost.cpp
     Enrollment/Enrollment.cpp
     SavedCredential/CredentialManagement.cpp
 )
 
-target_compile_features(unlock_desktop_app PRIVATE cxx_std_20)
-target_compile_definitions(unlock_desktop_app PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNLOCK_UI_PAIRING UNLOCK_UI_SAVED_PASSWORD)
-target_link_libraries(unlock_desktop_app PRIVATE unlock_saved_credential_ipc unlock_enrollment_store windowsapp user32 shell32 wtsapi32 ole32 advapi32 comctl32 gdi32 credui)
+set_target_properties(unlock_desktop_native PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+target_compile_definitions(unlock_desktop_native PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNLOCK_UI_PAIRING UNLOCK_UI_SAVED_PASSWORD)
+target_link_libraries(unlock_desktop_native PRIVATE
+    unlock_saved_credential_ipc unlock_enrollment_store unlock_protocol_crypto
+    windowsapp user32 shell32 wtsapi32 ole32 advapi32 comctl32 gdi32 credui bcrypt crypt32)
 
 if(MSVC)
-    target_compile_options(unlock_desktop_app PRIVATE /utf-8)
+    target_compile_options(unlock_desktop_native PRIVATE /utf-8)
 endif()
 
-add_executable(unlock_windows_components_wizard WIN32
+add_library(unlock_windows_components_wizard_objects OBJECT
     ComponentsWizard/main.cpp
     ComponentsWizard/ComponentState.cpp
     ComponentsWizard/ComponentTransaction.cpp
     ComponentsWizard/WindowsAdapter.cpp
+    ComponentsWizard/PackageManifest.cpp
     ComponentsWizard/DesktopDeployment.cpp
     ComponentsWizard/SetupFinalization.cpp
     ComponentsWizard/ComponentsWizard.rc
 )
 
-target_include_directories(unlock_windows_components_wizard
+add_executable(unlock_windows_components_wizard WIN32 $<TARGET_OBJECTS:unlock_windows_components_wizard_objects>)
+
+target_include_directories(unlock_windows_components_wizard_objects
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/ComponentsWizard
         ${CMAKE_CURRENT_SOURCE_DIR}/SavedCredential
 )
 
-target_compile_features(unlock_windows_components_wizard PRIVATE cxx_std_20)
+target_compile_features(unlock_windows_components_wizard_objects PRIVATE cxx_std_20)
 
-target_compile_definitions(unlock_windows_components_wizard PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_definitions(unlock_windows_components_wizard_objects PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(
     unlock_windows_components_wizard
     PRIVATE
@@ -274,7 +278,7 @@ set(unlock_payload_files "")
 foreach(unlock_component IN ITEMS
     "unlock_credential_provider|kCredentialProviderFile"
     "unlock_saved_credential_service|kSavedCredentialServiceFile"
-    "unlock_desktop_app|kMainAppFile"
+    "unlock_desktop_native|kMainAppFile"
     "unlock_windows_components_wizard|kInstallerFile"
 )
     string(REPLACE "|" ";" unlock_component_parts "${unlock_component}")
@@ -297,36 +301,54 @@ foreach(unlock_component IN ITEMS
                 "$<$<CONFIG:Debug>:/ILK:${CMAKE_CURRENT_BINARY_DIR}/${UNLOCK_SETUP_OUTPUT_NAME}.ilk>")
         endif()
     else()
-        list(APPEND unlock_payload_targets "${unlock_component_target}")
-        list(APPEND unlock_payload_files "$<TARGET_FILE:${unlock_component_target}>")
+        if(unlock_component_target STREQUAL "unlock_desktop_native")
+            set(UNLOCK_DESKTOP_NAME "${unlock_component_output}")
+            set(UNLOCK_DESKTOP_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${UNLOCK_VERSION_FILENAME}")
+            list(APPEND unlock_payload_targets unlock_desktop_app)
+            list(APPEND unlock_payload_files "${UNLOCK_DESKTOP_OUTPUT}")
+        else()
+            list(APPEND unlock_payload_targets "${unlock_component_target}")
+            list(APPEND unlock_payload_files "$<TARGET_FILE:${unlock_component_target}>")
+        endif()
     endif()
-    set_target_properties(${unlock_component_target} PROPERTIES OUTPUT_NAME "${unlock_component_output}")
+    if(NOT unlock_component_target STREQUAL "unlock_desktop_native")
+        set_target_properties(${unlock_component_target} PROPERTIES OUTPUT_NAME "${unlock_component_output}")
+    endif()
     if(unlock_component_target STREQUAL "unlock_credential_provider")
         set(UNLOCK_VERSION_FILE_TYPE "VFT_DLL")
     else()
         set(UNLOCK_VERSION_FILE_TYPE "VFT_APP")
     endif()
     configure_file(Resources/ProductVersion.rc.in "${unlock_component_target}-version.rc" @ONLY)
-    target_sources(${unlock_component_target} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/${unlock_component_target}-version.rc")
+    if(unlock_component_target STREQUAL "unlock_desktop_native")
+        set(UNLOCK_DESKTOP_VERSION_RESOURCE "${CMAKE_CURRENT_BINARY_DIR}/${unlock_component_target}-version.rc")
+    elseif(unlock_component_target STREQUAL "unlock_windows_components_wizard")
+        target_sources(unlock_windows_components_wizard_objects PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/${unlock_component_target}-version.rc")
+    else()
+        target_sources(${unlock_component_target} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/${unlock_component_target}-version.rc")
+    endif()
 endforeach()
 
 find_program(UNLOCK_POWERSHELL powershell REQUIRED)
 set(unlock_payload_directory "${CMAKE_CURRENT_BINARY_DIR}/package/$<CONFIG>")
 add_custom_command(
-    OUTPUT "${unlock_payload_directory}/PackagePayload.rc" "${unlock_payload_directory}/PackagePayload.h"
+    OUTPUT "${unlock_payload_directory}/PackagePayload.rc" "${unlock_payload_directory}/PackagePayload.bin"
     COMMAND "${UNLOCK_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
         -File "${CMAKE_CURRENT_SOURCE_DIR}/WindowsArchitecture.ps1"
         "${UNLOCK_VERSION_TEXT}" "${unlock_payload_directory}/PackagePayload.rc"
-        "${unlock_payload_directory}/PackagePayload.h" ${unlock_payload_files}
+        "${unlock_payload_directory}/PackagePayload.bin" "${CMAKE_CURRENT_BINARY_DIR}/DesktopApp.files" ${unlock_payload_files}
     DEPENDS ${unlock_payload_targets} ${unlock_payload_files}
+        "${CMAKE_CURRENT_BINARY_DIR}/DesktopApp.files"
         "${CMAKE_CURRENT_SOURCE_DIR}/WindowsArchitecture.ps1"
         "${CMAKE_CURRENT_SOURCE_DIR}/ProductVersion.h"
         "${CMAKE_CURRENT_SOURCE_DIR}/ComponentFiles.h"
+        "${CMAKE_CURRENT_SOURCE_DIR}/ComponentsWizard/PackageManifest.h"
+        "${CMAKE_CURRENT_SOURCE_DIR}/Protocol/UnlockCrypto.h"
     VERBATIM
 )
 target_sources(unlock_windows_components_wizard PRIVATE
-    "${unlock_payload_directory}/PackagePayload.rc" "${unlock_payload_directory}/PackagePayload.h")
-target_include_directories(unlock_windows_components_wizard PRIVATE "${unlock_payload_directory}")
+    "${unlock_payload_directory}/PackagePayload.rc")
+target_include_directories(unlock_windows_components_wizard PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 add_dependencies(unlock_windows_components_wizard ${unlock_payload_targets})
 
 set(UNLOCK_APP_ICON_ASSET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../ios/Assets.xcassets/AppIcon.appiconset")
@@ -349,17 +371,14 @@ if(NOT EXISTS "${UNLOCK_APP_ICON_SOURCE}")
 endif()
 configure_file(Resources/AppIcon.rc.in AppIcon.rc @ONLY)
 configure_file(Resources/DesktopUi.rc.in DesktopUi.rc @ONLY)
-foreach(unlock_desktop_target IN ITEMS unlock_desktop_app)
-    target_sources(${unlock_desktop_target} PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/DesktopUi.rc)
-    if(MSVC)
-        target_link_options(${unlock_desktop_target} PRIVATE /MANIFEST:NO)
-    endif()
-endforeach()
 target_sources(unlock_credential_provider PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/AppIcon.rc)
+target_sources(unlock_windows_components_wizard_objects PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/AppIcon.rc)
 get_property(unlock_windows_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
 foreach(unlock_windows_target IN LISTS unlock_windows_targets)
     get_target_property(unlock_windows_target_type ${unlock_windows_target} TYPE)
-    if(unlock_windows_target_type STREQUAL "EXECUTABLE")
+    if(unlock_windows_target_type STREQUAL "EXECUTABLE" AND NOT unlock_windows_target STREQUAL "unlock_windows_components_wizard")
         target_sources(${unlock_windows_target} PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/AppIcon.rc)
     endif()
 endforeach()
+
+include(DesktopApp/DesktopApp.cmake)

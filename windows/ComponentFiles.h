@@ -3,8 +3,11 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 
 namespace unlock::components {
+inline constexpr std::uint32_t kMinimumWindowsBuild = 17763;
+enum class Architecture { x64, arm64, unknown };
 inline constexpr wchar_t kCredentialProviderFile[] = L"unlock_credential_provider.dll";
 inline constexpr wchar_t kSavedCredentialServiceFile[] = L"unlock_saved_credential_service.exe";
 inline constexpr wchar_t kMainAppFile[] = L"UnlockWithIPhone.exe";

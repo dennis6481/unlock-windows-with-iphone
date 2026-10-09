@@ -3,7 +3,6 @@
 #include <windows.h>
 #include "@CMAKE_CURRENT_SOURCE_DIR@/Resources/resource.h"
 
-1 RT_MANIFEST "@CMAKE_CURRENT_SOURCE_DIR@/Resources/DesktopUi.manifest"
 
 #ifdef UNLOCK_UI_PAIRING
 IDD_PHONE_PAIRING DIALOGEX 0, 0, 360, 258

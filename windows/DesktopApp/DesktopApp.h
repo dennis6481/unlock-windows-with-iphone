@@ -10,6 +10,7 @@ namespace unlock_windows::desktop_app {
 inline constexpr wchar_t kBluetoothRole[] = L"--bluetooth";
 inline constexpr wchar_t kSavedPasswordRole[] = L"--saved-password";
 inline constexpr wchar_t kSetupRole[] = L"--setup";
+inline constexpr wchar_t kBackgroundRole[] = L"--background";
 inline constexpr wchar_t kTrayWindowClass[] = L"UnlockWindowsWithIPhoneGattHost";
 inline constexpr UINT kSetupMessage = WM_APP + 3;
 enum class SetupResult : DWORD { cancelled = 0, error = 1, credentialReady = 2 };
@@ -25,12 +26,14 @@ struct Launch final {
     bool clipboard = false;
     bool replace = false;
     bool setup = false;
+    bool background = false;
 };
 
 inline Launch parseLaunch(int argc, wchar_t* const argv[]) {
     if (argc == 1) return {};
     if (argc < 1) throw std::invalid_argument("Missing application arguments");
     const std::wstring_view command(argv[1]);
+    if (command == kBackgroundRole && argc == 2) return {Role::tray, false, false, false, false, true};
     if (command == kSetupRole && argc == 2) return {Role::setup};
     if (command == kSavedPasswordRole && argc == 2) return {Role::savedPassword};
     if (command == kSavedPasswordRole && argc == 3 && std::wstring_view(argv[2]) == kSetupRole)
@@ -46,7 +49,7 @@ inline Launch parseLaunch(int argc, wchar_t* const argv[]) {
     throw std::invalid_argument("Unknown or conflicting arguments. Use --key-hex <key> [--replace], --key-clipboard [--replace], or --clear for manual enrollment");
 }
 
-int runTray(HINSTANCE instance, bool setup = false);
+int runTray(HINSTANCE instance, bool setup = false, bool background = false);
 int runSavedPassword(HINSTANCE instance, int show, bool setup = false);
 int runEnrollment(wchar_t* argv[], const Launch& launch);
 }

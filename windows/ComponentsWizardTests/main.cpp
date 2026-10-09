@@ -93,10 +93,10 @@ int main() {
     snapshot.targetSid.clear(); state.targetSid.clear();
     expect(plan().action == MaintenanceAction::blocked, "missing recorded target cannot be rebound");
     snapshot = completeInstallation(); state.targetSid = snapshot.targetSid;
-    state.schemaVersion = 4;
+    state.schemaVersion = kWizardStateSchemaVersion - 1;
     expect(plan().action == MaintenanceAction::blocked, "old schema is unsupported");
     state.phase = WizardPhase::finalizing;
-    expect(plan().action == MaintenanceAction::blocked, "old six-component transaction cannot resume with the new installer");
+    expect(plan().action == MaintenanceAction::blocked, "previous-schema transaction cannot resume with the new installer");
     state.phase = WizardPhase::installed;
     state.schemaVersion = kWizardStateSchemaVersion;
     snapshot.continuationTaskPresent = true;

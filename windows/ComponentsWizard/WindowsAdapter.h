@@ -3,7 +3,7 @@
 #pragma once
 
 #include "ComponentState.h"
-#include "../ComponentFiles.h"
+#include "PackageManifest.h"
 
 #include <exception>
 #include <filesystem>
@@ -25,12 +25,6 @@ private:
     std::string narrow_;
 };
 
-enum class Architecture {
-    x64,
-    arm64,
-    unknown,
-};
-
 struct EnvironmentStatus final {
     bool elevated = false;
     Architecture nativeArchitecture = Architecture::unknown;
@@ -48,8 +42,11 @@ public:
     [[nodiscard]] std::filesystem::path savedCredentialServiceTarget() const;
     [[nodiscard]] std::filesystem::path componentTarget(const ComponentFile& component) const;
     [[nodiscard]] ProductVersion binaryVersion(const std::filesystem::path& file) const;
+    void validatePackageFile(const PackageFile& entry, const std::filesystem::path& path,
+        ProductVersion version) const;
     [[nodiscard]] ProductVersion validatePackage(const WizardState& state) const;
     void validateInstalledVersions(const WizardState& state) const;
+    [[nodiscard]] std::vector<PackageFile> installedPackageFiles() const;
     void ensureDeploymentDirectories() const;
     void removeProductData(const WizardState& state) const;
     void startFinalization(const WizardState& state) const;

@@ -5,7 +5,7 @@
 #include "AdvertisingLifecycle.h"
 #include "TransportReadiness.h"
 #include "../DesktopApp/DesktopApp.h"
-#include "../DesktopApp/TrayManager.h"
+#include "GattController.h"
 #include "EnrollmentStore.h"
 #include "../Enrollment/EnrollmentSession.h"
 #include "../Enrollment/EnrollmentChannel.h"
@@ -61,7 +61,10 @@ constexpr std::uint8_t kRejectRequest = 0x03;
 constexpr std::uint8_t kEnrollmentRequest = 0x02;
 
 constexpr UINT kDispatch = WM_APP + 1;
-constexpr UINT kShowDashboard = WM_APP + 4;
+constexpr wchar_t kControlWindowClass[] = L"UnlockWindowsWithIPhoneGattControl";
+class GattControl;
+}
+namespace unlock_windows::desktop_app {
 
 struct CallbackState final {
     std::mutex mutex;
@@ -73,16 +76,56 @@ struct CallbackState final {
     std::wstring diagnostics;
     std::wstring transportError;
 
-    void post(std::function<void()> action) {
+    bool post(std::function<void()> action) {
         std::lock_guard lock(mutex);
-        if (!accepting) return;
+        if (!accepting) return false;
         pending.push_back(std::move(action));
-        if (!PostMessageW(window, kDispatch, 0, 0)) {
+        if (window && !PostMessageW(window, kDispatch, 0, 0)) {
             transportError = L"PostMessageW failed: Win32=" + std::to_wstring(GetLastError());
             OutputDebugStringW(transportError.c_str());
         }
+        return true;
     }
 
+    GattControl* control = nullptr;
+    bool stopRequested = false;
+    bool controlReady = false;
+    bool failed = false;
+    std::optional<DashboardSnapshot> snapshot;
+    std::vector<GattNotice> notices;
+    std::function<bool()> wake;
+
+    void notify() {
+        try {
+            if (!wake()) record(L"Desktop dispatcher: background notification rejected; the STA timer will observe it.", false);
+        } catch (const winrt::hresult_error& error) {
+            record(L"Desktop dispatcher: " + std::wstring(error.message()), false);
+        }
+    }
+
+    bool stopping() {
+        std::lock_guard lock(mutex);
+        return stopRequested;
+    }
+
+    void stop() {
+        {
+            std::lock_guard lock(mutex);
+            stopRequested = true;
+            accepting = false;
+            pending.clear();
+        }
+        notify();
+    }
+
+    void notice(std::wstring message, std::wstring title, UINT flags, bool requireRunning = false) {
+        {
+            std::lock_guard lock(mutex);
+            if (requireRunning && stopRequested) return;
+            notices.push_back({std::move(message), std::move(title), flags});
+        }
+        notify();
+    }
     void record(const std::wstring& message, bool error) {
         SYSTEMTIME utc{};
         GetSystemTime(&utc);
@@ -101,6 +144,9 @@ struct CallbackState final {
     }
 };
 
+}
+namespace {
+using CallbackState = unlock_windows::desktop_app::CallbackState;
 class LogLine final : public std::ostringstream {
 public:
     LogLine(std::shared_ptr<CallbackState> state, bool error) : state_(std::move(state)), error_(error) {}
@@ -808,84 +854,51 @@ private:
     event_token advertisementStatusToken_{};
 };
 
-class TrayHost final {
+class GattControl final {
 public:
-    TrayHost() : state_(std::make_shared<CallbackState>()), host_(state_),
-        tray_([this](unlock_windows::desktop_app::TrayCommand command) { trayCommand(command); },
-            [this] { return unlock_windows::desktop_app::TrayMenuState{
-                busy()}; },
-            [this](const std::wstring& message, bool error) { state_->record(message, error); }) {
+    explicit GattControl(std::shared_ptr<CallbackState> state) : state_(std::move(state)), host_(state_) {
         host_.enrollmentRequest = [this](const auto& bytes, const auto& session, ULONGLONG receivedAt) {
             receiveEnrollment(bytes, session, receivedAt);
         };
     }
-    ~TrayHost() { close(); }
+    ~GattControl() { close(); }
 
-    int run(HINSTANCE instance, bool setup, bool background) {
+    void run(HINSTANCE instance) {
+        if (state_->stopping()) return;
         requireWin32(ProcessIdToSessionId(GetCurrentProcessId(), &session_), L"ProcessIdToSessionId");
-        singleton_ = CreateMutexW(nullptr, FALSE, L"Local\\UnlockWindowsWithIPhone-GattHost");
-        if (!singleton_) requireWin32(FALSE, L"CreateMutexW");
-        if (GetLastError() == ERROR_ALREADY_EXISTS) {
-            if (setup || !background) {
-                HWND existing = nullptr;
-                for (int attempt = 0; attempt < 40 && !existing; ++attempt) {
-                    existing = FindWindowW(unlock_windows::desktop_app::kTrayWindowClass, nullptr);
-                    if (!existing) Sleep(50);
-                }
-                if (!existing) throw std::runtime_error("The existing tray is not ready. Choose Continue setup from its menu.");
-                DWORD pid = 0, session = 0xffffffff;
-                GetWindowThreadProcessId(existing, &pid);
-                requireWin32(pid && ProcessIdToSessionId(pid, &session) && session == session_, L"Verify setup tray session");
-                UINT request = unlock_windows::desktop_app::kSetupMessage;
-                if (!setup) {
-                    request = kShowDashboard;
-                }
-                requireWin32(PostMessageW(existing, request, 0, 0), L"Request setup from tray");
-            }
-            return 0;
-        }
-        tray_.loadIcon(instance);
-
         WNDCLASSW windowClass{};
         windowClass.hInstance = instance;
-        windowClass.hIcon = tray_.icon();
-        windowClass.lpszClassName = unlock_windows::desktop_app::kTrayWindowClass;
+        windowClass.lpszClassName = kControlWindowClass;
         windowClass.lpfnWndProc = windowProcedure;
-        requireWin32(RegisterClassW(&windowClass), L"RegisterClassW");
+        requireWin32(RegisterClassW(&windowClass), L"RegisterClassW(GATT control)");
         window_ = CreateWindowExW(0, windowClass.lpszClassName, UNLOCK_PRODUCT_DISPLAY_NAME,
             0, 0, 0, 0, 0, nullptr, nullptr, instance, this);
-        if (!window_) requireWin32(FALSE, L"CreateWindowExW");
-        state_->window = window_;
-        dashboard_ = std::make_unique<unlock_windows::desktop_app::Dashboard>(
-            [this, state = state_](bool remove) {
-                state->post([this, remove] {
-                    startPairing(remove);
-                    publishDashboard(true);
-                });
-            },
-            [this, state = state_] {
-                state->post([this] { reconcile(true); publishDashboard(true); });
-            },
-            [this, state = state_] {
-                state->post([this] { manageSavedPassword(); });
-            },
-            [this, state = state_](std::wstring error) {
-                state->record(L"Dashboard: " + error, true);
-                state->post([this, error = std::move(error)] {
-                    if (!closing_) MessageBoxW(window_, error.c_str(), L"Dashboard needs attention", MB_OK | MB_ICONERROR);
-                });
-            });
-        tray_.bind(window_, condition_);
+        if (!window_) requireWin32(FALSE, L"CreateWindowExW(GATT control)");
+        {
+            std::lock_guard lock(state_->mutex);
+            state_->window = window_;
+            state_->control = this;
+        }
+        requireWin32(WTSRegisterSessionNotification(window_, NOTIFY_FOR_ALL_SESSIONS),
+            L"WTSRegisterSessionNotification");
+        sessionRegistered_ = true;
         if (!SetTimer(window_, 1, 1000, nullptr)) requireWin32(FALSE, L"SetTimer");
-        try {
-            host_.initialize([this] { reconcile(false); });
-        } catch (...) {
+        {
+            std::lock_guard lock(state_->mutex);
+            state_->controlReady = true;
+        }
+        state_->notify();
+        if (state_->stopping()) { close(); return; }
+        try { host_.initialize([this] { reconcile(false); }); }
+        catch (...) {
             initializationError_ = exceptionText();
             state_->record(L"GATT initialization: " + initializationError_, true);
         }
+        initializing_ = false;
+        if (state_->stopping()) { close(); return; }
         reconcile(true);
-        if (setup) requireWin32(PostMessageW(window_, unlock_windows::desktop_app::kSetupMessage, 0, 0), L"Begin setup");
-        else if (!background) showDetails();
+        publishDashboard();
+        requireWin32(PostMessageW(window_, kDispatch, 0, 0), L"Dispatch pending GATT requests");
         MSG message{};
         BOOL result;
         while ((result = GetMessageW(&message, nullptr, 0, 0)) > 0) {
@@ -893,9 +906,27 @@ public:
             DispatchMessageW(&message);
         }
         if (result == -1) requireWin32(FALSE, L"GetMessageW");
-        return 0;
     }
 
+    void execute(unlock_windows::desktop_app::TrayCommand command) {
+        using unlock_windows::desktop_app::TrayCommand;
+        if (state_->stopping()) return;
+        try {
+            if (!host_.initialized() && command != TrayCommand::status && command != TrayCommand::managePassword)
+                throw std::runtime_error("GATT initialization failed; the requested operation cannot start. Restart the EXE.");
+            switch (command) {
+            case TrayCommand::status: reconcile(true); break;
+            case TrayCommand::continueSetup: continueSetup(); break;
+            case TrayCommand::pairPhone: startPairing(); break;
+            case TrayCommand::removePhone: startPairing(true); break;
+            case TrayCommand::managePassword: manageSavedPassword(); break;
+            }
+        } catch (...) {
+            const auto error = exceptionText();
+            state_->record(L"Desktop request: " + error, true);
+            state_->notice(error, L"Requested operation could not start", MB_OK | MB_ICONERROR);
+        }
+    }
 private:
     struct Pairing final {
         unlock_windows::enrollment::Console target;
@@ -965,7 +996,7 @@ private:
             const auto error = exceptionText();
             state_->record(L"Pairing start: " + error, true);
             finishPairing("enrollment_error");
-            MessageBoxW(window_, error.c_str(), L"Could not start iPhone pairing", MB_OK | MB_ICONERROR);
+            state_->notice(error.c_str(), L"Could not start iPhone pairing", MB_OK | MB_ICONERROR);
         }
     }
 
@@ -989,7 +1020,7 @@ private:
         }
         if (guided && !job->remove && !savedReloadFailed &&
             (std::string_view(result) == "enrollment_saved" || std::string_view(result) == "enrollment_already_registered"))
-            MessageBoxW(window_, L"Setup is configured. Lock this PC to test iPhone unlock. Windows has not yet verified the saved password.",
+            state_->notice(L"Setup is configured. Lock this PC to test iPhone unlock. Windows has not yet verified the saved password.",
                 L"Setup configured", MB_OK | MB_ICONINFORMATION);
     }
 
@@ -1157,17 +1188,11 @@ private:
     }
 
     void reconcile(bool recheck) {
-        if (closing_) return;
+        if (closing_ || state_->stopping()) return;
         bool locked = false;
         bool lifecycleConfirmed = false;
         std::wstring currentError;
         try {
-            if (!sessionRegistered_) {
-                if (!recheck) throw hresult_error(E_FAIL, L"WTS notifications are not registered; open Status and choose Refresh");
-                requireWin32(WTSRegisterSessionNotification(window_, NOTIFY_FOR_ALL_SESSIONS),
-                    L"WTSRegisterSessionNotification");
-                sessionRegistered_ = true;
-            }
             locked = queryLocked();
             checkPairing();
             if (suspended_ || endingSession_) {
@@ -1219,8 +1244,6 @@ private:
         if (!currentError.empty() && currentError != lastError_) state_->record(currentError, false);
         if (lifecycleConfirmed) lastError_.clear();
         else if (!currentError.empty()) lastError_ = currentError;
-        tray_.update(!lastError_.empty() ? L"Needs attention: " + condition_ : condition_);
-        publishDashboard();
     }
 
     std::wstring technicalDetails() {
@@ -1237,10 +1260,10 @@ private:
             L"\r\n\r\nDiagnostic history:\r\n" + state_->diagnostics;
     }
 
-    bool busy() const { return pairing_ || launchOutstanding_ || setupPasswordPending_; }
+    bool busy() const { return initializing_ || pairing_ || launchOutstanding_ || setupPasswordPending_; }
 
-    void publishDashboard(bool force = false) {
-        if (!dashboard_ || (!force && !dashboard_->visible())) return;
+    void publishDashboard() {
+        if (closing_ || state_->stopping()) return;
         unlock_windows::desktop_app::DashboardSnapshot snapshot;
         snapshot.busy = busy();
         snapshot.status = condition_;
@@ -1252,19 +1275,11 @@ private:
         catch (...) {
             snapshot.error += L"\nCould not read the paired iPhone: " + exceptionText();
         }
-        dashboard_->update(std::move(snapshot));
-    }
-
-    void showDetails() {
-        try {
-            reconcile(true);
-            publishDashboard(true);
-            dashboard_->show();
-        } catch (...) {
-            const auto error = exceptionText();
-            state_->record(L"Dashboard: " + error, true);
-            MessageBoxW(window_, error.c_str(), L"Could not open Dashboard", MB_OK | MB_ICONERROR);
+        {
+            std::lock_guard lock(state_->mutex);
+            state_->snapshot = std::move(snapshot);
         }
+        state_->notify();
     }
 
     void manageSavedPassword() {
@@ -1288,7 +1303,7 @@ private:
         } catch (...) {
             const auto error = exceptionText();
             state_->record(L"Saved password manager: " + error, true);
-            MessageBoxW(window_, error.c_str(), L"Could not open saved password manager", MB_OK | MB_ICONERROR);
+            state_->notice(error, L"Could not open saved password manager", MB_OK | MB_ICONERROR);
         }
     }
 
@@ -1300,7 +1315,7 @@ private:
         if (registration && registration->accountSid != target.sid)
             throw std::runtime_error("The paired iPhone belongs to a different Windows account.");
         if (registration) {
-            MessageBoxW(window_, L"A password copy and iPhone registration are present. Lock this PC to test iPhone unlock. Windows has not yet verified the saved password.",
+            state_->notice(L"A password copy and iPhone registration are present. Lock this PC to test iPhone unlock. Windows has not yet verified the saved password.",
                 L"Setup configured", MB_OK | MB_ICONINFORMATION);
             return;
         }
@@ -1353,44 +1368,32 @@ private:
                     } catch (...) {
                         const auto message = exceptionText();
                         state_->record(L"Setup: " + message, true);
-                        MessageBoxW(window_, message.c_str(), L"Setup needs attention", MB_OK | MB_ICONERROR);
+                        state_->notice(message, L"Setup needs attention", MB_OK | MB_ICONERROR);
                     }
                 });
             }).detach();
         } catch (...) { setupPasswordPending_ = false; throw; }
     }
 
-    void trayCommand(unlock_windows::desktop_app::TrayCommand command) {
-        using unlock_windows::desktop_app::TrayCommand;
-        switch (command) {
-        case TrayCommand::status: showDetails(); break;
-        case TrayCommand::quit:
-            requireWin32(PostMessageW(window_, WM_CLOSE, 0, 0), L"PostMessageW(WM_CLOSE)");
-            break;
-        case TrayCommand::pairPhone: startPairing(); break;
-        case TrayCommand::managePassword: manageSavedPassword(); break;
-        case TrayCommand::removePhone: startPairing(true); break;
-        case TrayCommand::continueSetup:
-            requireWin32(PostMessageW(window_, unlock_windows::desktop_app::kSetupMessage, 0, 0), L"Continue setup");
-            break;
-        }
-    }
-
     void dispatch() {
-        if (!closing_) tray_.retryRegistration();
+        if (state_->stopping()) { close(); return; }
         std::deque<std::function<void()>> pending;
         { std::lock_guard lock(state_->mutex); pending.swap(state_->pending); }
         for (auto& action : pending) {
-            if (closing_) break;
+            if (closing_ || state_->stopping()) break;
             action();
         }
-        reconcile(false);
+        if (state_->stopping()) close();
+        else if (!closing_) {
+            reconcile(false);
+            publishDashboard();
+        }
     }
 
     void close() {
         if (closing_) return;
         closing_ = true;
-        if (dashboard_) dashboard_->stop();
+        state_->stop();
         try { finishPairing("enrollment_cancelled"); }
         catch (...) { state_->record(L"Pairing shutdown: " + exceptionText(), true); }
         host_.shutdown();
@@ -1398,33 +1401,23 @@ private:
             if (sessionRegistered_ && !WTSUnRegisterSessionNotification(window_))
                 state_->record(L"WTSUnRegisterSessionNotification Win32=" + std::to_wstring(GetLastError()), true);
             KillTimer(window_, 1);
-            tray_.stop();
             DestroyWindow(window_);
             window_ = nullptr;
         }
-        tray_.releaseIcon();
-        if (singleton_) { CloseHandle(singleton_); singleton_ = nullptr; }
+        std::lock_guard lock(state_->mutex);
+        state_->window = nullptr;
+        state_->control = nullptr;
     }
 
     static LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
-        auto* self = reinterpret_cast<TrayHost*>(GetWindowLongPtrW(window, GWLP_USERDATA));
+        auto* self = reinterpret_cast<GattControl*>(GetWindowLongPtrW(window, GWLP_USERDATA));
         if (message == WM_NCCREATE) {
-            self = static_cast<TrayHost*>(reinterpret_cast<CREATESTRUCTW*>(lparam)->lpCreateParams);
+            self = static_cast<GattControl*>(reinterpret_cast<CREATESTRUCTW*>(lparam)->lpCreateParams);
             SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
         }
         if (!self) return DefWindowProcW(window, message, wparam, lparam);
         try {
-            if (const auto result = self->tray_.handleMessage(message, wparam, lparam)) return *result;
             switch (message) {
-            case kShowDashboard: self->showDetails(); return 0;
-            case unlock_windows::desktop_app::kSetupMessage:
-                try { self->continueSetup(); }
-                catch (...) {
-                    const auto error = exceptionText();
-                    self->state_->record(L"Setup: " + error, true);
-                    MessageBoxW(window, error.c_str(), L"Setup needs attention", MB_OK | MB_ICONERROR);
-                }
-                return 0;
             case kDispatch: self->dispatch(); return 0;
             case WM_TIMER: self->dispatch(); return 0;
             case WM_WTSSESSION_CHANGE:
@@ -1433,28 +1426,39 @@ private:
                     WTSGetActiveConsoleSessionId() != self->session_)) self->finishPairing("enrollment_cancelled");
                 if (wparam == WTS_SESSION_LOGOFF && static_cast<DWORD>(lparam) == self->session_) self->close();
                 else self->reconcile(false);
+                self->publishDashboard();
                 return 0;
             case WM_POWERBROADCAST:
                 if (wparam == PBT_APMSUSPEND) self->suspended_ = true;
                 if (wparam == PBT_APMRESUMEAUTOMATIC || wparam == PBT_APMRESUMESUSPEND) self->suspended_ = false;
                 self->reconcile(false);
+                self->publishDashboard();
                 return TRUE;
             case WM_QUERYENDSESSION:
                 self->endingSession_ = true;
                 self->reconcile(false);
+                self->publishDashboard();
                 return TRUE;
             case WM_ENDSESSION:
                 if (wparam) self->close();
                 else { self->endingSession_ = false; self->reconcile(false); }
+                self->publishDashboard();
                 return 0;
             case WM_CLOSE: self->close(); return 0;
             case WM_DESTROY: PostQuitMessage(0); return 0;
+            case WM_NCDESTROY:
+                SetWindowLongPtrW(window, GWLP_USERDATA, 0);
+                break;
             }
         } catch (...) {
             self->lastError_ = exceptionText();
             self->state_->record(self->lastError_, true);
+            {
+                std::lock_guard lock(self->state_->mutex);
+                self->state_->failed = true;
+            }
             self->close();
-            MessageBoxW(nullptr, self->lastError_.c_str(), L"Phone connectivity stopped", MB_OK | MB_ICONERROR);
+            self->state_->notice(self->lastError_, L"Phone connectivity stopped", MB_OK | MB_ICONERROR);
             return message == WM_QUERYENDSESSION ? TRUE : 0;
         }
         return DefWindowProcW(window, message, wparam, lparam);
@@ -1462,10 +1466,8 @@ private:
 
     std::shared_ptr<CallbackState> state_;
     GattHost host_;
-    unlock_windows::desktop_app::TrayManager tray_;
-    std::unique_ptr<unlock_windows::desktop_app::Dashboard> dashboard_;
     HWND window_ = nullptr;
-    HANDLE singleton_ = nullptr;
+    bool initializing_ = true;
     DWORD session_ = 0;
     bool sessionRegistered_ = false;
     bool closing_ = false;
@@ -1484,16 +1486,71 @@ private:
 
 } // namespace
 
-int unlock_windows::desktop_app::runTray(HINSTANCE instance, bool setup, bool background) {
-    try {
-        unlock_windows::desktop_ui::initialize();
-        init_apartment(apartment_type::multi_threaded);
-        struct Apartment final { ~Apartment() { uninit_apartment(); } } apartment;
-        TrayHost app;
-        return app.run(instance, setup, background);
-    } catch (...) {
-        const auto error = exceptionText();
-        MessageBoxW(nullptr, error.c_str(), L"Could not start phone connectivity", MB_OK | MB_ICONERROR);
-        return 1;
+namespace unlock_windows::desktop_app {
+
+GattController::GattController(std::function<bool()> wake) : state_(std::make_shared<CallbackState>()) {
+    state_->wake = std::move(wake);
+}
+
+void GattController::start(HINSTANCE instance) {
+    thread_ = std::thread([state = state_, instance] {
+        try {
+            winrt::init_apartment(winrt::apartment_type::multi_threaded);
+            struct Apartment final { ~Apartment() { winrt::uninit_apartment(); } } apartment;
+            GattControl control(state);
+            control.run(instance);
+        } catch (...) {
+            const auto error = exceptionText();
+            state->record(L"GATT controller: " + error, true);
+            {
+                std::lock_guard lock(state->mutex);
+                state->failed = true;
+            }
+            state->notice(error, L"Phone connectivity stopped", MB_OK | MB_ICONERROR);
+        }
+        state->stop();
+    });
+}
+
+bool GattController::command(TrayCommand command) {
+    return state_->post([state = state_, command] { state->control->execute(command); });
+}
+
+void GattController::requestStop() { state_->stop(); }
+
+GattUpdate GattController::takeUpdate() {
+    std::lock_guard lock(state_->mutex);
+    GattUpdate update;
+    update.controlReady = state_->controlReady;
+    update.stopping = state_->stopRequested;
+    update.failed = state_->failed;
+    update.snapshot = std::move(state_->snapshot);
+    state_->snapshot.reset();
+    update.notices.swap(state_->notices);
+    return update;
+}
+
+bool GattController::ended() {
+    if (!thread_.joinable()) return true;
+    const DWORD result = WaitForSingleObject(thread_.native_handle(), 0);
+    if (result == WAIT_FAILED) requireWin32(FALSE, L"Observe GATT control thread");
+    return result == WAIT_OBJECT_0;
+}
+
+void GattController::join() {
+    if (thread_.joinable()) {
+        if (!ended()) throw std::logic_error("GATT control thread is still running");
+        thread_.join();
     }
+}
+
+void GattController::record(const std::wstring& message) { state_->record(message, false); }
+
+std::function<void(std::wstring)> GattController::errorReporter(std::wstring title) {
+    return [state = state_, title = std::move(title)](std::wstring message) {
+        state->record(message, false);
+        state->notice(std::move(message), title, MB_OK | MB_ICONERROR, true);
+    };
+}
+
 }

@@ -13,7 +13,6 @@
 #include "Pages/PasswordPage.xaml.h"
 #include "Pages/DiagnosticsPage.xaml.h"
 #include <winrt/Windows.UI.Xaml.Interop.h>
-#include <winrt/Microsoft.UI.Dispatching.h>
 #include <winrt/Microsoft.UI.Windowing.h>
 #include <winrt/Microsoft.UI.Xaml.h>
 #include "Pages/AboutPage.xaml.h"
@@ -22,9 +21,6 @@
 #include <winrt/Microsoft.UI.Xaml.Markup.h>
 #include <winrt/Microsoft.UI.Xaml.Media.h>
 #include <winrt/UnlockDesktop.h>
-
-#include <mutex>
-#include <thread>
 #include <utility>
 
 namespace unlock_windows::desktop_app {
@@ -37,9 +33,8 @@ using namespace winrt::Microsoft::UI::Xaml::Markup;
 using namespace dashboard_ui;
 
 struct Dashboard::State final {
-    std::mutex mutex;
-    std::thread thread;
-    Dispatching::DispatcherQueue dispatcher{nullptr};
+    struct View;
+    std::unique_ptr<View> view;
     DashboardSnapshot snapshot;
     PairingAction action;
     RefreshAction refresh;
@@ -47,35 +42,9 @@ struct Dashboard::State final {
     ReportError reportError;
     std::wstring failure;
     bool stopping = false;
-    bool shown = false;
-    bool showRequested = false;
 
-    struct App;
-    App* app = nullptr;
-
-    void report(std::wstring message) {
-        std::lock_guard lock(mutex);
-        if (stopping) {
-            OutputDebugStringW(message.c_str());
-            return;
-        }
-        failure = message;
-        reportError(std::move(message));
-    }
-
-    void enqueue(Dispatching::DispatcherQueueHandler handler) {
-        Dispatching::DispatcherQueue queue{nullptr};
-        {
-            std::lock_guard lock(mutex);
-            queue = dispatcher;
-        }
-        try {
-            if (queue && !queue.TryEnqueue(handler))
-                report(L"The Dashboard UI dispatcher rejected an update.");
-        } catch (...) { report(currentException()); }
-    }
+    void fail(const hresult_error& error);
 };
-
 namespace {
 NavigationViewItem navigationItem(const wchar_t* label, const wchar_t* glyph) {
     NavigationViewItem item;
@@ -87,64 +56,25 @@ NavigationViewItem navigationItem(const wchar_t* label, const wchar_t* glyph) {
 
 }
 
-struct Dashboard::State::App : ApplicationT<App, IXamlMetadataProvider> {
-    explicit App(std::shared_ptr<State> state) : state_(std::move(state)) {}
-
-    IXamlType GetXamlType(const Windows::UI::Xaml::Interop::TypeName& type) {
-        return provider_.GetXamlType(type);
-    }
-    IXamlType GetXamlType(const hstring& name) { return provider_.GetXamlType(name); }
-    com_array<XmlnsDefinition> GetXmlnsDefinitions() { return provider_.GetXmlnsDefinitions(); }
-
-    void OnLaunched(const LaunchActivatedEventArgs&) {
-        try {
-            state_->app = this;
-            Resources().MergedDictionaries().Append(XamlControlsResources{});
-            unhandledToken_ = UnhandledException([this](const auto&, const UnhandledExceptionEventArgs& args) {
-                args.Handled(true);
-                state_->report(L"Dashboard UI: " + std::wstring(args.Message()));
-                shutdown();
-            });
-            buildWindow();
-            bool stopping;
-            {
-                std::lock_guard lock(state_->mutex);
-                state_->dispatcher = Dispatching::DispatcherQueue::GetForCurrentThread();
-                stopping = state_->stopping;
-            }
-            if (stopping) { shutdown(); return; }
-            refresh();
-        } catch (...) {
-            state_->report(currentException());
-            shutdown();
-        }
-    }
-
+struct Dashboard::State::View final {
+    explicit View(State* state) : state_(state) {}
     void refresh() {
+        if (exiting_ || state_->stopping) return;
         try {
-            DashboardSnapshot snapshot;
-            bool show;
-            bool stopping;
-            {
-                std::lock_guard lock(state_->mutex);
-                snapshot = state_->snapshot;
-                show = std::exchange(state_->showRequested, false);
-                stopping = state_->stopping;
-            }
-            if (stopping) { shutdown(); return; }
-            snapshot_ = std::move(snapshot);
+            if (!window_) buildWindow();
+            if (!state_->failure.empty()) return;
             applySnapshot();
-            if (show) {
-                ShowWindow(hwnd_, SW_RESTORE);
-                window_.Activate();
-                SetForegroundWindow(hwnd_);
-                std::lock_guard lock(state_->mutex);
-                state_->shown = true;
-            }
-        } catch (...) {
-            state_->report(currentException());
-            shutdown();
-        }
+        } catch (const hresult_error& error) { state_->fail(error); }
+    }
+
+    void show() {
+        refresh();
+        if (exiting_ || state_->stopping || !window_) return;
+        try {
+            ShowWindow(hwnd_, SW_RESTORE);
+            window_.Activate();
+            SetForegroundWindow(hwnd_);
+        } catch (const hresult_error& error) { state_->fail(error); }
     }
 
 private:
@@ -181,10 +111,10 @@ private:
         SendMessageW(hwnd_, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(appIcon));
         if (!SetWindowSubclass(hwnd_, sizing, 1, 0)) throw_last_error();
         closingToken_ = appWindow_.Closing([this](const auto&, const Windowing::AppWindowClosingEventArgs& args) {
-            args.Cancel(true);
-            appWindow_.Hide();
-            std::lock_guard lock(state_->mutex);
-            state_->shown = false;
+            try {
+                args.Cancel(true);
+                appWindow_.Hide();
+            } catch (const hresult_error& error) { state_->fail(error); }
         });
 
         nav_ = NavigationView{};
@@ -227,17 +157,22 @@ private:
         action_.HorizontalAlignment(HorizontalAlignment::Right);
         Grid::SetColumn(action_, 1);
         actionToken_ = action_.Click([this](const auto&, const auto&) {
-            if (!snapshot_.paired.has_value() || snapshot_.busy || actionPending_) return;
-            actionPending_ = true;
-            action_.IsEnabled(false);
-            state_->action(*snapshot_.paired);
+            try {
+                if (!state_->snapshot.paired.has_value() || state_->snapshot.busy || actionPending_) return;
+                actionPending_ = true;
+                action_.IsEnabled(false);
+                state_->action(*state_->snapshot.paired);
+            } catch (const hresult_error& error) { state_->fail(error); }
         });
         actions.Children().Append(action_);
         refresh_ = Button{};
         refresh_.Content(box_value(L"Refresh"));
         refresh_.HorizontalAlignment(HorizontalAlignment::Right);
         Grid::SetColumn(refresh_, 1);
-        refreshToken_ = refresh_.Click([this](const auto&, const auto&) { state_->refresh(); });
+        refreshToken_ = refresh_.Click([this](const auto&, const auto&) {
+            try { state_->refresh(); }
+            catch (const hresult_error& error) { state_->fail(error); }
+        });
         actions.Children().Append(refresh_);
         header.Children().Append(actions);
         root_.Children().Append(header);
@@ -249,50 +184,53 @@ private:
 
         nav_.Content(root_);
         navigationToken_ = nav_.SelectionChanged([this](const auto&, const NavigationViewSelectionChangedEventArgs& args) {
-            const auto item = args.SelectedItem().try_as<NavigationViewItem>();
-            if (!item) return;
-            const auto label = unbox_value<hstring>(item.Tag());
-            const bool statusPage = label == L"Status";
-            const bool diagnosticsPage = label == L"Diagnostics";
-            if (statusPage) {
-                statusPage_ = navigateTo<winrt::UnlockDesktop::StatusPage>();
-                get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->Update(snapshot_);
-            } else if (diagnosticsPage) {
-                diagnosticsPage_ = navigateTo<winrt::UnlockDesktop::DiagnosticsPage>();
-                get_self<winrt::UnlockDesktop::implementation::DiagnosticsPage>(diagnosticsPage_)->Update(snapshot_.diagnostics);
-            } else if (label == L"Password") {
-                const auto page = navigateTo<winrt::UnlockDesktop::PasswordPage>();
-                get_self<winrt::UnlockDesktop::implementation::PasswordPage>(page)->Bind(state_->password);
-            } else if (label == L"About") {
-                aboutPage_ = navigateTo<winrt::UnlockDesktop::AboutPage>();
-                get_self<winrt::UnlockDesktop::implementation::AboutPage>(aboutPage_)->Bind(
-                    [state = state_](std::wstring message) { state->report(std::move(message)); });
-            } else throw hresult_invalid_argument(L"Unknown Dashboard page.");
-            root_.MaxWidth(diagnosticsPage ? 900 : 560);
-            title_.Text(label);
-            action_.Visibility(statusPage ? Visibility::Visible : Visibility::Collapsed);
-            refresh_.Visibility(statusPage || diagnosticsPage ? Visibility::Visible : Visibility::Collapsed);
+            try {
+                const auto item = args.SelectedItem().try_as<NavigationViewItem>();
+                if (!item) return;
+                const auto label = unbox_value<hstring>(item.Tag());
+                const bool statusPage = label == L"Status";
+                const bool diagnosticsPage = label == L"Diagnostics";
+                if (statusPage) {
+                    statusPage_ = navigateTo<winrt::UnlockDesktop::StatusPage>();
+                    get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->Update(state_->snapshot);
+                } else if (diagnosticsPage) {
+                    diagnosticsPage_ = navigateTo<winrt::UnlockDesktop::DiagnosticsPage>();
+                    get_self<winrt::UnlockDesktop::implementation::DiagnosticsPage>(diagnosticsPage_)->Update(state_->snapshot.diagnostics);
+                } else if (label == L"Password") {
+                    const auto page = navigateTo<winrt::UnlockDesktop::PasswordPage>();
+                    get_self<winrt::UnlockDesktop::implementation::PasswordPage>(page)->Bind(state_->password);
+                } else if (label == L"About") {
+                    aboutPage_ = navigateTo<winrt::UnlockDesktop::AboutPage>();
+                    get_self<winrt::UnlockDesktop::implementation::AboutPage>(aboutPage_)->Bind(
+                        state_->reportError);
+                } else throw hresult_invalid_argument(L"Unknown Dashboard page.");
+                root_.MaxWidth(diagnosticsPage ? 900 : 560);
+                title_.Text(label);
+                action_.Visibility(statusPage ? Visibility::Visible : Visibility::Collapsed);
+                refresh_.Visibility(statusPage || diagnosticsPage ? Visibility::Visible : Visibility::Collapsed);
+            } catch (const hresult_error& error) { state_->fail(error); }
         });
         nav_.SelectedItem(status);
+        if (!state_->failure.empty()) return;
         window_.Content(nav_);
         root_.RequestedTheme(ElementTheme::Default);
     }
 
     void applySnapshot() {
+        const auto& snapshot = state_->snapshot;
         actionPending_ = false;
-        const bool known = snapshot_.paired.has_value();
-        const bool paired = snapshot_.paired.value_or(false);
+        const bool known = snapshot.paired.has_value();
+        const bool paired = snapshot.paired.value_or(false);
         action_.Content(box_value(hstring(paired ? L"Remove iPhone" : L"Pair iPhone")));
-        action_.IsEnabled(known && !snapshot_.busy);
-        if (statusPage_) get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->Update(snapshot_);
-        if (diagnosticsPage_) get_self<winrt::UnlockDesktop::implementation::DiagnosticsPage>(diagnosticsPage_)->Update(snapshot_.diagnostics);
+        action_.IsEnabled(known && !snapshot.busy);
+        if (statusPage_) get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->Update(snapshot);
+        if (diagnosticsPage_) get_self<winrt::UnlockDesktop::implementation::DiagnosticsPage>(diagnosticsPage_)->Update(snapshot.diagnostics);
     }
 
 public:
     void shutdown() {
         if (exiting_) return;
         exiting_ = true;
-        if (unhandledToken_.value) UnhandledException(unhandledToken_);
         if (appWindow_ && closingToken_.value) appWindow_.Closing(closingToken_);
         if (nav_ && navigationToken_.value) nav_.SelectionChanged(navigationToken_);
         if (action_ && actionToken_.value) action_.Click(actionToken_);
@@ -301,18 +239,10 @@ public:
         if (hwnd_) RemoveWindowSubclass(hwnd_, sizing, 1);
         if (window_) window_.Close();
         window_ = nullptr;
-        state_->app = nullptr;
-        {
-            std::lock_guard lock(state_->mutex);
-            state_->dispatcher = nullptr;
-            state_->shown = false;
-        }
-        Exit();
     }
 
 private:
-    std::shared_ptr<State> state_;
-    winrt::UnlockDesktop::XamlMetaDataProvider provider_;
+    State* state_;
     Window window_{nullptr};
     Windowing::AppWindow appWindow_{nullptr};
     HWND hwnd_ = nullptr;
@@ -324,13 +254,12 @@ private:
     winrt::UnlockDesktop::AboutPage aboutPage_{nullptr};
     TextBlock title_{nullptr};
     Button action_{nullptr}, refresh_{nullptr};
-    DashboardSnapshot snapshot_;
     bool actionPending_ = false;
     bool exiting_ = false;
-    event_token closingToken_{}, navigationToken_{}, actionToken_{}, refreshToken_{}, unhandledToken_{};
+    event_token closingToken_{}, navigationToken_{}, actionToken_{}, refreshToken_{};
 };
 
-Dashboard::Dashboard(PairingAction action, RefreshAction refresh, PasswordAction password, ReportError reportError) : state_(std::make_shared<State>()) {
+Dashboard::Dashboard(PairingAction action, RefreshAction refresh, PasswordAction password, ReportError reportError) : state_(std::make_unique<State>()) {
     state_->action = std::move(action);
     state_->refresh = std::move(refresh);
     state_->password = std::move(password);
@@ -339,58 +268,35 @@ Dashboard::Dashboard(PairingAction action, RefreshAction refresh, PasswordAction
 
 Dashboard::~Dashboard() { stop(); }
 
+void Dashboard::State::fail(const hresult_error& error) {
+    rethrowNonlocalUiError(error);
+    failure = std::wstring(error.message());
+    reportError(L"Dashboard: " + failure);
+    if (view) view->shutdown();
+}
+
 void Dashboard::show() {
-    {
-        std::lock_guard lock(state_->mutex);
-        if (state_->stopping) return;
-        if (!state_->failure.empty()) throw std::runtime_error(to_string(state_->failure));
-        state_->showRequested = true;
+    if (state_->stopping) return;
+    if (!state_->failure.empty()) {
+        state_->reportError(L"Dashboard is unavailable: " + state_->failure);
+        return;
     }
-    if (!state_->thread.joinable()) {
-        state_->thread = std::thread([state = state_] {
-            try {
-                init_apartment(apartment_type::single_threaded);
-                struct Apartment final { ~Apartment() { uninit_apartment(); } } apartment;
-                com_ptr<State::App> app;
-                Application::Start([&](const auto&) { app = make_self<State::App>(state); });
-                {
-                    std::lock_guard lock(state->mutex);
-                    state->dispatcher = nullptr;
-                    state->shown = false;
-                }
-                app = nullptr;
-            } catch (...) { state->report(currentException()); }
-            {
-                std::lock_guard lock(state->mutex);
-                state->dispatcher = nullptr;
-                state->shown = false;
-                state->showRequested = false;
-            }
-        });
-    } else state_->enqueue([state = state_] { if (state->app) state->app->refresh(); });
+    try {
+        if (!state_->view) state_->view = std::make_unique<State::View>(state_.get());
+        state_->view->show();
+    } catch (const hresult_error& error) { state_->fail(error); }
 }
 
 void Dashboard::update(DashboardSnapshot snapshot) {
-    {
-        std::lock_guard lock(state_->mutex);
-        if (state_->stopping || !state_->failure.empty()) return;
-        state_->snapshot = std::move(snapshot);
-    }
-    state_->enqueue([state = state_] { if (state->app) state->app->refresh(); });
-}
-
-bool Dashboard::visible() const {
-    std::lock_guard lock(state_->mutex);
-    return state_->shown || state_->showRequested;
+    if (state_->stopping || !state_->failure.empty()) return;
+    state_->snapshot = std::move(snapshot);
+    if (state_->view) state_->view->refresh();
 }
 
 void Dashboard::stop() {
-    {
-        std::lock_guard lock(state_->mutex);
-        state_->stopping = true;
-    }
-    state_->enqueue([state = state_] { if (state->app) state->app->shutdown(); });
-    if (state_->thread.joinable()) state_->thread.join();
+    state_->stopping = true;
+    if (state_->view) state_->view->shutdown();
+    state_->view.reset();
 }
 
 }

@@ -2,15 +2,19 @@
 
 # Tray and GATT transport
 
-`GattHost` runs inside the ordinary-user desktop role of `UnlockWithIPhone.exe`. It owns the host lifecycle, physical-console monitoring, BLE publication and pairing transport. It does not hold a password or create trusted approval. Role dispatch and startup are documented in the [Windows guide](../README.md#desktop-app-roles); wire messages are defined in [PROTOCOL.md](../../PROTOCOL.md#ble-messages).
+`GattHost` runs on a background MTA control thread inside the ordinary-user desktop role of `UnlockWithIPhone.exe`. It owns physical-console monitoring, BLE publication and pairing transport. It does not hold a password or create trusted approval. Role dispatch and startup are documented in the [Windows guide](../README.md#desktop-app-roles); wire messages are defined in [PROTOCOL.md](../../PROTOCOL.md#ble-messages).
 
-`DesktopApp/TrayManager` handles the Win32 tray through menu-state, command and diagnostic callbacks. The MTA host retains its HWND and controls shutdown; WinUI runs on its STA thread and receives host-generated snapshots. Refresh posts back to the host. Quit posts an asynchronous close after the menu is released. Unhandled messages return `std::nullopt`; handled messages return their Windows result.
+`DesktopApp/DesktopHost` runs the WinUI application and `TrayManager` on the main STA. The public tray HWND handles activation and maintenance exit requests; the private MTA HWND alone handles session/power events and the GATT control timer. The control window is ready before the tray is created, without waiting for GATT initialization. Commands use the existing callback queue; snapshots return to the STA. Tray registration retries and Explorer recovery stay on the STA. Unhandled tray messages return `std::nullopt`; handled messages return their Windows result.
+
+Quit closes callback admission before cancelling pairing and cleaning up GATT. Late Helper callbacks are rejected; ending the control thread does not mean detached Helper waits have ended. The STA observes the control thread handle before joining and exiting WinUI. Dispatcher rejection is logged, with a STA timer observing saved updates. After ten seconds without completion, exit is reported incomplete and the app remains responsive until cleanup finishes; it does not force termination.
+
+Snapshots are published after initialization, each control dispatch batch and session/power handling. UI errors stay in the shared diagnostic history without replacing the last communication error; UI reports arriving after shutdown begins do not enqueue dialogs. Normal Quit returns `0`; terminal control-thread failures return `1`.
 
 ## Lock-aware publication
 
 Session/power notifications trigger reconciliation with the physical console's actual `WTSSessionInfoEx` state. Publication requires an explicitly locked current console, except for a user-started pairing window on the unlocked desktop. First sign-in uses native Windows authentication.
 
-Callbacks are marshalled to the control thread. The advertising lifecycle separates the requested target, raw WinRT status and accepted start/stop calls. A successful stop does not wait for a stale Started property to change, and cannot suppress the next lock's start. Startup is bounded and retries are limited; unlock, sleep and exit cancel pending retries.
+Callbacks are marshalled to the control thread. The advertising lifecycle separates the requested target, raw WinRT status and accepted start/stop calls. A successful stop does not wait for a stale Started property to change, and cannot suppress the next lock's start. Advertising startup is bounded and retries are limited; unlock, sleep and exit cancel pending retries.
 
 Stopping publication does not proactively close BLE. Remote service loss can still invalidate characteristics and subscriptions. `unlock_approved` does not itself stop advertising: the host reconciles actual Windows session state.
 

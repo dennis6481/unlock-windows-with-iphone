@@ -32,12 +32,11 @@ public:
 
     void show();
     void update(DashboardSnapshot snapshot);
-    bool visible() const;
     void stop();
 
 private:
     struct State;
-    std::shared_ptr<State> state_;
+    std::unique_ptr<State> state_;
 };
 
 }

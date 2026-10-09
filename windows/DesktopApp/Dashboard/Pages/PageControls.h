@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include <Windows.h>
+#undef GetCurrentTime
 #include <string>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.h>
@@ -33,6 +35,12 @@ inline FontIcon icon(const wchar_t* glyph, double size = 20) {
 
 inline GridLength star() { return {1, GridUnitType::Star}; }
 inline GridLength automatic() { return {0, GridUnitType::Auto}; }
+
+inline void rethrowNonlocalUiError(const hresult_error& error) {
+    const auto code = error.code();
+    if (code == E_OUTOFMEMORY || code == RPC_E_WRONG_THREAD || code == E_UNEXPECTED ||
+        code == E_POINTER || code == E_INVALIDARG) throw;
+}
 
 inline std::wstring currentException() {
     try { throw; }

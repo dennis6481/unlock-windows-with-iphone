@@ -82,6 +82,17 @@ Confirm the service owns the original 30-second request deadline and never exten
 
 ## Pairing and saved-password operations
 
+- Check main-window navigation: Status, Password, Diagnostics and bottom About. Resize to minimum size, widen/maximize, vary DPI/theme and verify Status remains centered with no duplicate sidebar title. Keep Last approval / N/A; pairing is Status-only and Refresh is Status/Diagnostics-only.
+- Check Password opens the existing elevated manager; UAC cancellation leaves the page unchanged. About must show the shared product version and open the project/license links in the default browser.
+- Switch between cached Frame pages: keep the header fixed, preserve each page's scroll position and About's update result, and verify repeated navigation does not duplicate content or callbacks. Retain NavigationView Auto behavior.
+- Check ordinary/background launch, tray Status/double-click and repeated activation while GATT initializes. Setup waits for initialization; initialization failure rejects pending setup/pairing, and Quit cancels pending operations.
+- Check normal Quit returns `0` and a terminal GATT control-window or control-thread exception returns `1`. Recoverable operation/UI errors must not terminate the process.
+- After a communication error, report a UI/About/Tray or UI dispatcher error: both remain in diagnostic history, but the last communication error is unchanged. UI reports arriving after Quit must not enqueue dialogs; terminal GATT errors remain reportable.
+- Inspect snapshot publication: initialization, each dispatch batch and session/power handling publish once while running; Refresh must not republish inside execute/reconcile. Verify initialization failure, pairing callbacks, sleep/resume and cancelled session end still update the STA. A failed Dashboard refresh must not activate a closed window.
+- During pairing Helper waits, password Setup Helper waits, About update checks and GATT writes, request Quit. Late callbacks must not resume business or access destroyed objects. Observe the MTA control thread separately from detached Helper waits.
+- Check Explorer restart and tray registration retries on the STA, dispatcher rejection, isolated Dashboard failure, session-end cancellation and repeated shutdown notifications. A control thread still stopping after ten seconds must report incomplete exit while the STA stays responsive; do not count this as successful shutdown.
+- Check manual update responses: newer/equal/older releases, `0.10.0 > 0.9.0`, invalid tags/JSON, no release, HTTP refusal/rate limiting and network failure. Switching pages must preserve the result; Quit during a request cancels it without stale UI access. No failure may appear as up-to-date, and no installer is downloaded or run.
+
 - Check first registration, the same key/SID, explicit replacement and removal. Confirm replacement invalidates the previous phone and removal prevents its future approval.
 - Check same-user UAC and another administrator's UAC: the target remains the original physical-console account.
 - Check UAC/confirmation cancellation, timeout, lock/session change, sleep, disconnect, concurrent/second candidate, invalid public key and service/storage failure. Pre-commit failure preserves the old record; post-commit reload failure reports its actual saved state.

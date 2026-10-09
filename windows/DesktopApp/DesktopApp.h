@@ -13,6 +13,7 @@ inline constexpr wchar_t kSetupRole[] = L"--setup";
 inline constexpr wchar_t kBackgroundRole[] = L"--background";
 inline constexpr wchar_t kTrayWindowClass[] = L"UnlockWindowsWithIPhoneGattHost";
 inline constexpr UINT kSetupMessage = WM_APP + 3;
+inline constexpr UINT kShowDashboardMessage = WM_APP + 4;
 enum class SetupResult : DWORD { cancelled = 0, error = 1, credentialReady = 2 };
 inline constexpr wchar_t kKeyHexCommand[] = L"--key-hex";
 inline constexpr wchar_t kKeyClipboardCommand[] = L"--key-clipboard";

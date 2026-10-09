@@ -32,11 +32,17 @@ void AboutPage::OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEventAr
     checkUpdates_ = Button{};
     checkUpdates_.Content(box_value(L"Check for updates"));
     checkUpdates_.Click([weak = get_weak()](const auto&, const auto&) {
-        if (auto page = weak.get()) {
-            page->checkUpdates_.IsEnabled(false);
-            page->updateStatus_.Text(L"Checking for updates...");
-            page->release_.Visibility(Visibility::Collapsed);
-            page->updateCheck_ = checkForUpdates(weak, page->DispatcherQueue(), page->reportError_);
+        if (auto page = weak.get(); page && !page->stopped_) {
+            try {
+                page->checkUpdates_.IsEnabled(false);
+                page->updateStatus_.Text(L"Checking for updates...");
+                page->release_.Visibility(Visibility::Collapsed);
+                page->updateCheck_ = checkForUpdates(weak, page->DispatcherQueue(), page->reportError_);
+            } catch (const hresult_error& error) {
+                rethrowNonlocalUiError(error);
+                page->Stop();
+                page->reportError_(L"About: " + std::wstring(error.message()));
+            }
         }
     });
     aboutPanel_.Children().Append(checkUpdates_);
@@ -108,11 +114,17 @@ Windows::Foundation::IAsyncAction AboutPage::checkForUpdates(
         if (!dispatcher.TryEnqueue([weak, message = std::move(message), releaseUrl = std::move(releaseUrl)] {
             const auto page = weak.get();
             if (!page || page->stopped_) return;
-            page->updateStatus_.Text(message);
-            page->checkUpdates_.IsEnabled(true);
-            if (!releaseUrl.empty()) {
-                page->release_.NavigateUri(Windows::Foundation::Uri(releaseUrl));
-                page->release_.Visibility(Visibility::Visible);
+            try {
+                page->updateStatus_.Text(message);
+                page->checkUpdates_.IsEnabled(true);
+                if (!releaseUrl.empty()) {
+                    page->release_.NavigateUri(Windows::Foundation::Uri(releaseUrl));
+                    page->release_.Visibility(Visibility::Visible);
+                }
+            } catch (const hresult_error& error) {
+                rethrowNonlocalUiError(error);
+                page->Stop();
+                page->reportError_(L"About: " + std::wstring(error.message()));
             }
         })) reportError(L"The About UI dispatcher rejected an update.");
     } catch (...) { reportError(currentException()); }

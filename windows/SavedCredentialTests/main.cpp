@@ -6,6 +6,7 @@
 #include "../GattHost/TransportReadiness.h"
 
 #include <cstdlib>
+#include <algorithm>
 #include <iostream>
 #include <string>
 
@@ -62,6 +63,9 @@ void testPhoneEndpointRejectsCredentialOperations() {
     require(GetLastError() == ERROR_INVALID_PARAMETER,
         "phone endpoint operation rejection must be local and explicit");
     CallDiagnostics diagnostics;
+    require(!callPhone(Operation::credentialSummary, SensitiveBytes{}, reply, 250, &diagnostics) &&
+        diagnostics.stage == CallStage::requestValidation && GetLastError() == ERROR_INVALID_PARAMETER,
+        "phone endpoint must not expose desktop account metadata");
     require(!callPhone(Operation::beginPhoneAuthentication, SensitiveBytes{}, reply, 250, &diagnostics) &&
         GetLastError() == ERROR_INVALID_PARAMETER && diagnostics.stage == CallStage::requestValidation,
         "phone endpoint must not initiate authentication without a LogonUI click");
@@ -73,10 +77,41 @@ void testPhoneEndpointRejectsCredentialOperations() {
         "phone endpoint must not expose automatic submission offers");
 }
 
+void testCredentialSummary() {
+    CredentialSummary summary{{L"S-1-5-21-1-2-3-4", L"MicrosoftAccount\\user@example.invalid", GUID{}}, true, true};
+    SensitiveBytes bytes;
+    require(encodeCredentialSummary(summary, bytes), "credential summary must encode");
+    CredentialSummary decoded;
+    require(decodeCredentialSummary(bytes.value.data(), bytes.value.size(), decoded) &&
+        decoded.identity.sid == summary.identity.sid && decoded.identity.qualifiedUserName == summary.identity.qualifiedUserName &&
+        decoded.credentialPresent && decoded.credentialMatches, "summary must preserve verified identity and state");
+    StatusPayload status{summary, {}};
+    status.snapshotNonce.fill(42);
+    SensitiveBytes management;
+    require(encodeStatus(status, management) && management.value.size() == bytes.value.size() + kNonceSize &&
+        std::equal(bytes.value.begin(), bytes.value.end(), management.value.begin() + kNonceSize),
+        "summary must reuse the existing management encoding without its nonce");
+    require(!decodeStatus(bytes.value.data(), bytes.value.size(), status), "summary must not be a management snapshot");
+    require(!decodeCredentialSummary(nullptr, 0, decoded) &&
+        !decodeCredentialSummary(bytes.value.data(), bytes.value.size() - 1, decoded), "empty and truncated summary must fail");
+    bytes.value.push_back(0);
+    require(!decodeCredentialSummary(bytes.value.data(), bytes.value.size(), decoded), "summary must reject trailing data");
+    bytes.value.pop_back();
+    bytes.value[0] = 2;
+    require(!decodeCredentialSummary(bytes.value.data(), bytes.value.size(), decoded), "matching without a saved copy must fail");
+    bytes.value[0] = 4;
+    require(!decodeCredentialSummary(bytes.value.data(), bytes.value.size(), decoded), "unknown summary flags must fail");
+    summary.credentialPresent = false;
+    require(!encodeCredentialSummary(summary, bytes), "summary encoder must reject matching without presence");
+    summary.credentialMatches = false;
+    require(encodeCredentialSummary(summary, bytes) && decodeCredentialSummary(bytes.value.data(), bytes.value.size(), decoded) &&
+        !decoded.credentialPresent && !decoded.credentialMatches, "absent credential state must round trip");
+}
+
 void testAuthenticationOperationPackets() {
     for (const std::uint16_t operation : {std::uint16_t{12}, std::uint16_t{6},
             std::uint16_t{9}, std::uint16_t{13}, std::uint16_t{14}, std::uint16_t{15},
-            std::uint16_t{16}, std::uint16_t{17}, std::uint16_t{18}, std::uint16_t{19}, std::uint16_t{0}, std::uint16_t{65535}}) {
+            std::uint16_t{16}, std::uint16_t{17}, std::uint16_t{18}, std::uint16_t{19}, std::uint16_t{20}, std::uint16_t{0}, std::uint16_t{65535}}) {
         HANDLE reader = INVALID_HANDLE_VALUE;
         HANDLE writer = INVALID_HANDLE_VALUE;
         require(CreatePipe(&reader, &writer, nullptr, 0) != FALSE, "test pipe must open");
@@ -88,7 +123,7 @@ void testAuthenticationOperationPackets() {
         const bool accepted = readPacket(reader, inbound);
         const DWORD error = GetLastError();
         require(CloseHandle(writer) && CloseHandle(reader), "test pipe handles must close");
-        const bool known = operation == 9 || (operation >= 12 && operation <= 18);
+        const bool known = operation == 9 || (operation >= 12 && operation <= 19);
         require(isKnownOperation(operation) == known, "operation whitelist rejected new operation or accepted unknown operation");
         require(accepted == known, "packet parser must accept authentication operations and reject unknown operations");
         if (accepted) {
@@ -109,6 +144,18 @@ void testSetupLaunchArguments() {
     wchar_t* passwordArguments[]{executable, password.data(), setup.data()};
     const auto launch = parseLaunch(3, passwordArguments);
     require(launch.role == Role::savedPassword && launch.setup, "setup must reuse the elevated password role");
+    for (const auto operation : {Operation::setCredential, Operation::updateCredential, Operation::clearCredential}) {
+        std::wstring option(passwordOperationArgument(operation));
+        wchar_t* arguments[]{executable, password.data(), option.data()};
+        const auto action = parseLaunch(3, arguments);
+        require(action.role == Role::savedPassword && !action.setup && action.passwordOperation == operation,
+            "password action must enter the matching elevated UI role");
+        wchar_t* mixed[]{executable, password.data(), setup.data(), option.data()};
+        bool mixedRejected = false;
+        try { static_cast<void>(parseLaunch(4, mixed)); }
+        catch (const std::invalid_argument&) { mixedRejected = true; }
+        require(mixedRejected, "setup and explicit password actions must not be combined");
+    }
     wchar_t* conflicting[]{executable, setup.data(), password.data()};
     bool rejected = false;
     try { static_cast<void>(parseLaunch(3, conflicting)); }
@@ -425,6 +472,7 @@ void testTransportReadinessBindingAndExpiry() {
 int main() {
     testIdentityRoundTrip();
     testStatusRoundTrip();
+    testCredentialSummary();
     testPhoneEndpointRejectsCredentialOperations();
     testPacketTransportParity();
     testProvisioningIdentityTransport();

@@ -912,14 +912,13 @@ public:
         using unlock_windows::desktop_app::TrayCommand;
         if (state_->stopping()) return;
         try {
-            if (!host_.initialized() && command != TrayCommand::status && command != TrayCommand::managePassword)
+            if (!host_.initialized() && command != TrayCommand::status)
                 throw std::runtime_error("GATT initialization failed; the requested operation cannot start. Restart the EXE.");
             switch (command) {
             case TrayCommand::status: reconcile(true); break;
             case TrayCommand::continueSetup: continueSetup(); break;
             case TrayCommand::pairPhone: startPairing(); break;
             case TrayCommand::removePhone: startPairing(true); break;
-            case TrayCommand::managePassword: manageSavedPassword(); break;
             }
         } catch (...) {
             const auto error = exceptionText();
@@ -1282,35 +1281,10 @@ private:
         state_->notify();
     }
 
-    void manageSavedPassword() {
-        try {
-            std::wstring executable(32768, L'\0');
-            const auto size = GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
-            if (!size || size >= executable.size()) throw std::runtime_error("Could not locate installed tools");
-            executable.resize(size);
-            const std::filesystem::path tool(executable);
-            SHELLEXECUTEINFOW request{sizeof(request)};
-            request.lpVerb = L"runas";
-            request.lpFile = tool.c_str();
-            request.lpParameters = unlock_windows::desktop_app::kSavedPasswordRole;
-            request.nShow = SW_SHOWNORMAL;
-            if (!ShellExecuteExW(&request)) {
-                const auto error = GetLastError();
-                if (error == ERROR_CANCELLED) return;
-                SetLastError(error);
-                requireWin32(FALSE, L"ShellExecuteExW(saved password manager)");
-            }
-        } catch (...) {
-            const auto error = exceptionText();
-            state_->record(L"Saved password manager: " + error, true);
-            state_->notice(error, L"Could not open saved password manager", MB_OK | MB_ICONERROR);
-        }
-    }
-
     void finishSetup(const unlock_windows::enrollment::Console& target) {
         const auto current = unlock_windows::enrollment::queryConsole();
         if (current.locked || current.session != target.session || current.sid != target.sid || closing_)
-            throw std::runtime_error("The setup console account changed. Continue setup from the target user's tray.");
+            throw std::runtime_error("The setup console account changed. Start setup again from the target user's unlocked console.");
         const auto registration = unlock_windows::phone_approval::EnrollmentStore{}.load();
         if (registration && registration->accountSid != target.sid)
             throw std::runtime_error("The paired iPhone belongs to a different Windows account.");
@@ -1364,7 +1338,7 @@ private:
                         if (!error.empty()) throw std::runtime_error(winrt::to_string(error));
                         if (code == static_cast<DWORD>(unlock_windows::desktop_app::SetupResult::credentialReady)) finishSetup(target);
                         else if (code != static_cast<DWORD>(unlock_windows::desktop_app::SetupResult::cancelled))
-                            throw std::runtime_error("Password setup did not complete. Continue setup to retry.");
+                            throw std::runtime_error("Password setup did not complete. Start setup again to retry.");
                     } catch (...) {
                         const auto message = exceptionText();
                         state_->record(L"Setup: " + message, true);
@@ -1546,10 +1520,10 @@ void GattController::join() {
 
 void GattController::record(const std::wstring& message) { state_->record(message, false); }
 
-std::function<void(std::wstring)> GattController::errorReporter(std::wstring title) {
-    return [state = state_, title = std::move(title)](std::wstring message) {
+std::function<void(std::wstring)> GattController::errorReporter(std::wstring title, bool notify) {
+    return [state = state_, title = std::move(title), notify](std::wstring message) {
         state->record(message, false);
-        state->notice(std::move(message), title, MB_OK | MB_ICONERROR, true);
+        if (notify) state->notice(std::move(message), title, MB_OK | MB_ICONERROR, true);
     };
 }
 

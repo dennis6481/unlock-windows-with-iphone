@@ -1,5 +1,6 @@
 // Created by Rui MA on 30 Sep 2026
 
+#include <initguid.h>
 #include "SavedCredentialIpc.h"
 #include "SavedCredentialVault.h"
 #include "EnrollmentStore.h"
@@ -9,6 +10,9 @@
 #include <WtsApi32.h>
 #include <bcrypt.h>
 #include <sddl.h>
+#include <identitystore.h>
+#include <propsys.h>
+#include <propkey.h>
 
 #include <array>
 #include <atomic>
@@ -218,6 +222,47 @@ Console currentConsole() {
     return result;
 }
 
+Identity consoleIdentity(const Console& console) {
+    winrt::init_apartment(winrt::apartment_type::multi_threaded);
+    struct Apartment final { ~Apartment() { winrt::uninit_apartment(); } } apartment;
+    winrt::com_ptr<IIdentityStore> store;
+    winrt::check_hresult(CoCreateInstance(__uuidof(CoClassIdentityStore), nullptr, CLSCTX_INPROC_SERVER,
+        __uuidof(IIdentityStore), store.put_void()));
+    PROPVARIANT filter{};
+    filter.vt = VT_LPWSTR;
+    filter.pwszVal = const_cast<LPWSTR>(console.sid.c_str());
+    winrt::com_ptr<IEnumUnknown> identities;
+    winrt::check_hresult(store->EnumerateIdentities(IDENTITIES_ALL, &PKEY_Identity_PrimarySid,
+        &filter, identities.put()));
+    struct Property final {
+        PROPVARIANT value{};
+        ~Property() { PropVariantClear(&value); }
+    };
+    std::optional<Identity> result;
+    for (;;) {
+        winrt::com_ptr<IUnknown> item;
+        const HRESULT next = identities->Next(1, item.put(), nullptr);
+        winrt::check_hresult(next);
+        if (next == S_FALSE) break;
+        const auto properties = item.as<IPropertyStore>();
+        Property sid, name, provider;
+        winrt::check_hresult(properties->GetValue(PKEY_Identity_PrimarySid, &sid.value));
+        winrt::check_hresult(properties->GetValue(PKEY_Identity_QualifiedUserName, &name.value));
+        winrt::check_hresult(properties->GetValue(PKEY_Identity_ProviderID, &provider.value));
+        if (sid.value.vt != VT_LPWSTR || !sid.value.pwszVal || console.sid != sid.value.pwszVal ||
+            name.value.vt != VT_LPWSTR || !name.value.pwszVal ||
+            provider.value.vt != VT_CLSID || !provider.value.puuid)
+            fail("Windows identity properties are incomplete or do not match the console token");
+        Identity identity{console.sid, name.value.pwszVal, *provider.value.puuid};
+        SensitiveBytes encoded;
+        if (!encodeIdentity(identity, encoded)) fail("Windows identity properties are invalid");
+        if (result && !sameIdentity(*result, identity)) fail("Windows console identity is ambiguous");
+        result = std::move(identity);
+    }
+    if (!result) fail("Windows identity store has no identity for the physical console user");
+    return std::move(*result);
+}
+
 struct Snapshot final {
     Identity identity;
     DWORD session = 0xffffffff;
@@ -400,12 +445,19 @@ public:
                     if (reuseAuthorizedNonce) snapshot_->nonce = grant_->nonce;
                 }
                 response.payload.value.assign(snapshot_->nonce.begin(), snapshot_->nonce.end());
+            } else if (request.operation == Operation::credentialSummary) {
+                if (console.locked || client.userSid != console.sid || !request.payload.value.empty() ||
+                    !verifiedManagementIdentity(console)) return response;
+                const auto stored = vault_.storedIdentity();
+                CredentialSummary summary{provisioning_->identity, stored.has_value(),
+                    stored && sameIdentity(*stored, provisioning_->identity)};
+                if (!encodeCredentialSummary(summary, response.payload)) fail("credential summary encoding failed");
             } else if (request.operation == Operation::status) {
                 if (!client.admin || console.locked || !request.payload.value.empty()) return response;
                 if (!refreshManagementSnapshot(console)) return response;
                 const auto stored = vault_.storedIdentity();
-                StatusPayload status{snapshot_->identity, snapshot_->nonce, stored.has_value(),
-                    stored && sameIdentity(*stored, snapshot_->identity)};
+                StatusPayload status{{snapshot_->identity, stored.has_value(),
+                    stored && sameIdentity(*stored, snapshot_->identity)}, snapshot_->nonce};
                 if (!encodeStatus(status, response.payload)) fail("saved credential status encoding failed");
             } else if (request.operation == Operation::setCredential ||
                        request.operation == Operation::updateCredential) {
@@ -416,7 +468,7 @@ public:
                 }
                 std::uint32_t passwordBytes = 0;
                 std::memcpy(&passwordBytes, request.payload.value.data() + kNonceSize, sizeof(passwordBytes));
-                if (passwordBytes == 0 || passwordBytes > 2048 || passwordBytes % sizeof(wchar_t) != 0 ||
+                if (passwordBytes == 0 || passwordBytes > kMaxPasswordChars * sizeof(wchar_t) || passwordBytes % sizeof(wchar_t) != 0 ||
                     request.payload.value.size() != kNonceSize + sizeof(passwordBytes) + passwordBytes) {
                     return response;
                 }
@@ -631,11 +683,23 @@ private:
         }
     }
 
-    bool refreshManagementSnapshot(const Console& console) {
+    bool verifiedManagementIdentity(const Console& console) {
         std::wstring targetSid;
-        if (!provisioning_ || provisioning_->session != console.session ||
-            provisioning_->generation != gIdentityGeneration.load() || provisioning_->identity.sid != console.sid ||
-            FAILED(unlock::components::readSetupTargetSid(targetSid)) || targetSid != console.sid) return false;
+        if (console.locked || FAILED(unlock::components::readSetupTargetSid(targetSid)) || targetSid != console.sid)
+            return false;
+        const auto generation = gIdentityGeneration.load();
+        auto identity = consoleIdentity(console);
+        const auto current = currentConsole();
+        if (current.locked || current.session != console.session || current.sid != console.sid ||
+            current.logonId.LowPart != console.logonId.LowPart || current.logonId.HighPart != console.logonId.HighPart ||
+            generation != gIdentityGeneration.load()) return false;
+        if (!provisioning_ || !sameIdentity(provisioning_->identity, identity)) snapshot_.reset();
+        provisioning_ = ProvisioningIdentity{std::move(identity), console.session, generation, console.logonId};
+        return true;
+    }
+
+    bool refreshManagementSnapshot(const Console& console) {
+        if (!verifiedManagementIdentity(console)) return false;
         provisioning_->logonId = console.logonId;
         if (!freshSnapshot(console) || !sameIdentity(snapshot_->identity, provisioning_->identity)) {
             Snapshot snapshot{provisioning_->identity, console.session, GetTickCount64() + kSnapshotLifetimeMs, {}};
@@ -744,7 +808,7 @@ void WINAPI serviceMain(DWORD, LPWSTR*) {
         Handler handler;
         PSECURITY_DESCRIPTOR descriptor = nullptr;
         if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
-                L"D:P(A;;GA;;;SY)(A;;0x0012019B;;;BA)", SDDL_REVISION_1,
+                L"D:P(A;;GA;;;SY)(A;;0x0012019B;;;AU)", SDDL_REVISION_1,
                 &descriptor, nullptr)) fail("saved credential pipe ACL creation failed");
         SECURITY_ATTRIBUTES attributes{};
         attributes.nLength = sizeof(attributes);

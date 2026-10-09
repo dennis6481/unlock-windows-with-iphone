@@ -38,7 +38,7 @@ public:
     bool ended();
     void join();
     void record(const std::wstring& message);
-    std::function<void(std::wstring)> errorReporter(std::wstring title);
+    std::function<void(std::wstring)> errorReporter(std::wstring title, bool notify = true);
 
 private:
     std::shared_ptr<CallbackState> state_;

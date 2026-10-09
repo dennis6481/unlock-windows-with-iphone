@@ -105,7 +105,7 @@ target_link_libraries(unlock_phone_approval_core PUBLIC unlock_protocol_crypto w
 
 target_link_libraries(unlock_saved_credential_service PRIVATE
     unlock_saved_credential_ipc unlock_phone_approval_core unlock_enrollment_store
-    advapi32 wtsapi32 crypt32 bcrypt windowsapp
+    advapi32 wtsapi32 crypt32 bcrypt windowsapp ole32
 )
 
 if(BUILD_TESTING)
@@ -144,14 +144,13 @@ add_library(unlock_desktop_native STATIC
     DesktopApp/TrayManager.cpp
     GattHost/GattHost.cpp
     Enrollment/Enrollment.cpp
-    SavedCredential/CredentialManagement.cpp
 )
 
 set_target_properties(unlock_desktop_native PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-target_compile_definitions(unlock_desktop_native PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNLOCK_UI_PAIRING UNLOCK_UI_SAVED_PASSWORD)
+target_compile_definitions(unlock_desktop_native PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNLOCK_UI_PAIRING)
 target_link_libraries(unlock_desktop_native PRIVATE
     unlock_saved_credential_ipc unlock_enrollment_store unlock_protocol_crypto
-    windowsapp user32 shell32 wtsapi32 ole32 advapi32 comctl32 gdi32 credui bcrypt crypt32)
+    windowsapp user32 shell32 wtsapi32 ole32 advapi32 comctl32 gdi32 bcrypt crypt32)
 
 if(MSVC)
     target_compile_options(unlock_desktop_native PRIVATE /utf-8)

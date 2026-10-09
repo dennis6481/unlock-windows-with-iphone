@@ -81,6 +81,8 @@
   <ItemGroup>
     <ClCompile Include="@CMAKE_CURRENT_SOURCE_DIR@/DesktopApp/main.cpp" />
     <ClCompile Include="@CMAKE_CURRENT_SOURCE_DIR@/DesktopApp/DesktopHost.cpp" />
+    <ClCompile Include="@CMAKE_CURRENT_SOURCE_DIR@/SavedCredential/CredentialManagement.cpp" />
+    <ClInclude Include="@CMAKE_CURRENT_SOURCE_DIR@/DesktopApp/DesktopApplication.h" />
     <ClCompile Include="@CMAKE_CURRENT_SOURCE_DIR@/DesktopApp/Dashboard/Dashboard.cpp" />
     <ClCompile Include="@CMAKE_CURRENT_SOURCE_DIR@/DesktopApp/Dashboard/Pages/StatusPage.xaml.cpp" />
     <ClCompile Include="@CMAKE_CURRENT_SOURCE_DIR@/DesktopApp/Dashboard/Pages/PasswordPage.xaml.cpp" />

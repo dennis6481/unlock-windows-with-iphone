@@ -10,8 +10,8 @@ namespace {
 constexpr UINT kTray = WM_APP + 2;
 }
 
-TrayManager::TrayManager(CommandHandler command, QueryMenuState menuState, Report report)
-    : command_(std::move(command)), menuState_(std::move(menuState)), report_(std::move(report)) {}
+TrayManager::TrayManager(CommandHandler command, Report report)
+    : command_(std::move(command)), report_(std::move(report)) {}
 
 TrayManager::~TrayManager() {
     stop();
@@ -83,7 +83,7 @@ std::optional<LRESULT> TrayManager::handleMessage(UINT message, WPARAM, LPARAM l
     }
     if (message != kTray) return std::nullopt;
     if (lparam == WM_RBUTTONUP) menu();
-    else if (lparam == WM_LBUTTONDBLCLK) command_(TrayCommand::status);
+    else if (lparam == WM_LBUTTONUP) command_(TrayCommand::showWindow);
     return 0;
 }
 
@@ -102,12 +102,9 @@ void TrayManager::menu() {
         const auto append = [popup](TrayCommand command, const wchar_t* label, UINT flags = 0) {
             desktop_ui::require(AppendMenuW(popup, MF_STRING | flags, static_cast<UINT>(command) + 1, label), "AppendMenuW");
         };
-        const UINT available = menuState_().busy ? MF_GRAYED : 0;
         append(TrayCommand::status, L"Status\u2026");
-        append(TrayCommand::continueSetup, L"Continue setup\u2026", available);
-        append(TrayCommand::pairPhone, L"Pair iPhone\u2026", available);
-        append(TrayCommand::managePassword, L"Manage saved password\u2026", available);
-        append(TrayCommand::removePhone, L"Remove paired iPhone\u2026", available);
+        append(TrayCommand::password, L"Password\u2026");
+        append(TrayCommand::about, L"About\u2026");
         desktop_ui::require(AppendMenuW(popup, MF_SEPARATOR, 0, nullptr), "AppendMenuW");
         append(TrayCommand::quit, L"Quit");
         POINT point{};

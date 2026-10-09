@@ -1,6 +1,7 @@
 // Created by Rui MA on 09 Oct 2026
 
 #include "DesktopApp.h"
+#include "DesktopApplication.h"
 #include "TrayManager.h"
 #include "Dashboard/Dashboard.h"
 #include "Dashboard/Pages/PageControls.h"
@@ -9,9 +10,6 @@
 #include <WtsApi32.h>
 #include <winrt/Microsoft.UI.Dispatching.h>
 #include <winrt/Microsoft.UI.Xaml.h>
-#include <winrt/Microsoft.UI.Xaml.Controls.h>
-#include <winrt/Microsoft.UI.Xaml.Markup.h>
-#include <winrt/UnlockDesktop.h>
 #include <memory>
 #include <chrono>
 
@@ -23,29 +21,18 @@ using namespace Microsoft::UI::Xaml;
 
 constexpr ULONGLONG kShutdownReportDelayMs = 10000;
 
-class DesktopApplication : public ApplicationT<DesktopApplication, Markup::IXamlMetadataProvider> {
-public:
-    explicit DesktopApplication(std::function<void()> launched) : launched_(std::move(launched)) {}
-    Markup::IXamlType GetXamlType(const Windows::UI::Xaml::Interop::TypeName& type) {
-        return provider_.GetXamlType(type);
-    }
-    Markup::IXamlType GetXamlType(const hstring& name) { return provider_.GetXamlType(name); }
-    com_array<Markup::XmlnsDefinition> GetXmlnsDefinitions() { return provider_.GetXmlnsDefinitions(); }
-    void OnLaunched(const LaunchActivatedEventArgs&) {
-        DispatcherShutdownMode(Xaml::DispatcherShutdownMode::OnExplicitShutdown);
-        Resources().MergedDictionaries().Append(Controls::XamlControlsResources{});
-        launched_();
-    }
-private:
-    winrt::UnlockDesktop::XamlMetaDataProvider provider_;
-    std::function<void()> launched_;
-};
-
 class DesktopHost final : public std::enable_shared_from_this<DesktopHost> {
 public:
     DesktopHost(HINSTANCE instance, bool setup, bool background) : instance_(instance), setup_(setup), background_(background),
-        tray_([this](TrayCommand command) { if (command == TrayCommand::status) show(); else execute(command); },
-            [this] { return TrayMenuState{stopping_ || snapshot_.busy}; },
+        tray_([this](TrayCommand command) {
+                switch (command) {
+                case TrayCommand::showWindow: show(); break;
+                case TrayCommand::status: show(DashboardPage::status); break;
+                case TrayCommand::password: show(DashboardPage::password); break;
+                case TrayCommand::about: show(DashboardPage::about); break;
+                default: execute(command); break;
+                }
+            },
             [this](const std::wstring& message, bool error) { controller_->record((error ? L"Tray error: " : L"Tray: ") + message); }) {
         snapshot_.busy = true;
         snapshot_.status = L"Starting Bluetooth discovery...";
@@ -63,7 +50,7 @@ public:
                 existing = FindWindowW(kTrayWindowClass, nullptr);
                 if (!existing) Sleep(50);
             }
-            if (!existing) throw std::runtime_error("The existing tray is not ready. Choose Continue setup from its menu.");
+            if (!existing) throw std::runtime_error("The existing tray is not ready. Wait for startup to finish and retry.");
             DWORD pid = 0, session = 0xffffffff;
             GetWindowThreadProcessId(existing, &pid);
             desktop_ui::require(pid && ProcessIdToSessionId(pid, &session) && session == session_, "Verify setup tray session");
@@ -85,8 +72,7 @@ public:
         dashboard_ = std::make_unique<Dashboard>(
             [weak](bool remove) { if (const auto host = weak.lock()) host->execute(remove ? TrayCommand::removePhone : TrayCommand::pairPhone); },
             [weak] { if (const auto host = weak.lock()) host->execute(TrayCommand::status); },
-            [weak] { if (const auto host = weak.lock()) host->execute(TrayCommand::managePassword); },
-            controller_->errorReporter(L"Dashboard needs attention"));
+            controller_->errorReporter(L"Dashboard needs attention"), controller_->errorReporter(L"", false));
         timer_ = dispatcher_.CreateTimer();
         timer_.Interval(std::chrono::seconds(1));
         timerToken_ = timer_.Tick([weak](const auto&, const auto&) {
@@ -147,10 +133,10 @@ private:
         else if (!background_) show();
     }
 
-    void show() {
+    void show(std::optional<DashboardPage> page = std::nullopt) {
         if (stopping_) { report(L"The desktop app is stopping; the request was cancelled.", L"Operation cancelled"); return; }
         dashboard_->update(snapshot_);
-        dashboard_->show();
+        dashboard_->show(page);
         execute(TrayCommand::status);
     }
 

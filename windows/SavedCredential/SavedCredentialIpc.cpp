@@ -288,11 +288,10 @@ bool decodeIdentity(const std::uint8_t* data, const std::size_t size, Identity& 
     return true;
 }
 
-bool encodeStatus(const StatusPayload& status, SensitiveBytes& output) {
+bool encodeCredentialSummary(const CredentialSummary& status, SensitiveBytes& output) {
     SensitiveBytes identity;
     if ((status.credentialMatches && !status.credentialPresent) || !encodeIdentity(status.identity, identity)) return false;
     output.clear();
-    append(output, status.snapshotNonce.data(), status.snapshotNonce.size());
     const std::uint8_t present = (status.credentialPresent ? kCredentialPresentFlag : 0) |
         (status.credentialMatches ? kCredentialMatchesFlag : 0);
     append(output, &present, 1);
@@ -300,15 +299,29 @@ bool encodeStatus(const StatusPayload& status, SensitiveBytes& output) {
     return true;
 }
 
-bool decodeStatus(const std::uint8_t* data, const std::size_t size, StatusPayload& output) {
-    if (data == nullptr || size < kNonceSize + 1) return false;
-    std::copy_n(data, kNonceSize, output.snapshotNonce.begin());
-    const auto flags = data[kNonceSize];
+bool decodeCredentialSummary(const std::uint8_t* data, const std::size_t size, CredentialSummary& output) {
+    if (data == nullptr || size < 1) return false;
+    const auto flags = data[0];
     if ((flags & ~kCredentialStatusFlags) != 0 ||
         ((flags & kCredentialMatchesFlag) && !(flags & kCredentialPresentFlag))) return false;
     output.credentialPresent = (flags & kCredentialPresentFlag) != 0;
     output.credentialMatches = (flags & kCredentialMatchesFlag) != 0;
-    return decodeIdentity(data + kNonceSize + 1, size - kNonceSize - 1, output.identity);
+    return decodeIdentity(data + 1, size - 1, output.identity);
+}
+
+bool encodeStatus(const StatusPayload& status, SensitiveBytes& output) {
+    SensitiveBytes summary;
+    if (!encodeCredentialSummary(status, summary)) return false;
+    output.clear();
+    append(output, status.snapshotNonce.data(), status.snapshotNonce.size());
+    append(output, summary.value.data(), summary.value.size());
+    return true;
+}
+
+bool decodeStatus(const std::uint8_t* data, const std::size_t size, StatusPayload& output) {
+    if (data == nullptr || size < kNonceSize + 1) return false;
+    std::copy_n(data, kNonceSize, output.snapshotNonce.begin());
+    return decodeCredentialSummary(data + kNonceSize, size - kNonceSize, output);
 }
 
 bool writePacket(const HANDLE pipe, const Packet& packet) {

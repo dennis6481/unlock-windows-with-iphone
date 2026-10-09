@@ -43,7 +43,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
                 throw std::runtime_error("Start Unlock with iPhone as the ordinary console user, without administrator elevation");
             return runTray(instance, launch.role == Role::setup, launch.background);
         case Role::savedPassword:
-            return runSavedPassword(instance, show, launch.setup);
+            return runSavedPassword(instance, show, launch.setup, launch.passwordOperation);
         case Role::bluetoothEnrollment:
         case Role::manualEnrollment:
             return runEnrollment(arguments.value, launch);

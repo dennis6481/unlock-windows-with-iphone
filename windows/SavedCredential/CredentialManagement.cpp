@@ -2,318 +2,342 @@
 
 #include "SavedCredentialIpc.h"
 #include "../DesktopApp/DesktopApp.h"
+#include "../DesktopApp/DesktopApplication.h"
+#include "../DesktopApp/Dashboard/Pages/PageControls.h"
 #include "../Resources/resource.h"
 #include "../Resources/DesktopUi.h"
 #include "../Enrollment/EnrollmentSession.h"
-
-#include <objbase.h>
-#include <wincred.h>
-
-#include <array>
+#include <microsoft.ui.xaml.window.h>
+#include <winrt/Microsoft.UI.Dispatching.h>
+#include <winrt/Microsoft.UI.Windowing.h>
 #include <cstring>
-#include <cwchar>
-#include <string>
-#include <utility>
+#include <array>
+#include <memory>
 
 namespace {
-
+using namespace winrt;
+using namespace Microsoft::UI::Xaml;
+using namespace Microsoft::UI::Xaml::Controls;
 using namespace unlock_windows::saved_credential;
-
-constexpr int kRefresh = IDC_UI_REFRESH;
-constexpr int kSet = IDC_UI_SAVE;
-constexpr int kUpdate = IDC_UI_UPDATE;
-constexpr int kClear = IDC_UI_REMOVE;
-
-struct UiState final {
-    HWND information = nullptr;
-    StatusPayload status;
-    bool snapshotAvailable = false;
-    bool technicalExpanded = false;
-    bool setup = false;
-    bool credentialReady = false;
-    unlock_windows::desktop_ui::DialogAppearance appearance;
-};
+using namespace unlock_windows::desktop_app;
+using namespace unlock_windows::desktop_app::dashboard_ui;
 
 struct PasswordBuffer final {
-    std::array<wchar_t, 1025> value{};
+    std::array<wchar_t, kMaxPasswordChars + 1> value{};
     ~PasswordBuffer() { SecureZeroMemory(value.data(), sizeof(value)); }
 };
 
-UiState gUi;
-
-void showError(const HWND parent, const wchar_t* message) {
-    MessageBoxW(parent, message, L"Saved Windows password", MB_OK | MB_ICONERROR);
-}
-
-bool refresh(const HWND window) {
+StatusPayload readStatus() {
     Packet response;
-    SensitiveBytes request;
-    StatusPayload value;
     CallDiagnostics diagnostics;
-    const bool connected = call(Operation::status, std::move(request), response, 2000, &diagnostics);
-    const bool accepted = connected && response.result == Result::success;
-    if (!accepted ||
-        !decodeStatus(response.payload.value.data(), response.payload.value.size(), value)) {
-        gUi.snapshotAvailable = false;
-        const std::wstring details = !connected
-            ? L"Saved credential IPC failed at " + std::wstring(callStageName(diagnostics.stage)) +
-                L" (Win32 " + std::to_wstring(diagnostics.win32Error) + L"). No operation can proceed."
-            : response.result == Result::rejected
-                ? L"No verified LogonUI identity is available for the installed target in this unlocked console. Refresh retries account verification. If the service restarted after sign-in, inspect its diagnostics; no credential change can proceed."
-                : L"Saved credential service returned an error or malformed identity status. No operation can proceed.";
-        const auto message = !connected
-            ? L"Saved password management is unavailable. Your PIN and password still work. See Technical details."
-            : response.result == Result::rejected
-                ? L"Windows account information is not ready. Choose Refresh to retry verification for this signed-in console."
-                : L"Account information could not be verified. See Technical details.";
-        SetWindowTextW(gUi.information, message);
-        SetDlgItemTextW(window, IDC_UI_ACCOUNT, L"Windows account: not yet verified");
-        SetDlgItemTextW(window, IDC_UI_TECHNICAL, details.c_str());
-        EnableWindow(GetDlgItem(window, kSet), FALSE);
-        EnableWindow(GetDlgItem(window, kUpdate), FALSE);
-        EnableWindow(GetDlgItem(window, kClear), connected && response.result == Result::rejected);
-        return false;
-    }
-    gUi.status = std::move(value);
-    gUi.snapshotAvailable = true;
-    wchar_t provider[39]{};
-    if (StringFromGUID2(gUi.status.identity.providerId, provider, 39) == 0) {
-        gUi.snapshotAvailable = false;
-        EnableWindow(GetDlgItem(window, kSet), FALSE);
-        EnableWindow(GetDlgItem(window, kUpdate), FALSE);
-        EnableWindow(GetDlgItem(window, kClear), FALSE);
-        showError(window, L"Account provider ID cannot be displayed.");
-        return false;
-    }
-    std::wstring details = L"Console account SID: " + gUi.status.identity.sid +
-        L"\r\nWindows QualifiedUserName: " + gUi.status.identity.qualifiedUserName +
-        L"\r\nAccount provider: " + provider +
-        L"\r\nSaved copy: " + (gUi.status.credentialPresent ? L"present" : L"absent") +
-        L"\r\nConfirm this is the account you intend to unlock.";
-    if (diagnostics.stage == CallStage::replyAcknowledgment) {
-        details += L"\r\nReply received, but acknowledgment failed (Win32 " +
-            std::to_wstring(diagnostics.win32Error) + L").";
-    }
-    const auto separator = gUi.status.identity.qualifiedUserName.find_last_of(L'\\');
-    const auto displayAccount = gUi.status.identity.qualifiedUserName.substr(
-        separator == std::wstring::npos ? 0 : separator + 1);
-    SetDlgItemTextW(window, IDC_UI_ACCOUNT, (L"Windows account: " + displayAccount).c_str());
-    SetWindowTextW(gUi.information, gUi.status.credentialPresent && !gUi.status.credentialMatches
-        ? L"Update the saved password copy for this verified Windows account before continuing setup. This app does not change your account password."
-        : gUi.status.credentialPresent
-        ? L"An encrypted password copy is saved on this PC. Update it here if your Microsoft Account password changes. This app does not change your account password."
-        : L"No password copy is saved. Save your Microsoft Account password to enable iPhone unlock. This app does not change your account password.");
-    SetDlgItemTextW(window, IDC_UI_TECHNICAL, details.c_str());
-    EnableWindow(GetDlgItem(window, kSet), !gUi.status.credentialPresent);
-    EnableWindow(GetDlgItem(window, kUpdate), gUi.status.credentialPresent);
-    EnableWindow(GetDlgItem(window, kClear), gUi.status.credentialPresent);
-    return true;
+    if (!call(Operation::status, SensitiveBytes{}, response, 2000, &diagnostics))
+        throw std::runtime_error("Saved credential IPC failed at " + std::string(to_string(callStageName(diagnostics.stage))) +
+            " (Win32 " + std::to_string(diagnostics.win32Error) + ").");
+    if (response.result == Result::rejected)
+        throw std::runtime_error("The service could not verify the installed target's Windows account. Retry account verification.");
+    StatusPayload status;
+    if (response.result != Result::success || !decodeStatus(response.payload.value.data(), response.payload.value.size(), status))
+        throw std::runtime_error("The service returned an error or malformed Windows identity status.");
+    if (diagnostics.stage == CallStage::replyAcknowledgment)
+        throw std::runtime_error("Password status reply acknowledgment failed (Win32 " + std::to_string(diagnostics.win32Error) + "). Choose Retry.");
+    return status;
 }
 
-bool finishPasswordSetup(const HWND window) {
-    if (!gUi.setup || !gUi.snapshotAvailable || !gUi.status.credentialMatches) return false;
-    Packet response;
-    if (!call(Operation::reloadPhoneEnrollment, SensitiveBytes{}, response) || response.result != Result::success) {
-        showError(window, L"The service could not reload phone registration. Setup has not continued. Choose Refresh to retry.");
-        return false;
-    }
-    gUi.credentialReady = true;
-    DestroyWindow(window);
-    return true;
-}
+class PasswordWindow final : public std::enable_shared_from_this<PasswordWindow> {
+public:
+    PasswordWindow(bool setup, Operation operation) : setup_(setup), requested_(operation) {}
+    int result() const { return result_; }
 
-void setOrUpdate(const HWND window, const bool update) {
-    if (!gUi.snapshotAvailable) {
-        showError(window, L"Choose Refresh to verify the Windows account first.");
-        return;
-    }
-    if (MessageBoxW(window,
-            L"Save a local encrypted copy of the actual Microsoft Account password for the displayed console user?\r\n"
-            L"This does not change the online account password. Saving it does not create an unlock approval.",
-            L"Confirm target identity", MB_YESNO | MB_ICONWARNING) != IDYES) return;
-
-    CREDUI_INFOW prompt{};
-    prompt.cbSize = sizeof(prompt);
-    prompt.hwndParent = window;
-    prompt.pszCaptionText = update ? L"Update saved password" : L"Save Windows password";
-    prompt.pszMessageText = L"Enter the actual Microsoft Account password for the displayed Windows identity.";
-    std::array<wchar_t, CREDUI_MAX_USERNAME_LENGTH + 1> user{};
-    PasswordBuffer password;
-    if (gUi.status.identity.qualifiedUserName.size() >= user.size()) {
-        showError(window, L"Windows qualified user name is too long for the credential prompt.");
-        return;
-    }
-    if (wcscpy_s(user.data(), user.size(),
-            gUi.status.identity.qualifiedUserName.c_str()) != 0) {
-        showError(window, L"Windows qualified user name cannot be copied to the prompt.");
-        return;
-    }
-    BOOL save = FALSE;
-    const DWORD promptStatus = CredUIPromptForCredentialsW(
-        &prompt, L"Unlock Windows saved credential", nullptr, 0,
-        user.data(), static_cast<ULONG>(user.size()), password.value.data(),
-        static_cast<ULONG>(password.value.size()), &save,
-        CREDUI_FLAGS_DO_NOT_PERSIST | CREDUI_FLAGS_ALWAYS_SHOW_UI |
-        CREDUI_FLAGS_GENERIC_CREDENTIALS | CREDUI_FLAGS_KEEP_USERNAME |
-        CREDUI_FLAGS_EXCLUDE_CERTIFICATES
-    );
-    if (promptStatus == ERROR_CANCELLED) {
-        return;
-    }
-    if (promptStatus != NO_ERROR || std::wcscmp(user.data(),
-            gUi.status.identity.qualifiedUserName.c_str()) != 0 ||
-        password.value[0] == L'\0') {
-        showError(window, L"Credential prompt failed or returned a different identity.");
-        return;
-    }
-    const auto passwordBytes = static_cast<std::uint32_t>(std::wcslen(password.value.data()) * sizeof(wchar_t));
-    SensitiveBytes request;
-    request.value.resize(kNonceSize + sizeof(passwordBytes) + passwordBytes);
-    std::memcpy(request.value.data(), gUi.status.snapshotNonce.data(), kNonceSize);
-    std::memcpy(request.value.data() + kNonceSize, &passwordBytes, sizeof(passwordBytes));
-    std::memcpy(request.value.data() + kNonceSize + sizeof(passwordBytes), password.value.data(), passwordBytes);
-    SecureZeroMemory(password.value.data(), sizeof(password.value));
-    Packet response;
-    const auto operation = update ? Operation::updateCredential : Operation::setCredential;
-    const bool saved = call(operation, std::move(request), response) && response.result == Result::success;
-    if (!saved) {
-        showError(window, L"The service rejected the credential change. The previous saved copy, if any, was not confirmed replaced.");
-    } else {
-        MessageBoxW(window, L"Your encrypted password copy is saved. Windows has not yet verified that the password is correct.",
-            L"Saved Windows password", MB_OK | MB_ICONINFORMATION);
-    }
-    if (refresh(window) && saved) finishPasswordSetup(window);
-}
-
-void clearCredential(const HWND window) {
-    const TASKDIALOG_BUTTON removeButton{IDYES, L"Remove saved password"};
-    TASKDIALOGCONFIG confirmation{sizeof(confirmation)};
-    confirmation.hwndParent = window;
-    confirmation.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION;
-    confirmation.dwCommonButtons = TDCBF_CANCEL_BUTTON;
-    confirmation.pszWindowTitle = L"Saved Windows password";
-    confirmation.pszMainInstruction = L"Remove your saved password copy?";
-    confirmation.pszContent = L"iPhone unlock will be unavailable until you save a password again. Your Microsoft Account password will not change.";
-    confirmation.pszMainIcon = TD_WARNING_ICON;
-    confirmation.cButtons = 1;
-    confirmation.pButtons = &removeButton;
-    confirmation.nDefaultButton = IDCANCEL;
-    int choice = IDCANCEL;
-    const auto confirmed = TaskDialogIndirect(&confirmation, &choice, nullptr, nullptr);
-    if (FAILED(confirmed)) throw std::runtime_error("TaskDialogIndirect(password removal): HRESULT=" +
-        std::to_string(static_cast<unsigned long>(confirmed)));
-    if (choice != IDYES) return;
-    SensitiveBytes request;
-    Packet response;
-    if (!call(Operation::clearCredential, std::move(request), response) ||
-        response.result != Result::success) {
-        showError(window, L"The saved credential could not be confirmed cleared.");
-    } else {
-        MessageBoxW(window, L"The saved password copy has been removed.", L"Saved Windows password",
-            MB_OK | MB_ICONINFORMATION);
-    }
-    refresh(window);
-}
-
-void showTechnicalDetails(HWND window, bool expanded) {
-    const LONG top = expanded ? 261 : 197;
-    for (int id : {kRefresh, IDCANCEL}) {
-        const LONG left = id == kRefresh ? 226 : 304;
-        RECT button{left, top, left + 70, top + 16};
-        unlock_windows::desktop_ui::require(MapDialogRect(window, &button), "MapDialogRect(password button)");
-        unlock_windows::desktop_ui::require(SetWindowPos(GetDlgItem(window, id), nullptr, button.left,
-            button.top, button.right - button.left, button.bottom - button.top,
-            SWP_NOZORDER | SWP_NOACTIVATE), "SetWindowPos(password button)");
-    }
-    RECT bounds{0, 0, 388, expanded ? 292 : 228};
-    unlock_windows::desktop_ui::require(MapDialogRect(window, &bounds), "MapDialogRect(password window)");
-    unlock_windows::desktop_ui::require(AdjustWindowRectExForDpi(&bounds,
-        static_cast<DWORD>(GetWindowLongPtrW(window, GWL_STYLE)), FALSE,
-        static_cast<DWORD>(GetWindowLongPtrW(window, GWL_EXSTYLE)), GetDpiForWindow(window)),
-        "AdjustWindowRectExForDpi(password window)");
-    ShowWindow(GetDlgItem(window, IDC_UI_TECHNICAL), expanded ? SW_SHOW : SW_HIDE);
-    unlock_windows::desktop_ui::require(SetWindowPos(window, nullptr, 0, 0, bounds.right - bounds.left,
-        bounds.bottom - bounds.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE), "SetWindowPos(password details)");
-    gUi.technicalExpanded = expanded;
-}
-
-INT_PTR CALLBACK windowProcedure(const HWND window, const UINT message, const WPARAM key, const LPARAM detail) {
-    try {
-        switch (message) {
-        case WM_INITDIALOG:
-            gUi.appearance.apply(window, IDC_UI_TITLE);
-            gUi.information = GetDlgItem(window, IDC_UI_MESSAGE);
-            showTechnicalDetails(window, false);
-            refresh(window);
-            unlock_windows::desktop_ui::defaultButton(window, gUi.snapshotAvailable
-                ? (gUi.status.credentialPresent ? kUpdate : kSet) : kRefresh);
-            return FALSE;
-        case WM_DPICHANGED:
-            unlock_windows::desktop_ui::scheduleDpiAppearance(window, HIWORD(key));
-            return FALSE;
-        case unlock_windows::desktop_ui::kApplyDpiAppearance:
-            gUi.appearance.apply(window, IDC_UI_TITLE, static_cast<UINT>(key));
-            showTechnicalDetails(window, gUi.technicalExpanded);
-            return TRUE;
-        case WM_CTLCOLORSTATIC:
-            if (reinterpret_cast<HWND>(detail) == GetDlgItem(window, IDC_UI_TECHNICAL) ||
-                reinterpret_cast<HWND>(detail) == GetDlgItem(window, IDC_UI_ACCOUNT))
-                return unlock_windows::desktop_ui::readOnlyBackground(key);
-            return FALSE;
-        case WM_COMMAND:
-            switch (LOWORD(key)) {
-                case kRefresh:
-                    if (refresh(window)) finishPasswordSetup(window);
-                    break;
-                case kSet: setOrUpdate(window, false); break;
-                case kUpdate: setOrUpdate(window, true); break;
-                case kClear: clearCredential(window); break;
-                case IDC_UI_TECHNICAL_TOGGLE:
-                    showTechnicalDetails(window, !gUi.technicalExpanded); break;
-                case IDCANCEL: DestroyWindow(window); break;
-                default: return FALSE;
+    void show() {
+        const auto weak = weak_from_this();
+        window_ = Window{};
+        window_.Title(L"Saved Windows password");
+        const auto appWindow = window_.AppWindow();
+        appWindow.TitleBar().PreferredTheme(Microsoft::UI::Windowing::TitleBarTheme::UseDefaultAppMode);
+        HWND hwnd = nullptr;
+        check_hresult(window_.as<IWindowNative>()->get_WindowHandle(&hwnd));
+        const auto dpi = GetDpiForWindow(hwnd);
+        appWindow.Resize({MulDiv(560, dpi, 96), MulDiv(480, dpi, 96)});
+        const auto appIcon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDI_UNLOCK_APP));
+        if (!appIcon) throw_last_error();
+        SendMessageW(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(appIcon));
+        SendMessageW(hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(appIcon));
+        root_ = StackPanel{};
+        root_.Spacing(16);
+        root_.Margin({28, 24, 28, 24});
+        root_.Children().Append(text(L"Saved Windows password", 24));
+        account_ = text(L"Windows account: loading...", 18);
+        root_.Children().Append(account_);
+        root_.Children().Append(text(L"Save a local encrypted copy of the actual Microsoft Account password for the displayed console user. This does not change your account password or create an unlock approval."));
+        status_ = text(L"Loading account information...");
+        root_.Children().Append(status_);
+        notice_ = InfoBar{};
+        root_.Children().Append(notice_);
+        password_ = PasswordBox{};
+        password_.Header(box_value(L"Microsoft Account password"));
+        password_.MaxLength(static_cast<std::int32_t>(kMaxPasswordChars));
+        password_.PasswordChanged([weak](const auto&, const auto&) {
+            if (const auto self = weak.lock(); self && !self->stopped_) self->applyState();
+        });
+        root_.Children().Append(password_);
+        submit_ = Button{};
+        submit_.Style(Application::Current().Resources().Lookup(box_value(L"AccentButtonStyle")).as<Style>());
+        submit_.Click([weak](const auto&, const auto&) {
+            if (const auto self = weak.lock(); self && !self->stopped_) {
+                try {
+                    if (!self->snapshot_) self->refresh();
+                    else if (self->requested_ == Operation::clearCredential) self->confirmRemoval();
+                    else self->save();
+                } catch (...) { self->uiError(); }
             }
-            return TRUE;
-        case WM_CLOSE: DestroyWindow(window); return TRUE;
-        case WM_DESTROY:
-            PostQuitMessage(static_cast<int>(gUi.credentialReady
-                ? unlock_windows::desktop_app::SetupResult::credentialReady
-                : unlock_windows::desktop_app::SetupResult::cancelled));
-            return TRUE;
-        }
-    } catch (const std::exception& error) {
-        gUi.snapshotAvailable = false;
-        for (int id : {kSet, kUpdate, kClear}) EnableWindow(GetDlgItem(window, id), FALSE);
-        const std::string text(error.what());
-        showError(window, std::wstring(text.begin(), text.end()).c_str());
+        });
+        StackPanel actions;
+        actions.Orientation(Orientation::Horizontal);
+        actions.Spacing(12);
+        actions.HorizontalAlignment(HorizontalAlignment::Right);
+        actions.Children().Append(submit_);
+        Button cancel;
+        cancel.Content(box_value(L"Cancel"));
+        cancel.Click([weak](const auto&, const auto&) { if (const auto self = weak.lock()) self->close(); });
+        actions.Children().Append(cancel);
+        root_.Children().Append(actions);
+        ScrollViewer scroll;
+        scroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Disabled);
+        scroll.Content(root_);
+        window_.Content(scroll);
+        closedToken_ = window_.Closed([weak](const auto&, const auto&) { if (const auto self = weak.lock()) self->stop(); });
+        window_.Activate();
+        refresh();
     }
-    return FALSE;
+
+    void close() {
+        if (stopped_) return;
+        password_.Password(L"");
+        window_.Close();
+    }
+
+    void stop() {
+        if (stopped_) return;
+        stopped_ = true;
+        if (work_) work_.Cancel();
+        if (confirmation_) confirmation_.Hide();
+        password_.Password(L"");
+        if (window_ && closedToken_.value) window_.Closed(closedToken_);
+        Application::Current().Exit();
+    }
+
+private:
+    void notice(const std::wstring& message, InfoBarSeverity severity) {
+        notice_.Severity(severity);
+        notice_.Message(message);
+        notice_.IsOpen(true);
+    }
+
+    void uiError() {
+        const auto message = currentException();
+        busy_ = false;
+        snapshot_.reset();
+        applyState();
+        notice(message, InfoBarSeverity::Error);
+    }
+
+    Operation saveOperation() const {
+        return requested_ == Operation::status
+            ? (snapshot_->credentialPresent ? Operation::updateCredential : Operation::setCredential) : requested_;
+    }
+
+    void applyState() {
+        const bool ready = snapshot_.has_value() && !busy_ && !stopped_;
+        const bool removal = requested_ == Operation::clearCredential;
+        const bool compatible = snapshot_ && (requested_ == Operation::status || removal ||
+            (requested_ == Operation::updateCredential) == snapshot_->credentialPresent);
+        password_.Visibility(removal ? Visibility::Collapsed : Visibility::Visible);
+        password_.IsEnabled(ready && compatible);
+        submit_.Content(box_value(hstring(removal ? L"Remove saved password"
+            : (requested_ == Operation::updateCredential || (requested_ == Operation::status && snapshot_ && snapshot_->credentialPresent))
+                ? L"Update password" : L"Save password")));
+        submit_.IsEnabled(ready && compatible && (removal ? snapshot_->credentialPresent : !password_.Password().empty()));
+        if (!snapshot_) {
+            submit_.Content(box_value(hstring(busy_ ? L"Loading..." : L"Retry")));
+            submit_.IsEnabled(!busy_ && !stopped_);
+            account_.Text(L"Windows account: not yet verified");
+            status_.Text(busy_ ? L"Loading account information..." : L"Account information could not be verified. Choose Retry.");
+            return;
+        }
+        const auto& name = snapshot_->identity.qualifiedUserName;
+        const auto separator = name.find_last_of(L'\\');
+        account_.Text(L"Windows account: " + name.substr(separator == std::wstring::npos ? 0 : separator + 1));
+        status_.Text(!compatible ? L"Saved password status changed. Close this window and choose the current operation from the Password page."
+            : !snapshot_->credentialPresent ? L"No password copy is saved."
+            : snapshot_->credentialMatches ? L"An encrypted password copy is saved on this PC."
+            : L"Update the saved copy for this verified Windows identity before continuing setup.");
+    }
+
+    void refresh() {
+        if (busy_ || stopped_) return;
+        busy_ = true;
+        snapshot_.reset();
+        notice_.IsOpen(false);
+        applyState();
+        work_ = perform(weak_from_this(), window_.DispatcherQueue(), Operation::status, std::nullopt, SensitiveBytes{}, setup_);
+    }
+
+    void save() {
+        if (busy_ || stopped_ || !snapshot_) return;
+        PasswordBuffer password;
+        std::uint32_t bytes = 0;
+        {
+            const auto input = password_.Password();
+            if (input.empty()) return;
+            if (input.size() >= password.value.size()) throw hresult_error(E_FAIL, L"The password is too long.");
+            bytes = static_cast<std::uint32_t>(input.size() * sizeof(wchar_t));
+            std::memcpy(password.value.data(), input.c_str(), bytes);
+        }
+        password_.Password(L"");
+        SensitiveBytes request;
+        request.value.resize(kNonceSize + sizeof(bytes) + bytes);
+        std::memcpy(request.value.data(), snapshot_->snapshotNonce.data(), kNonceSize);
+        std::memcpy(request.value.data() + kNonceSize, &bytes, sizeof(bytes));
+        std::memcpy(request.value.data() + kNonceSize + sizeof(bytes), password.value.data(), bytes);
+        begin(saveOperation(), std::move(request));
+    }
+
+    void begin(Operation operation, SensitiveBytes request) {
+        if (busy_ || stopped_ || !snapshot_) return;
+        busy_ = true;
+        notice_.IsOpen(false);
+        applyState();
+        work_ = perform(weak_from_this(), window_.DispatcherQueue(), operation, snapshot_, std::move(request), setup_);
+    }
+
+    void confirmRemoval() {
+        if (busy_ || stopped_ || !snapshot_ || !snapshot_->credentialPresent) return;
+        busy_ = true;
+        applyState();
+        confirmation_ = ContentDialog{};
+        confirmation_.XamlRoot(root_.XamlRoot());
+        confirmation_.Title(box_value(L"Remove your saved password copy?"));
+        confirmation_.Content(box_value(L"iPhone unlock will be unavailable until you save a password again. Your Microsoft Account password will not change."));
+        confirmation_.PrimaryButtonText(L"Remove saved password");
+        confirmation_.CloseButtonText(L"Cancel");
+        confirmation_.DefaultButton(ContentDialogButton::Close);
+        work_ = remove(weak_from_this(), confirmation_);
+    }
+
+    static Windows::Foundation::IAsyncAction remove(std::weak_ptr<PasswordWindow> weak, ContentDialog dialog) {
+        ContentDialogResult choice = ContentDialogResult::None;
+        std::wstring failure;
+        try { choice = co_await dialog.ShowAsync(); }
+        catch (...) { failure = currentException(); }
+        if (const auto self = weak.lock(); self && !self->stopped_) {
+            try {
+                self->confirmation_ = nullptr;
+                self->busy_ = false;
+                self->applyState();
+                if (!failure.empty()) self->notice(failure, InfoBarSeverity::Error);
+                else if (choice == ContentDialogResult::Primary) self->begin(Operation::clearCredential, SensitiveBytes{});
+            } catch (...) { self->uiError(); }
+        }
+    }
+
+    static Windows::Foundation::IAsyncAction perform(std::weak_ptr<PasswordWindow> weak,
+        Microsoft::UI::Dispatching::DispatcherQueue dispatcher, Operation operation,
+        std::optional<StatusPayload> expected, SensitiveBytes request, bool setup) {
+        const auto cancellation = co_await get_cancellation_token();
+        co_await resume_background();
+        if (cancellation()) co_return;
+        std::optional<StatusPayload> snapshot;
+        std::wstring failure, message;
+        bool ready = false;
+        try {
+            auto status = readStatus();
+            if (operation != Operation::status) {
+                if (!expected || status.snapshotNonce != expected->snapshotNonce ||
+                    (operation == Operation::setCredential && status.credentialPresent) ||
+                    ((operation == Operation::updateCredential || operation == Operation::clearCredential) && !status.credentialPresent))
+                    throw std::runtime_error("The verified Windows identity or saved password state changed. Choose Retry; no change was submitted.");
+                if (cancellation()) co_return;
+                Packet response;
+                CallDiagnostics diagnostics;
+                if (!call(operation, std::move(request), response, 2000, &diagnostics) || response.result != Result::success)
+                    throw std::runtime_error("The service did not confirm the password change. Choose Retry to query its current state.");
+                message = operation == Operation::clearCredential ? L"The saved password copy has been removed."
+                    : L"Your encrypted password copy is saved. Windows has not yet verified that the password is correct.";
+                if (diagnostics.stage == CallStage::replyAcknowledgment)
+                    message += L" Reply acknowledgment failed (Win32 " + std::to_wstring(diagnostics.win32Error) + L").";
+                status = readStatus();
+            }
+            snapshot = std::move(status);
+            if (setup && snapshot->credentialMatches) {
+                if (cancellation()) co_return;
+                Packet response;
+                if (!call(Operation::reloadPhoneEnrollment, SensitiveBytes{}, response) || response.result != Result::success)
+                    throw std::runtime_error("The service could not reload phone registration. Setup has not continued. Choose Retry.");
+                ready = true;
+            }
+        } catch (...) { failure = currentException(); snapshot.reset(); }
+        if (cancellation()) co_return;
+        if (!dispatcher.TryEnqueue([weak, snapshot = std::move(snapshot), failure = std::move(failure), message = std::move(message), ready]() mutable {
+            if (const auto self = weak.lock(); self && !self->stopped_) {
+                try {
+                    self->busy_ = false;
+                    self->snapshot_ = std::move(snapshot);
+                    self->applyState();
+                    if (!failure.empty()) {
+                        self->notice(message.empty() ? failure : message + L"\n" + failure, InfoBarSeverity::Error);
+                    } else if (ready) {
+                        self->result_ = static_cast<int>(SetupResult::credentialReady);
+                        self->close();
+                    } else {
+                        if (!message.empty()) self->notice(message, InfoBarSeverity::Success);
+                        if (self->requested_ == Operation::clearCredential && !self->removalOpened_ && self->snapshot_ && self->snapshot_->credentialPresent) {
+                            self->removalOpened_ = true;
+                            self->confirmRemoval();
+                        }
+                    }
+                } catch (...) { self->uiError(); }
+            }
+        })) {
+            OutputDebugStringW(L"Password window dispatcher rejected an operation result.\n");
+        }
+    }
+
+    bool setup_, busy_ = false, stopped_ = false, removalOpened_ = false;
+    Operation requested_;
+    int result_ = static_cast<int>(SetupResult::cancelled);
+    std::optional<StatusPayload> snapshot_;
+    Window window_{nullptr};
+    StackPanel root_{nullptr};
+    TextBlock account_{nullptr}, status_{nullptr};
+    PasswordBox password_{nullptr};
+    Button submit_{nullptr};
+    InfoBar notice_{nullptr};
+    ContentDialog confirmation_{nullptr};
+    Windows::Foundation::IAsyncAction work_{nullptr};
+    event_token closedToken_{};
+};
 }
 
-} // namespace
-
-int unlock_windows::desktop_app::runSavedPassword(const HINSTANCE instance, int show, const bool setup) {
-    gUi.setup = setup;
-    if (!unlock_windows::enrollment::elevatedAdmin()) {
-        MessageBoxW(nullptr, L"Run the saved-credential manager as administrator on the physical console.",
-            L"Saved Windows password", MB_OK | MB_ICONERROR);
-        return 1;
-    }
+int unlock_windows::desktop_app::runSavedPassword(HINSTANCE, int, bool setup, saved_credential::Operation operation) {
     try {
-        unlock_windows::desktop_ui::initialize();
-        const HWND window = CreateDialogParamW(instance, MAKEINTRESOURCEW(IDD_SAVED_PASSWORD), nullptr, windowProcedure, 0);
-        unlock_windows::desktop_ui::require(window != nullptr, "CreateDialogParamW(saved password)");
-        unlock_windows::desktop_ui::centerOnActiveMonitor(window);
-        if (!finishPasswordSetup(window)) ShowWindow(window, show);
-        MSG message{};
-        BOOL received;
-        while ((received = GetMessageW(&message, nullptr, 0, 0)) > 0)
-            if (!IsDialogMessageW(window, &message)) { TranslateMessage(&message); DispatchMessageW(&message); }
-        unlock_windows::desktop_ui::require(received != -1, "GetMessageW(saved password)");
-        return static_cast<int>(message.wParam);
-    } catch (const std::exception& error) {
-        const std::string text(error.what());
-        showError(nullptr, std::wstring(text.begin(), text.end()).c_str());
-        return 1;
+        if (!unlock_windows::enrollment::elevatedAdmin())
+            throw std::runtime_error("Run the password manager as administrator on the physical console.");
+        desktop_ui::initialize();
+        init_apartment(apartment_type::single_threaded);
+        struct Apartment final { ~Apartment() { uninit_apartment(); } } apartment;
+        auto window = std::make_shared<PasswordWindow>(setup, operation);
+        com_ptr<DesktopApplication> app;
+        Application::Start([&](const auto&) {
+            app = make_self<DesktopApplication>([window] { window->show(); });
+        });
+        const auto result = window->result();
+        app = nullptr;
+        window.reset();
+        return result;
+    } catch (...) {
+        const auto message = currentException();
+        OutputDebugStringW(message.c_str());
+        MessageBoxW(nullptr, message.c_str(), L"Could not run password window", MB_OK | MB_ICONERROR);
+        return static_cast<int>(SetupResult::error);
     }
 }

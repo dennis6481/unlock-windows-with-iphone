@@ -11,25 +11,22 @@
 namespace unlock_windows::desktop_app {
 
 enum class TrayCommand {
+    showWindow,
     status,
+    password,
+    about,
     continueSetup,
     pairPhone,
-    managePassword,
     removePhone,
     quit,
-};
-
-struct TrayMenuState final {
-    bool busy = false;
 };
 
 class TrayManager final {
 public:
     using CommandHandler = std::function<void(TrayCommand)>;
-    using QueryMenuState = std::function<TrayMenuState()>;
     using Report = std::function<void(const std::wstring&, bool error)>;
 
-    TrayManager(CommandHandler command, QueryMenuState menuState, Report report);
+    TrayManager(CommandHandler command, Report report);
     ~TrayManager();
     TrayManager(const TrayManager&) = delete;
     TrayManager& operator=(const TrayManager&) = delete;
@@ -49,7 +46,6 @@ private:
     void menu();
 
     CommandHandler command_;
-    QueryMenuState menuState_;
     Report report_;
     HWND window_ = nullptr;
     HICON icon_ = nullptr;

@@ -3,6 +3,7 @@
 #pragma once
 
 #include <Windows.h>
+#include "../SavedCredential/SavedCredentialIpc.h"
 #include <stdexcept>
 #include <string_view>
 
@@ -28,7 +29,18 @@ struct Launch final {
     bool replace = false;
     bool setup = false;
     bool background = false;
+    saved_credential::Operation passwordOperation = saved_credential::Operation::status;
 };
+
+inline const wchar_t* passwordOperationArgument(saved_credential::Operation operation) {
+    using saved_credential::Operation;
+    switch (operation) {
+    case Operation::setCredential: return L"--save";
+    case Operation::updateCredential: return L"--update";
+    case Operation::clearCredential: return L"--remove";
+    default: throw std::invalid_argument("Invalid password management operation");
+    }
+}
 
 inline Launch parseLaunch(int argc, wchar_t* const argv[]) {
     if (argc == 1) return {};
@@ -39,6 +51,16 @@ inline Launch parseLaunch(int argc, wchar_t* const argv[]) {
     if (command == kSavedPasswordRole && argc == 2) return {Role::savedPassword};
     if (command == kSavedPasswordRole && argc == 3 && std::wstring_view(argv[2]) == kSetupRole)
         return {Role::savedPassword, false, false, false, true};
+    if (command == kSavedPasswordRole && argc == 3) {
+        for (const auto operation : {saved_credential::Operation::setCredential,
+                saved_credential::Operation::updateCredential, saved_credential::Operation::clearCredential}) {
+            if (std::wstring_view(argv[2]) == passwordOperationArgument(operation)) {
+                Launch launch{Role::savedPassword};
+                launch.passwordOperation = operation;
+                return launch;
+            }
+        }
+    }
     if (command == kBluetoothRole && argc == 9) return {Role::bluetoothEnrollment};
     if (command == kClearCommand && argc == 2) return {Role::manualEnrollment, true};
     const bool clipboard = command == kKeyClipboardCommand;
@@ -51,6 +73,7 @@ inline Launch parseLaunch(int argc, wchar_t* const argv[]) {
 }
 
 int runTray(HINSTANCE instance, bool setup = false, bool background = false);
-int runSavedPassword(HINSTANCE instance, int show, bool setup = false);
+int runSavedPassword(HINSTANCE instance, int show, bool setup = false,
+    saved_credential::Operation operation = saved_credential::Operation::status);
 int runEnrollment(wchar_t* argv[], const Launch& launch);
 }

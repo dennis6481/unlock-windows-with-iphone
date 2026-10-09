@@ -22,6 +22,7 @@
 #include <winrt/Microsoft.UI.Xaml.Media.h>
 #include <winrt/UnlockDesktop.h>
 #include <utility>
+#include <array>
 
 namespace unlock_windows::desktop_app {
 using namespace winrt;
@@ -38,18 +39,18 @@ struct Dashboard::State final {
     DashboardSnapshot snapshot;
     PairingAction action;
     RefreshAction refresh;
-    PasswordAction password;
     ReportError reportError;
+    ReportError passwordReport;
     std::wstring failure;
     bool stopping = false;
 
     void fail(const hresult_error& error);
 };
 namespace {
-NavigationViewItem navigationItem(const wchar_t* label, const wchar_t* glyph) {
+NavigationViewItem navigationItem(DashboardPage page, const wchar_t* label, const wchar_t* glyph) {
     NavigationViewItem item;
     item.Content(box_value(hstring(label)));
-    item.Tag(box_value(hstring(label)));
+    item.Tag(box_value(static_cast<std::int32_t>(page)));
     item.Icon(icon(glyph));
     return item;
 }
@@ -67,13 +68,16 @@ struct Dashboard::State::View final {
         } catch (const hresult_error& error) { state_->fail(error); }
     }
 
-    void show() {
+    void show(std::optional<DashboardPage> page) {
         refresh();
         if (exiting_ || state_->stopping || !window_) return;
         try {
+            if (page) nav_.SelectedItem(pages_.at(static_cast<std::size_t>(*page)));
             ShowWindow(hwnd_, SW_RESTORE);
             window_.Activate();
             SetForegroundWindow(hwnd_);
+            if (passwordPage_ && nav_.SelectedItem() == pages_[1])
+                get_self<winrt::UnlockDesktop::implementation::PasswordPage>(passwordPage_)->Refresh();
         } catch (const hresult_error& error) { state_->fail(error); }
     }
 
@@ -124,11 +128,12 @@ private:
         nav_.IsSettingsVisible(false);
         nav_.HorizontalContentAlignment(HorizontalAlignment::Stretch);
         nav_.VerticalContentAlignment(VerticalAlignment::Stretch);
-        auto status = navigationItem(L"Status", L"\xE8EA");
-        nav_.MenuItems().Append(status);
-        nav_.MenuItems().Append(navigationItem(L"Password", L"\xE72E"));
-        nav_.MenuItems().Append(navigationItem(L"Diagnostics", L"\xE9D9"));
-        nav_.FooterMenuItems().Append(navigationItem(L"About", L"\xE946"));
+        pages_ = {navigationItem(DashboardPage::status, L"Status", L"\xE8EA"),
+            navigationItem(DashboardPage::password, L"Password", L"\xE72E"),
+            navigationItem(DashboardPage::diagnostics, L"Diagnostics", L"\xE9D9"),
+            navigationItem(DashboardPage::about, L"About", L"\xE946")};
+        for (std::size_t index = 0; index < 3; ++index) nav_.MenuItems().Append(pages_[index]);
+        nav_.FooterMenuItems().Append(pages_[3]);
 
         root_ = Grid{};
         root_.Padding({28, 24, 28, 24});
@@ -170,7 +175,11 @@ private:
         refresh_.HorizontalAlignment(HorizontalAlignment::Right);
         Grid::SetColumn(refresh_, 1);
         refreshToken_ = refresh_.Click([this](const auto&, const auto&) {
-            try { state_->refresh(); }
+            try {
+                if (passwordPage_ && nav_.SelectedItem() == pages_[1])
+                    get_self<winrt::UnlockDesktop::implementation::PasswordPage>(passwordPage_)->Refresh();
+                else state_->refresh();
+            }
             catch (const hresult_error& error) { state_->fail(error); }
         });
         actions.Children().Append(refresh_);
@@ -187,33 +196,43 @@ private:
             try {
                 const auto item = args.SelectedItem().try_as<NavigationViewItem>();
                 if (!item) return;
-                const auto label = unbox_value<hstring>(item.Tag());
-                const bool statusPage = label == L"Status";
-                const bool diagnosticsPage = label == L"Diagnostics";
+                const auto pageId = static_cast<DashboardPage>(unbox_value<std::int32_t>(item.Tag()));
+                const bool statusPage = pageId == DashboardPage::status;
+                const bool diagnosticsPage = pageId == DashboardPage::diagnostics;
                 if (statusPage) {
                     statusPage_ = navigateTo<winrt::UnlockDesktop::StatusPage>();
                     get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->Update(state_->snapshot);
                 } else if (diagnosticsPage) {
                     diagnosticsPage_ = navigateTo<winrt::UnlockDesktop::DiagnosticsPage>();
                     get_self<winrt::UnlockDesktop::implementation::DiagnosticsPage>(diagnosticsPage_)->Update(state_->snapshot.diagnostics);
-                } else if (label == L"Password") {
-                    const auto page = navigateTo<winrt::UnlockDesktop::PasswordPage>();
-                    get_self<winrt::UnlockDesktop::implementation::PasswordPage>(page)->Bind(state_->password);
-                } else if (label == L"About") {
+                } else if (pageId == DashboardPage::password) {
+                    passwordPage_ = navigateTo<winrt::UnlockDesktop::PasswordPage>();
+                    auto* page = get_self<winrt::UnlockDesktop::implementation::PasswordPage>(passwordPage_);
+                    page->Bind(state_->passwordReport);
+                    page->Refresh();
+                } else if (pageId == DashboardPage::about) {
                     aboutPage_ = navigateTo<winrt::UnlockDesktop::AboutPage>();
                     get_self<winrt::UnlockDesktop::implementation::AboutPage>(aboutPage_)->Bind(
                         state_->reportError);
                 } else throw hresult_invalid_argument(L"Unknown Dashboard page.");
                 root_.MaxWidth(diagnosticsPage ? 900 : 560);
-                title_.Text(label);
+                title_.Text(unbox_value<hstring>(item.Content()));
                 action_.Visibility(statusPage ? Visibility::Visible : Visibility::Collapsed);
-                refresh_.Visibility(statusPage || diagnosticsPage ? Visibility::Visible : Visibility::Collapsed);
+                refresh_.Visibility(statusPage || diagnosticsPage || pageId == DashboardPage::password
+                    ? Visibility::Visible : Visibility::Collapsed);
             } catch (const hresult_error& error) { state_->fail(error); }
         });
-        nav_.SelectedItem(status);
+        nav_.SelectedItem(pages_[0]);
         if (!state_->failure.empty()) return;
         window_.Content(nav_);
         root_.RequestedTheme(ElementTheme::Default);
+        activatedToken_ = window_.Activated([this](const auto&, const WindowActivatedEventArgs& args) {
+            if (args.WindowActivationState() == WindowActivationState::Deactivated || exiting_) return;
+            try {
+                if (passwordPage_ && nav_.SelectedItem() == pages_[1])
+                    get_self<winrt::UnlockDesktop::implementation::PasswordPage>(passwordPage_)->Refresh();
+            } catch (const hresult_error& error) { state_->fail(error); }
+        });
     }
 
     void applySnapshot() {
@@ -232,10 +251,12 @@ public:
         if (exiting_) return;
         exiting_ = true;
         if (appWindow_ && closingToken_.value) appWindow_.Closing(closingToken_);
+        if (window_ && activatedToken_.value) window_.Activated(activatedToken_);
         if (nav_ && navigationToken_.value) nav_.SelectionChanged(navigationToken_);
         if (action_ && actionToken_.value) action_.Click(actionToken_);
         if (refresh_ && refreshToken_.value) refresh_.Click(refreshToken_);
         if (aboutPage_) get_self<winrt::UnlockDesktop::implementation::AboutPage>(aboutPage_)->Stop();
+        if (passwordPage_) get_self<winrt::UnlockDesktop::implementation::PasswordPage>(passwordPage_)->Stop();
         if (hwnd_) RemoveWindowSubclass(hwnd_, sizing, 1);
         if (window_) window_.Close();
         window_ = nullptr;
@@ -247,23 +268,26 @@ private:
     Windowing::AppWindow appWindow_{nullptr};
     HWND hwnd_ = nullptr;
     NavigationView nav_{nullptr};
+    std::array<NavigationViewItem, 4> pages_{nullptr, nullptr, nullptr, nullptr};
     Grid root_{nullptr};
     Frame frame_{nullptr};
     winrt::UnlockDesktop::StatusPage statusPage_{nullptr};
     winrt::UnlockDesktop::DiagnosticsPage diagnosticsPage_{nullptr};
     winrt::UnlockDesktop::AboutPage aboutPage_{nullptr};
+    winrt::UnlockDesktop::PasswordPage passwordPage_{nullptr};
     TextBlock title_{nullptr};
     Button action_{nullptr}, refresh_{nullptr};
     bool actionPending_ = false;
     bool exiting_ = false;
     event_token closingToken_{}, navigationToken_{}, actionToken_{}, refreshToken_{};
+    event_token activatedToken_{};
 };
 
-Dashboard::Dashboard(PairingAction action, RefreshAction refresh, PasswordAction password, ReportError reportError) : state_(std::make_unique<State>()) {
+Dashboard::Dashboard(PairingAction action, RefreshAction refresh, ReportError reportError, ReportError passwordReport) : state_(std::make_unique<State>()) {
     state_->action = std::move(action);
     state_->refresh = std::move(refresh);
-    state_->password = std::move(password);
     state_->reportError = std::move(reportError);
+    state_->passwordReport = std::move(passwordReport);
 }
 
 Dashboard::~Dashboard() { stop(); }
@@ -275,7 +299,7 @@ void Dashboard::State::fail(const hresult_error& error) {
     if (view) view->shutdown();
 }
 
-void Dashboard::show() {
+void Dashboard::show(std::optional<DashboardPage> page) {
     if (state_->stopping) return;
     if (!state_->failure.empty()) {
         state_->reportError(L"Dashboard is unavailable: " + state_->failure);
@@ -283,7 +307,7 @@ void Dashboard::show() {
     }
     try {
         if (!state_->view) state_->view = std::make_unique<State::View>(state_.get());
-        state_->view->show();
+        state_->view->show(page);
     } catch (const hresult_error& error) { state_->fail(error); }
 }
 

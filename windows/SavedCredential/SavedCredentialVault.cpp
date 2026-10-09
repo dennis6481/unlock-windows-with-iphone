@@ -21,7 +21,6 @@ namespace {
 constexpr std::uint32_t kDiskMagic = 0x31564347;
 constexpr std::uint32_t kPlainMagic = 0x31504347;
 constexpr std::size_t kMaxFileBytes = 32 * 1024;
-constexpr std::size_t kMaxPasswordChars = 1024;
 
 #pragma pack(push, 1)
 struct DiskHeader final {

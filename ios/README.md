@@ -25,7 +25,7 @@ The [Release workflow](../.github/workflows/release.yml) builds `UnlockPC_<tag>_
 
 ## Register and use
 
-1. On the unlocked Windows desktop select **Pair iPhone…** in the tray and approve UAC.
+1. On the unlocked Windows desktop open tray **Status…**, select **Pair iPhone** and approve UAC.
 2. In the app select **Add a Windows PC**, then **Continue**. Compare the full iPhone fingerprint and confirm the target account on Windows. The phone waits for the Windows result before showing pairing success.
 3. Complete registration only after a successful Windows enrollment result and a valid ComputerId. Cancelling, rejection or service reload failure preserves the previous valid phone target.
 4. The phone always responds automatically to eligible requests from its paired PC. Lock Windows and press Enter / Unlock on the phone tile. The phone requires a new signal reading for each challenge before signing.

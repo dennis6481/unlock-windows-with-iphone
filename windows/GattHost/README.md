@@ -26,7 +26,7 @@ The target user's persistent ComputerId identifies the configured computer. The 
 
 ## Pairing
 
-1. On the unlocked console choose **Pair iPhone…**. The tray requests UAC once and launches the same EXE's elevated enrollment role.
+1. On the unlocked console open tray **Status…** and choose **Pair iPhone**. The tray requests UAC once and launches the same EXE's elevated enrollment role.
 2. After the restricted local channel reports that the tool is ready, the tray advertises for registration. Start registration in the iOS app.
 3. Confirm the actual console account and the full eight-group SHA-256 phone fingerprint in the Windows window. Another administrator's UAC credentials do not change the target user.
 4. A matching key/SID is already registered: confirmation reloads the service without rewriting the file. A different phone needs explicit replacement confirmation.
@@ -37,16 +37,16 @@ Registration is validated as a P-256 point, written to a protected same-director
 
 ## Continue setup
 
-**Continue setup…** reuses the elevated password-management window, then the existing pairing workflow. A confirmed password-ready result is required before pairing. Existing credentials and matching registration skip completed steps; UAC cancellation, window closure and failures stop the sequence. The ordinary tray rechecks the initiating console before continuing and serializes repeated setup requests. Completion prompts ask for a lock-screen test rather than claiming successful native authentication.
+**Start setup** from the installation result, or `--setup`, opens the elevated WinUI password window, then the existing pairing workflow. A confirmed password-ready result is required before pairing. Existing credentials and matching registration skip completed steps; UAC cancellation, window closure and failures stop the sequence. The ordinary tray rechecks the initiating console before continuing and serializes repeated setup requests. Completion prompts ask for a lock-screen test rather than claiming successful native authentication. For manual setup, save the password on **Password**, then pair on **Status**.
 
 ## Tray actions and maintenance
 
 | Action | Effect |
 |---|---|
-| Status… | WinUI Status, Password, Diagnostics and About; Refresh, password-manager access and manual release checks. |
-| Pair iPhone… | First enrollment, already-registered confirmation or explicit phone replacement. |
-| Manage saved password… | Elevated password-management role in a separate instance. |
-| Remove paired iPhone… | Removes registration and reloads the service; does not remove the password, ComputerId or OS Bluetooth pairing. |
+| Left click | Shows the existing main window and current page; first opening selects Status. |
+| Status… | Opens the Status page; pairing and phone removal remain page actions. |
+| Password… | Opens verified account/password status; saving, updating and removal request elevation only when selected. |
+| About… | Opens product information and manual release checks. |
 | Quit | Stops publication, cancels pairing/async work and releases events/resources. |
 
 The ordinary tray refuses elevated execution. Closing an operation window leaves the tray running. Historical errors stay available in details without overriding a recovered current state. A missing taskbar triggers bounded work within the tray rather than process-restart loops.

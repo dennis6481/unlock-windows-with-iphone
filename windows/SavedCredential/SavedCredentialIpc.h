@@ -17,6 +17,7 @@ inline constexpr wchar_t kPipeName[] = L"\\\\.\\pipe\\unlock-windows-saved-crede
 inline constexpr wchar_t kPhonePipeName[] = L"\\\\.\\pipe\\unlock-windows-phone-approval-v1";
 inline constexpr wchar_t kServiceName[] = L"UnlockWindowsSavedCredentialService";
 inline constexpr std::size_t kMaxPacket = 16 * 1024;
+inline constexpr std::size_t kMaxPasswordChars = 1024;
 inline constexpr std::size_t kNonceSize = 16;
 inline constexpr ULONGLONG kPhoneAuthenticationLifetimeMs = protocol::kChallengeLifetimeMilliseconds;
 
@@ -38,6 +39,7 @@ enum class Operation : std::uint16_t {
     unlockEligibility = 16,
     peekPhoneAuthentication = 17,
     captureProvisioningIdentity = 18,
+    credentialSummary = 19,
 };
 
 inline constexpr bool isKnownOperation(const std::uint16_t value) noexcept {
@@ -59,6 +61,7 @@ inline constexpr bool isKnownOperation(const std::uint16_t value) noexcept {
     case Operation::unlockEligibility:
     case Operation::peekPhoneAuthentication:
     case Operation::captureProvisioningIdentity:
+    case Operation::credentialSummary:
         return true;
     default:
         return false;
@@ -106,11 +109,14 @@ struct Identity final {
     GUID providerId{};
 };
 
-struct StatusPayload final {
+struct CredentialSummary {
     Identity identity;
-    std::array<std::uint8_t, kNonceSize> snapshotNonce{};
     bool credentialPresent = false;
     bool credentialMatches = false;
+};
+
+struct StatusPayload final : CredentialSummary {
+    std::array<std::uint8_t, kNonceSize> snapshotNonce{};
 };
 
 struct AutoSubmitOffer final {
@@ -183,6 +189,8 @@ struct CallDiagnostics final {
 [[nodiscard]] bool decodeIdentity(const std::uint8_t* data, std::size_t size, Identity& output);
 [[nodiscard]] bool encodeStatus(const StatusPayload& status, SensitiveBytes& output);
 [[nodiscard]] bool decodeStatus(const std::uint8_t* data, std::size_t size, StatusPayload& output);
+[[nodiscard]] bool encodeCredentialSummary(const CredentialSummary& summary, SensitiveBytes& output);
+[[nodiscard]] bool decodeCredentialSummary(const std::uint8_t* data, std::size_t size, CredentialSummary& output);
 [[nodiscard]] bool encodeAutoSubmitOffer(const AutoSubmitOffer& offer, SensitiveBytes& output);
 [[nodiscard]] bool decodeAutoSubmitOffer(const std::uint8_t* data, std::size_t size, AutoSubmitOffer& output);
 [[nodiscard]] bool writePacket(HANDLE pipe, const Packet& packet);

@@ -37,7 +37,7 @@ make -C windows build-release TARGET_ARCH=arm64 BUILD_DIR=build/arm64-release
 
 The installer is generated at `windows/dist/UnlockWithIPhone_<version>_<architecture>_setup.exe`, with `x64` or `arm64` matching the compiler target and the version read from [ProductVersion.h](ProductVersion.h). Distribute only the **Release** setup EXE; it embeds the desktop app and its runtime files, service and Credential Provider. Use separate build directories per architecture/configuration; the active desktop EXE remains at the build root for existing make commands.
 
-The desktop build follows make → CMake → MSBuild. CMake compiles the native desktop and shared libraries; MSBuild compiles the entry point and WinUI, links the generated library paths and uses pinned Windows App SDK packages with Hybrid CRT. Other components retain their runtime policy. `DesktopApp.files` comes from MSBuild output; packaging embeds one dependency manifest for paths, sizes, SHA-256 and PE machine types. Third-party files retain their versions. The revised build integration, packaging and clean-machine deployment remain unverified.
+The desktop build follows make → CMake → MSBuild. CMake compiles the native desktop and shared libraries; MSBuild compiles the entry point and WinUI, links the generated library paths and uses pinned Windows App SDK packages with Hybrid CRT. Other components retain their runtime policy. `DesktopApp.files` comes from MSBuild output; packaging embeds one dependency manifest for paths, sizes, SHA-256 and PE machine types. Third-party files retain their versions. Release x64 build and embedded packaging have been checked; runtime, clean-machine deployment and ARM64 remain unverified.
 
 ## Install and configure
 
@@ -46,7 +46,7 @@ For installation and setup, see the [main guide](../README.md#installation).
 Open **Unlock with iPhone** from the Start Menu to show the main window. Install/update creates the all-users shortcut; uninstall removes it.
 
 - Save your Microsoft account password, not your PIN. Update the saved copy whenever the account password changes; see [password management](SavedCredential/README.md#password-management).
-- Removing the paired iPhone and deleting the saved password are separate tray actions.
+- Remove the paired iPhone on **Status**, or delete the saved password on **Password**; these are separate actions.
 
 ## Update and uninstall
 
@@ -90,6 +90,7 @@ Module guides: [GattHost](GattHost/README.md), [SavedCredential](SavedCredential
 | None | Ordinary-user tray and WinUI main window; repeated launch activates it. Elevated execution is rejected. |
 | `--background` | Login startup without opening the main window; repeated launch leaves an existing window unchanged. |
 | `--saved-password` | Temporary elevated password-management window. |
+| `--saved-password --save`, `--saved-password --update`, `--saved-password --remove` | Internal operation-specific elevated WinUI password window. |
 | `--setup` | Ordinary-user setup request handled by the existing single-instance tray. |
 | `--saved-password --setup` | Internal elevated password step; an explicit readiness result permits the ordinary tray to continue to pairing. |
 | `--bluetooth` plus internal arguments | Temporary elevated pairing/removal role, launched by the tray. Not a public manual command. |
@@ -97,7 +98,9 @@ Module guides: [GattHost](GattHost/README.md), [SavedCredential](SavedCredential
 
 The WinUI application, main window and tray share the main STA; GATT retains its background MTA control loop. The main window and native title bar follow the Windows app theme. Closing the main window hides it to the tray; Quit requests asynchronous host shutdown. Safely isolated UI errors are reported without restarting UI or stopping BLE; framework and fatal process faults are outside this guarantee. Closing an operation window does not exit the tray. Role parsing is defined in [DesktopApp.h](DesktopApp/DesktopApp.h); role arguments do not grant permission.
 
-Navigation contains **Status**, **Password**, **Diagnostics**, and **About** at the bottom. A Frame navigates between cached pages below the fixed header in the same centered, width-constrained container; each page owns its UI, scroll area and interactions. Dashboard coordinates navigation, the header and host callbacks; About owns update checks, which Quit cancels. Password opens the existing elevated manager. About shows the shared product version, GitHub project/MIT license links and a manual **Check for updates** against the latest formal GitHub Release. It compares numeric versions and links to a newer release without downloading or installing it; failures are shown separately from an up-to-date result.
+Left-clicking the tray shows the current page. Its right-click menu contains **Status**, **Password**, **About**, and **Quit**; page entries navigate the main window without elevation, including while Bluetooth is busy.
+
+Navigation contains **Status**, **Password**, **Diagnostics**, and **About** at the bottom. A Frame navigates between cached pages below the fixed header in the same centered, width-constrained container; each page owns its UI, scroll area and interactions. Dashboard coordinates navigation, the header and host callbacks; About owns update checks, which Quit cancels. Password shows the verified console account and saved-copy status, with **Save password** or **Update password** beside removal when a copy exists and **Refresh** in the header. Account queries read Windows identity properties even after the service restarts. Operations request UAC and use a separate WinUI PasswordBox/ContentDialog; InfoBar reports results and failures. Unknown status disables operations and offers Refresh. About shows the shared product version, GitHub project/MIT license links and a manual **Check for updates** against the latest formal GitHub Release. It compares numeric versions and links to a newer release without downloading or installing it; failures are shown separately from an up-to-date result.
 
 For manual enrollment, use an elevated PowerShell console on the unlocked target desktop, place the phone's 65-byte uncompressed P-256 public key as 130 hexadecimal digits on the clipboard, then run:
 

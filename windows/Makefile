@@ -10,6 +10,8 @@ CMAKE_GENERATOR = NMake Makefiles
 TARGET_ARCH = auto
 NATIVE_VSDEV_CMD = $(CURDIR)\Invoke-NativeVsDevCmd.cmd
 
+unexport MAKEFLAGS
+
 all: build test
 
 help:

@@ -12,8 +12,8 @@ The Windows side contains four installed components: the desktop app, LocalSyste
 
 ## Build prerequisites
 
-- Windows and Visual Studio 2022 / Build Tools 2022 with **Desktop development with C++**, MSVC C++20 support and the target architecture's tools. ARM64 requires the ARM64 C++ tools component.
-- Windows SDK **10.0.22621.0 or newer** with C++/WinRT headers; a recent SDK is recommended.
+- Windows and Visual Studio 2022 / 2026 or matching Build Tools with **Desktop development with C++**, **C++ WinUI app development tools**, MSVC C++20 support and the target architecture's tools. The WinUI tools supply native XAML MSBuild targets. ARM64 requires the ARM64 C++ tools component.
+- Windows SDK **10.0.22621.0 or newer** with C++/WinRT headers and `cppwinrt.exe`; a recent SDK is recommended. The desktop projection generator uses the same SDK tool directory as CMake's manifest tool; the C++/WinRT NuGet package supplies MSBuild integration.
 - **CMake 3.25 or newer**, `ctest`, and **GNU Make** available on `PATH`. `make` here is GNU Make; the CMake generator uses the separate MSVC `nmake` supplied by Visual Studio.
 - Run from a native Windows PowerShell or command prompt. The Makefile uses Windows commands and is not a WSL build workflow.
 
@@ -96,6 +96,8 @@ Module guides: [GattHost](GattHost/README.md), [SavedCredential](SavedCredential
 | `--key-hex <public-key> [--replace]`, `--key-clipboard [--replace]`, `--clear` | Elevated manual public-key enrollment using the calling console. |
 
 The WinUI main window and its native title bar follow the Windows app theme. Closing the WinUI main window hides it to the tray; Quit exits the host. Recoverable UI errors are reported without restarting UI or stopping BLE; fatal process faults are outside this guarantee. Closing an operation window does not exit the tray. Role parsing is defined in [DesktopApp.h](DesktopApp/DesktopApp.h); role arguments do not grant permission.
+
+Navigation contains **Status**, **Password**, **Diagnostics**, and **About** at the bottom. A Frame navigates between cached pages below the fixed header in the same centered, width-constrained container; each page owns its UI, scroll area and interactions. Dashboard coordinates navigation, the header and host callbacks; About owns update checks, which Quit cancels. Password opens the existing elevated manager. About shows the shared product version, GitHub project/MIT license links and a manual **Check for updates** against the latest formal GitHub Release. It compares numeric versions and links to a newer release without downloading or installing it; failures are shown separately from an up-to-date result.
 
 For manual enrollment, use an elevated PowerShell console on the unlocked target desktop, place the phone's 65-byte uncompressed P-256 public key as 130 hexadecimal digits on the clipboard, then run:
 

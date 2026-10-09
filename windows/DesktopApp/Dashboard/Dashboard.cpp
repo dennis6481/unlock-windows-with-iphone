@@ -2,22 +2,26 @@
 
 #include "Dashboard.h"
 #include "../../Resources/resource.h"
+#include "Pages/PageControls.h"
 
 #include <Windows.h>
 #undef GetCurrentTime
 #include <commctrl.h>
 #include <microsoft.ui.xaml.window.h>
 #include <winrt/Windows.Foundation.Collections.h>
+#include "Pages/StatusPage.xaml.h"
+#include "Pages/PasswordPage.xaml.h"
+#include "Pages/DiagnosticsPage.xaml.h"
 #include <winrt/Windows.UI.Xaml.Interop.h>
 #include <winrt/Microsoft.UI.Dispatching.h>
 #include <winrt/Microsoft.UI.Windowing.h>
 #include <winrt/Microsoft.UI.Xaml.h>
-#include <winrt/Microsoft.UI.Xaml.Automation.h>
+#include "Pages/AboutPage.xaml.h"
 #include <winrt/Microsoft.UI.Xaml.Controls.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Microsoft.UI.Xaml.Markup.h>
 #include <winrt/Microsoft.UI.Xaml.Media.h>
-#include <winrt/Microsoft.UI.Xaml.XamlTypeInfo.h>
+#include <winrt/UnlockDesktop.h>
 
 #include <mutex>
 #include <thread>
@@ -30,7 +34,7 @@ using namespace winrt::Microsoft::UI::Xaml;
 using namespace winrt::Microsoft::UI::Xaml::Controls;
 using namespace winrt::Microsoft::UI::Xaml::Markup;
 
-namespace { std::wstring currentException(); }
+using namespace dashboard_ui;
 
 struct Dashboard::State final {
     std::mutex mutex;
@@ -39,6 +43,7 @@ struct Dashboard::State final {
     DashboardSnapshot snapshot;
     PairingAction action;
     RefreshAction refresh;
+    PasswordAction password;
     ReportError reportError;
     std::wstring failure;
     bool stopping = false;
@@ -49,10 +54,12 @@ struct Dashboard::State final {
     App* app = nullptr;
 
     void report(std::wstring message) {
-        {
-            std::lock_guard lock(mutex);
-            failure = message;
+        std::lock_guard lock(mutex);
+        if (stopping) {
+            OutputDebugStringW(message.c_str());
+            return;
         }
+        failure = message;
         reportError(std::move(message));
     }
 
@@ -70,22 +77,6 @@ struct Dashboard::State final {
 };
 
 namespace {
-TextBlock text(const wchar_t* value, double size = 14) {
-    TextBlock block;
-    block.Text(value);
-    block.FontSize(size);
-    block.TextWrapping(TextWrapping::Wrap);
-    return block;
-}
-
-FontIcon icon(const wchar_t* glyph, double size = 20) {
-    FontIcon result;
-    result.FontFamily(Media::FontFamily(L"Segoe Fluent Icons, Segoe MDL2 Assets"));
-    result.Glyph(glyph);
-    result.FontSize(size);
-    return result;
-}
-
 NavigationViewItem navigationItem(const wchar_t* label, const wchar_t* glyph) {
     NavigationViewItem item;
     item.Content(box_value(hstring(label)));
@@ -94,18 +85,6 @@ NavigationViewItem navigationItem(const wchar_t* label, const wchar_t* glyph) {
     return item;
 }
 
-GridLength star() { return {1, GridUnitType::Star}; }
-GridLength automatic() { return {0, GridUnitType::Auto}; }
-
-std::wstring currentException() {
-    try { throw; }
-    catch (const hresult_error& error) {
-        return std::wstring(error.message()) + L" (HRESULT=" +
-            std::to_wstring(static_cast<unsigned long>(error.code().value)) + L")";
-    }
-    catch (const std::exception& error) { return std::wstring(to_hstring(error.what())); }
-    catch (...) { return L"Unknown Dashboard error."; }
-}
 }
 
 struct Dashboard::State::App : ApplicationT<App, IXamlMetadataProvider> {
@@ -180,6 +159,14 @@ private:
         return DefSubclassProc(window, message, wparam, lparam);
     }
 
+    template<typename PageType>
+    PageType navigateTo() {
+        const auto type = xaml_typename<PageType>();
+        if (!frame_.Navigate(type))
+            throw hresult_error(E_FAIL, L"Failed to navigate to " + type.Name);
+        return frame_.Content().as<PageType>();
+    }
+
     void buildWindow() {
         window_ = Window{};
         window_.Title(UNLOCK_PRODUCT_DISPLAY_NAME);
@@ -201,14 +188,17 @@ private:
         });
 
         nav_ = NavigationView{};
-        nav_.PaneDisplayMode(NavigationViewPaneDisplayMode::Left);
+        nav_.PaneDisplayMode(NavigationViewPaneDisplayMode::Auto);
         nav_.OpenPaneLength(210);
         nav_.IsBackButtonVisible(NavigationViewBackButtonVisible::Collapsed);
         nav_.IsSettingsVisible(false);
-        nav_.PaneTitle(UNLOCK_PRODUCT_DISPLAY_NAME);
+        nav_.HorizontalContentAlignment(HorizontalAlignment::Stretch);
+        nav_.VerticalContentAlignment(VerticalAlignment::Stretch);
         auto status = navigationItem(L"Status", L"\xE8EA");
         nav_.MenuItems().Append(status);
+        nav_.MenuItems().Append(navigationItem(L"Password", L"\xE72E"));
         nav_.MenuItems().Append(navigationItem(L"Diagnostics", L"\xE9D9"));
+        nav_.FooterMenuItems().Append(navigationItem(L"About", L"\xE946"));
 
         root_ = Grid{};
         root_.Padding({28, 24, 28, 24});
@@ -252,76 +242,36 @@ private:
         header.Children().Append(actions);
         root_.Children().Append(header);
 
-        ScrollViewer scroll;
-        scroll.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);
-        scroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Disabled);
-        scroll.VerticalContentAlignment(VerticalAlignment::Center);
-        Grid::SetRow(scroll, 1);
-        body_ = StackPanel{};
-        body_.MaxWidth(560);
-        body_.Spacing(20);
-        body_.Margin({0, 32, 0, 0});
-        scroll.Content(body_);
-        root_.Children().Append(scroll);
+        frame_ = Frame{};
+        frame_.IsNavigationStackEnabled(false);
+        Grid::SetRow(frame_, 1);
+        root_.Children().Append(frame_);
 
-        statusPanel_ = StackPanel{};
-        statusPanel_.Spacing(12);
-        auto phone = icon(L"\xE8EA", 100);
-        phone.HorizontalAlignment(HorizontalAlignment::Center);
-        Automation::AutomationProperties::SetName(phone, L"iPhone");
-        statusPanel_.Children().Append(phone);
-        name_ = text(L"iPhone", 24);
-        name_.TextAlignment(TextAlignment::Center);
-        statusPanel_.Children().Append(name_);
-        statusText_ = text(L"");
-        statusText_.TextAlignment(TextAlignment::Center);
-        statusPanel_.Children().Append(statusText_);
-        connection_ = text(L"");
-        connection_.TextAlignment(TextAlignment::Center);
-        statusPanel_.Children().Append(connection_);
-
-        auto card = XamlReader::Load(LR"(<Border
-            xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-            BorderThickness="1" CornerRadius="8" Padding="20,18" Margin="0,16,0,0"/>)").as<Border>();
-        Grid approval;
-        ColumnDefinition labelColumn;
-        labelColumn.Width(star());
-        approval.ColumnDefinitions().Append(labelColumn);
-        ColumnDefinition valueColumn;
-        valueColumn.Width(automatic());
-        approval.ColumnDefinitions().Append(valueColumn);
-        approval.Children().Append(text(L"Last approval"));
-        auto value = text(L"N/A");
-        Grid::SetColumn(value, 1);
-        approval.Children().Append(value);
-        card.Child(approval);
-        approvalCard_ = card;
-        statusPanel_.Children().Append(card);
-
-        error_ = InfoBar{};
-        error_.Severity(InfoBarSeverity::Error);
-        error_.IsClosable(false);
-        statusPanel_.Children().Append(error_);
-        diagnostics_ = TextBox{};
-        diagnostics_.IsReadOnly(true);
-        diagnostics_.AcceptsReturn(true);
-        diagnostics_.TextWrapping(TextWrapping::Wrap);
-        diagnostics_.MinHeight(320);
-        Automation::AutomationProperties::SetName(diagnostics_, L"Technical details and diagnostic history");
         nav_.Content(root_);
         navigationToken_ = nav_.SelectionChanged([this](const auto&, const NavigationViewSelectionChangedEventArgs& args) {
             const auto item = args.SelectedItem().try_as<NavigationViewItem>();
             if (!item) return;
             const auto label = unbox_value<hstring>(item.Tag());
-            title_.Text(label);
             const bool statusPage = label == L"Status";
+            const bool diagnosticsPage = label == L"Diagnostics";
+            if (statusPage) {
+                statusPage_ = navigateTo<winrt::UnlockDesktop::StatusPage>();
+                get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->Update(snapshot_);
+            } else if (diagnosticsPage) {
+                diagnosticsPage_ = navigateTo<winrt::UnlockDesktop::DiagnosticsPage>();
+                get_self<winrt::UnlockDesktop::implementation::DiagnosticsPage>(diagnosticsPage_)->Update(snapshot_.diagnostics);
+            } else if (label == L"Password") {
+                const auto page = navigateTo<winrt::UnlockDesktop::PasswordPage>();
+                get_self<winrt::UnlockDesktop::implementation::PasswordPage>(page)->Bind(state_->password);
+            } else if (label == L"About") {
+                aboutPage_ = navigateTo<winrt::UnlockDesktop::AboutPage>();
+                get_self<winrt::UnlockDesktop::implementation::AboutPage>(aboutPage_)->Bind(
+                    [state = state_](std::wstring message) { state->report(std::move(message)); });
+            } else throw hresult_invalid_argument(L"Unknown Dashboard page.");
+            root_.MaxWidth(diagnosticsPage ? 900 : 560);
+            title_.Text(label);
             action_.Visibility(statusPage ? Visibility::Visible : Visibility::Collapsed);
-            body_.Children().Clear();
-            body_.MaxWidth(statusPage ? 560 : 900);
-            if (statusPage) body_.Children().Append(statusPanel_);
-            else body_.Children().Append(diagnostics_);
+            refresh_.Visibility(statusPage || diagnosticsPage ? Visibility::Visible : Visibility::Collapsed);
         });
         nav_.SelectedItem(status);
         window_.Content(nav_);
@@ -332,17 +282,10 @@ private:
         actionPending_ = false;
         const bool known = snapshot_.paired.has_value();
         const bool paired = snapshot_.paired.value_or(false);
-        name_.Text(!known ? L"Pairing status unavailable" : paired ? L"iPhone" : L"Pair an iPhone");
-        statusText_.Text(!known || paired || snapshot_.busy ? snapshot_.status :
-            L"Open Unlock PC on your iPhone, then choose Add a Windows PC.");
-        connection_.Text(snapshot_.connection);
         action_.Content(box_value(hstring(paired ? L"Remove iPhone" : L"Pair iPhone")));
         action_.IsEnabled(known && !snapshot_.busy);
-        approvalCard_.Visibility(known && paired ? Visibility::Visible : Visibility::Collapsed);
-        error_.Title(L"Status needs attention");
-        error_.Message(snapshot_.error);
-        error_.IsOpen(!snapshot_.error.empty());
-        diagnostics_.Text(snapshot_.diagnostics);
+        if (statusPage_) get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->Update(snapshot_);
+        if (diagnosticsPage_) get_self<winrt::UnlockDesktop::implementation::DiagnosticsPage>(diagnosticsPage_)->Update(snapshot_.diagnostics);
     }
 
 public:
@@ -354,6 +297,7 @@ public:
         if (nav_ && navigationToken_.value) nav_.SelectionChanged(navigationToken_);
         if (action_ && actionToken_.value) action_.Click(actionToken_);
         if (refresh_ && refreshToken_.value) refresh_.Click(refreshToken_);
+        if (aboutPage_) get_self<winrt::UnlockDesktop::implementation::AboutPage>(aboutPage_)->Stop();
         if (hwnd_) RemoveWindowSubclass(hwnd_, sizing, 1);
         if (window_) window_.Close();
         window_ = nullptr;
@@ -368,28 +312,28 @@ public:
 
 private:
     std::shared_ptr<State> state_;
-    XamlTypeInfo::XamlControlsXamlMetaDataProvider provider_;
+    winrt::UnlockDesktop::XamlMetaDataProvider provider_;
     Window window_{nullptr};
     Windowing::AppWindow appWindow_{nullptr};
     HWND hwnd_ = nullptr;
     NavigationView nav_{nullptr};
     Grid root_{nullptr};
-    StackPanel body_{nullptr};
-    StackPanel statusPanel_{nullptr};
-    TextBlock title_{nullptr}, name_{nullptr}, statusText_{nullptr}, connection_{nullptr};
+    Frame frame_{nullptr};
+    winrt::UnlockDesktop::StatusPage statusPage_{nullptr};
+    winrt::UnlockDesktop::DiagnosticsPage diagnosticsPage_{nullptr};
+    winrt::UnlockDesktop::AboutPage aboutPage_{nullptr};
+    TextBlock title_{nullptr};
     Button action_{nullptr}, refresh_{nullptr};
-    TextBox diagnostics_{nullptr};
-    Border approvalCard_{nullptr};
-    InfoBar error_{nullptr};
     DashboardSnapshot snapshot_;
     bool actionPending_ = false;
     bool exiting_ = false;
     event_token closingToken_{}, navigationToken_{}, actionToken_{}, refreshToken_{}, unhandledToken_{};
 };
 
-Dashboard::Dashboard(PairingAction action, RefreshAction refresh, ReportError reportError) : state_(std::make_shared<State>()) {
+Dashboard::Dashboard(PairingAction action, RefreshAction refresh, PasswordAction password, ReportError reportError) : state_(std::make_shared<State>()) {
     state_->action = std::move(action);
     state_->refresh = std::move(refresh);
+    state_->password = std::move(password);
     state_->reportError = std::move(reportError);
 }
 

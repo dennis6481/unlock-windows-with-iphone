@@ -8,7 +8,7 @@
 #include <string>
 
 namespace unlock::components {
-inline constexpr std::uint32_t kWizardStateSchemaVersion = 6;
+inline constexpr std::uint32_t kWizardStateSchemaVersion = 5;
 
 enum class WizardPhase : std::uint32_t {
     none = 0,

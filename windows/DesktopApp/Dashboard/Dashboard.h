@@ -23,8 +23,9 @@ public:
     using PairingAction = std::function<void(bool remove)>;
     using ReportError = std::function<void(std::wstring)>;
     using RefreshAction = std::function<void()>;
+    using PasswordAction = std::function<void()>;
 
-    Dashboard(PairingAction action, RefreshAction refresh, ReportError reportError);
+    Dashboard(PairingAction action, RefreshAction refresh, PasswordAction password, ReportError reportError);
     ~Dashboard();
     Dashboard(const Dashboard&) = delete;
     Dashboard& operator=(const Dashboard&) = delete;

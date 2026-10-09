@@ -17,7 +17,7 @@ struct ProductVersion final {
         return std::to_wstring(major) + L"." + std::to_wstring(minor) + L"." + std::to_wstring(patch);
     }
 };
-inline constexpr ProductVersion kProductVersion{0, 2, 0};
+inline constexpr ProductVersion kProductVersion{0, 2, 1};
 
 [[nodiscard]] inline std::optional<ProductVersion> parseProductVersion(std::wstring_view text) {
     std::array<std::uint16_t, 3> parts{};

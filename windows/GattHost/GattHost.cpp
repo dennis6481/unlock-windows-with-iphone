@@ -866,6 +866,9 @@ public:
             [this, state = state_] {
                 state->post([this] { reconcile(true); publishDashboard(true); });
             },
+            [this, state = state_] {
+                state->post([this] { manageSavedPassword(); });
+            },
             [this, state = state_](std::wstring error) {
                 state->record(L"Dashboard: " + error, true);
                 state->post([this, error = std::move(error)] {

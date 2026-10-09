@@ -39,7 +39,7 @@ Registration is validated as a P-256 point, written to a protected same-director
 
 | Action | Effect |
 |---|---|
-| Status… | WinUI Status and Diagnostics, including Refresh and diagnostic history. |
+| Status… | WinUI Status, Password, Diagnostics and About; Refresh, password-manager access and manual release checks. |
 | Pair iPhone… | First enrollment, already-registered confirmation or explicit phone replacement. |
 | Manage saved password… | Elevated password-management role in a separate instance. |
 | Remove paired iPhone… | Removes registration and reloads the service; does not remove the password, ComputerId or OS Bluetooth pairing. |

@@ -1,0 +1,29 @@
+// Created by Rui MA on 09 Oct 2026
+
+namespace UnlockDesktop
+{
+    [default_interface]
+    runtimeclass StatusPage : Microsoft.UI.Xaml.Controls.Page
+    {
+        StatusPage();
+    }
+
+    [default_interface]
+    runtimeclass PasswordPage : Microsoft.UI.Xaml.Controls.Page
+    {
+        PasswordPage();
+    }
+
+    [default_interface]
+    runtimeclass DiagnosticsPage : Microsoft.UI.Xaml.Controls.Page
+    {
+        DiagnosticsPage();
+    }
+
+    [default_interface]
+    runtimeclass AboutPage : Microsoft.UI.Xaml.Controls.Page
+    {
+        AboutPage();
+    }
+
+}

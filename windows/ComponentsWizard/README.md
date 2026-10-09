@@ -37,7 +37,7 @@ Setup requires Windows 10 1809 or later. Desktop runtime files stay in the app d
 | Downgrade | Rejected. |
 | Uninstall | Confirm, clear password through the service, remove registration/ComputerId and Windows components/integration. |
 
-The current installation schema is **6**, defined in [SetupContract.h](SetupContract.h). Unsupported schemas, incomplete installations and mismatched pending transactions are rejected. This tool does not migrate them; remove them with their own maintenance tool before a fresh installation. Phone records/private keys are managed separately on the iPhone.
+The current installation schema is **5**, defined in [SetupContract.h](SetupContract.h). Unsupported schemas, incomplete installations and mismatched pending transactions are rejected. This tool does not migrate them; remove them with their own maintenance tool before a fresh installation. Phone records/private keys are managed separately on the iPhone.
 
 Version 0.1.0 installations and pending transactions must be completed and uninstalled with their original installer before using this package. Missing dependency manifests are rejected; no migration path is retained. Uninstall removes Windows credentials and pairing records, so a fresh installation requires configuration again.
 

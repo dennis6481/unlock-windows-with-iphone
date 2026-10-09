@@ -1,0 +1,13 @@
+<!-- Created by Rui MA on 09 Oct 2026 -->
+<Page
+    x:Class="UnlockDesktop.StatusPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    NavigationCacheMode="Required">
+    <ScrollViewer x:Name="StatusScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                  HorizontalContentAlignment="Stretch" VerticalContentAlignment="Center">
+        <ContentControl x:Name="BodyHost" Width="{Binding ViewportWidth, ElementName=StatusScroll}"
+                        Margin="0,32,0,0" HorizontalAlignment="Center"
+                        HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" />
+    </ScrollViewer>
+</Page>

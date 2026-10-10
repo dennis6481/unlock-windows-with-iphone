@@ -136,7 +136,7 @@ private:
         nav_.FooterMenuItems().Append(pages_[3]);
 
         root_ = Grid{};
-        root_.MaxWidth(1744);
+        root_.MaxWidth(800);
         root_.Padding({28, 24, 28, 24});
         RowDefinition headerRow;
         headerRow.Height(automatic());

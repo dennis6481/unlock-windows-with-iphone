@@ -1,6 +1,7 @@
 // Created by Rui MA on 05 Oct 2026
 
 #include "DesktopApp.h"
+#include "DesktopNotifications.h"
 #include "../Enrollment/EnrollmentSession.h"
 #include "../Resources/resource.h"
 #include <shellapi.h>
@@ -52,8 +53,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     } catch (const std::exception& error) {
         if (manual) std::cerr << "[Unlock with iPhone] " << error.what() << '\n';
         const std::string text(error.what());
-        MessageBoxW(nullptr, std::wstring(text.begin(), text.end()).c_str(),
-            UNLOCK_PRODUCT_DISPLAY_NAME, MB_OK | MB_ICONERROR);
+        showStartupError(std::wstring(text.begin(), text.end()), UNLOCK_PRODUCT_DISPLAY_NAME);
         return 1;
     }
 }

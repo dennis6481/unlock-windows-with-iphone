@@ -102,6 +102,8 @@ Confirm the service owns the original 30-second request deadline and never exten
 - Check same-user UAC and another administrator's UAC: the target remains the original physical-console account.
 - Check UAC/confirmation cancellation, timeout, lock/session change, sleep, disconnect, concurrent/second candidate, invalid public key and service/storage failure. Pre-commit failure preserves the old record; post-commit reload failure reports its actual saved state.
 - Check manual enrollment requires elevation, full fingerprint and explicit `--replace`/removal confirmation. It does not initialize a tray or BLE authentication path.
+- Check the WinUI pairing window's full eight-group fingerprint, waiting progress, safe replacement/removal focus, repeated confirmation clicks, Cancel and title-bar close. Service/storage work must leave UI responsive; closing waits for worker cleanup. Manual removal retains its console `REMOVE` confirmation and existing exit codes.
+- With the main window hidden, enqueue multiple desktop notices and verify one WinUI window at a time in order. Closing notices leaves the tray alive; Quit waits for pending acknowledgments and transport cleanup. Check theme/high DPI, post-commit reload errors and WinUI initialization/display failure: record both the operation and UI error, show a native emergency error and do not restart WinUI.
 - Check password save/update/remove, five-minute snapshot expiry/Refresh without a second sign-in and cancelled operations. Phone removal does not clear the password; password management does not change the online account password. Closing either operation leaves the tray alive.
 
 ## Connection and background recovery

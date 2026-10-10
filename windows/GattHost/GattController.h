@@ -4,6 +4,7 @@
 
 #include "../DesktopApp/Dashboard/Dashboard.h"
 #include "../DesktopApp/TrayManager.h"
+#include "../DesktopApp/DesktopNotifications.h"
 #include <functional>
 #include <memory>
 #include <optional>
@@ -19,7 +20,7 @@ struct CallbackState;
 struct GattNotice final {
     std::wstring message;
     std::wstring title;
-    UINT flags = MB_OK;
+    NoticeSeverity severity = NoticeSeverity::information;
 };
 
 struct GattUpdate final {

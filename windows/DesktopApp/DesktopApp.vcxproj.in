@@ -81,6 +81,8 @@
   <ItemGroup>
     <ClCompile Include="@CMAKE_CURRENT_SOURCE_DIR@/DesktopApp/main.cpp" />
     <ClCompile Include="@CMAKE_CURRENT_SOURCE_DIR@/DesktopApp/DesktopHost.cpp" />
+    <ClCompile Include="@CMAKE_CURRENT_SOURCE_DIR@/DesktopApp/DesktopNotifications.cpp" />
+    <ClCompile Include="@CMAKE_CURRENT_SOURCE_DIR@/Enrollment/Enrollment.cpp" />
     <ClCompile Include="@CMAKE_CURRENT_SOURCE_DIR@/SavedCredential/CredentialManagement.cpp" />
     <ClInclude Include="@CMAKE_CURRENT_SOURCE_DIR@/DesktopApp/DesktopApplication.h" />
     <ClCompile Include="@CMAKE_CURRENT_SOURCE_DIR@/DesktopApp/Dashboard/Dashboard.cpp" />
@@ -98,7 +100,6 @@
     <Page Include="@CMAKE_CURRENT_SOURCE_DIR@/DesktopApp/Dashboard/Pages/DiagnosticsPage.xaml"><Link>DiagnosticsPage.xaml</Link></Page>
     <Page Include="@CMAKE_CURRENT_SOURCE_DIR@/DesktopApp/Dashboard/Pages/AboutPage.xaml"><Link>AboutPage.xaml</Link></Page>
     <ResourceCompile Include="@UNLOCK_DESKTOP_VERSION_RESOURCE@" />
-    <ResourceCompile Include="@CMAKE_CURRENT_BINARY_DIR@/DesktopUi.rc" />
     <ResourceCompile Include="@CMAKE_CURRENT_BINARY_DIR@/AppIcon.rc" />
     <Manifest Include="@CMAKE_CURRENT_SOURCE_DIR@/Resources/DesktopUi.manifest" />
   </ItemGroup>

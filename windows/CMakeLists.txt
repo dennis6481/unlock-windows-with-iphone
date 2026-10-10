@@ -143,11 +143,10 @@ endif()
 add_library(unlock_desktop_native STATIC
     DesktopApp/TrayManager.cpp
     GattHost/GattHost.cpp
-    Enrollment/Enrollment.cpp
 )
 
 set_target_properties(unlock_desktop_native PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-target_compile_definitions(unlock_desktop_native PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNLOCK_UI_PAIRING)
+target_compile_definitions(unlock_desktop_native PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(unlock_desktop_native PRIVATE
     unlock_saved_credential_ipc unlock_enrollment_store unlock_protocol_crypto
     windowsapp user32 shell32 wtsapi32 ole32 advapi32 comctl32 gdi32 bcrypt crypt32)
@@ -372,7 +371,6 @@ if(NOT EXISTS "${UNLOCK_APP_ICON_SOURCE}")
     message(FATAL_ERROR "Standard iOS AppIcon source is missing")
 endif()
 configure_file(Resources/AppIcon.rc.in AppIcon.rc @ONLY)
-configure_file(Resources/DesktopUi.rc.in DesktopUi.rc @ONLY)
 target_sources(unlock_credential_provider PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/AppIcon.rc)
 target_sources(unlock_windows_setup_objects PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/AppIcon.rc)
 get_property(unlock_windows_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)

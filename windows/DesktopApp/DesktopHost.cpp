@@ -2,6 +2,7 @@
 
 #include "DesktopApp.h"
 #include "DesktopApplication.h"
+#include "DesktopNotifications.h"
 #include "TrayManager.h"
 #include "Dashboard/Dashboard.h"
 #include "Dashboard/Pages/PageControls.h"
@@ -64,6 +65,9 @@ public:
         dispatcher_ = Dispatching::DispatcherQueue::GetForCurrentThread();
         if (!dispatcher_) throw std::runtime_error("The WinUI dispatcher is unavailable");
         const auto weak = weak_from_this();
+        notifications_ = std::make_unique<DesktopNotifications>([weak] {
+            if (const auto host = weak.lock()) host->poll();
+        });
         controller_ = std::make_unique<GattController>([weak, dispatcher = dispatcher_] {
             return dispatcher.TryEnqueue([weak] {
                 if (const auto host = weak.lock()) host->poll();
@@ -114,7 +118,7 @@ public:
 private:
     void report(const std::wstring& message, const wchar_t* title) {
         if (controller_) controller_->record(L"Desktop: " + message);
-        MessageBoxW(window_, message.c_str(), title, MB_OK | MB_ICONERROR);
+        notifications_->show(message, title, NoticeSeverity::error);
     }
 
     void bindTray() {
@@ -176,13 +180,13 @@ private:
             requestStop();
             report(std::wstring(to_hstring(error.what())), L"Desktop window failed");
         }
+        for (const auto& notice : update.notices) {
+            if (stopping_ && notice.severity != NoticeSeverity::error) continue;
+            notifications_->show(notice.message, notice.title, notice.severity);
+        }
         if (stopping_ && controller_->ended()) {
+            if (!notifications_->empty()) return;
             finish();
-            for (const auto& notice : update.notices) {
-                if (!(notice.flags & MB_ICONERROR)) continue;
-                MessageBoxW(nullptr, notice.message.c_str(), notice.title.c_str(), notice.flags);
-                break;
-            }
             Application::Current().Exit();
             return;
         } else if (stopping_ && !stopTimeoutReported_ && GetTickCount64() - stopRequestedAt_ >= kShutdownReportDelayMs) {
@@ -191,18 +195,13 @@ private:
             report(L"Exit has not completed: the Bluetooth control thread is still stopping. The app remains responsive and will exit when cleanup finishes.",
                 L"Exit needs attention");
         }
-        polling_ = false;
-        for (const auto& notice : update.notices) {
-            if (completed_) break;
-            if (stopping_ && !(notice.flags & MB_ICONERROR)) continue;
-            MessageBoxW(window_, notice.message.c_str(), notice.title.c_str(), notice.flags);
-        }
     }
 
     void finish() {
         if (completed_) return;
         if (controller_) controller_->join();
         if (dashboard_) dashboard_->stop();
+        if (notifications_) notifications_->stop();
         tray_.stop();
         if (window_) {
             desktop_ui::require(DestroyWindow(window_), "DestroyWindow(tray)");
@@ -267,6 +266,7 @@ private:
     Windows::Foundation::Deferral shutdownDeferral_{nullptr};
     std::unique_ptr<GattController> controller_;
     std::unique_ptr<Dashboard> dashboard_;
+    std::unique_ptr<DesktopNotifications> notifications_;
     DashboardSnapshot snapshot_;
     TrayManager tray_;
     bool stopping_ = false;
@@ -280,14 +280,15 @@ private:
 
 int runTray(HINSTANCE instance, bool setup, bool background) {
     std::shared_ptr<DesktopHost> host;
+    bool uiStarted = false;
     try {
-        desktop_ui::initialize();
         host = std::make_shared<DesktopHost>(instance, setup, background);
         if (!host->prepare()) return 0;
         init_apartment(apartment_type::single_threaded);
         struct Apartment final { ~Apartment() { uninit_apartment(); } } apartment;
         com_ptr<DesktopApplication> app;
         try {
+            uiStarted = true;
             Application::Start([&](const auto&) {
                 app = make_self<DesktopApplication>([weak = std::weak_ptr(host)] {
                     if (const auto current = weak.lock()) current->launch();
@@ -300,7 +301,7 @@ int runTray(HINSTANCE instance, bool setup, bool background) {
             return result;
         } catch (...) {
             const auto error = dashboard_ui::currentException();
-            MessageBoxW(nullptr, error.c_str(), L"Could not run desktop app", MB_OK | MB_ICONERROR);
+            showNativeUiError(L"Could not run desktop app.", error, L"Could not run desktop app");
             try { host->finishAfterLoop(); }
             catch (...) { RaiseFailFastException(nullptr, nullptr, 0); }
             app = nullptr;
@@ -309,7 +310,8 @@ int runTray(HINSTANCE instance, bool setup, bool background) {
         }
     } catch (...) {
         const auto error = dashboard_ui::currentException();
-        MessageBoxW(nullptr, error.c_str(), L"Could not run desktop app", MB_OK | MB_ICONERROR);
+        if (uiStarted) showNativeUiError(L"Could not run desktop app.", error, L"Could not run desktop app");
+        else showStartupError(error, L"Could not run desktop app");
         return 1;
     }
 }

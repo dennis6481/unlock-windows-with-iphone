@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "../../DesktopNotifications.h"
 #include <Windows.h>
 #undef GetCurrentTime
 #include <string>
@@ -16,6 +17,15 @@ namespace unlock_windows::desktop_app::dashboard_ui {
 using namespace winrt;
 using namespace Microsoft::UI::Xaml;
 using namespace Microsoft::UI::Xaml::Controls;
+
+inline InfoBarSeverity infoBarSeverity(NoticeSeverity severity) {
+    switch (severity) {
+    case NoticeSeverity::information: return InfoBarSeverity::Informational;
+    case NoticeSeverity::warning: return InfoBarSeverity::Warning;
+    case NoticeSeverity::error: return InfoBarSeverity::Error;
+    }
+    throw hresult_invalid_argument(L"Unknown desktop notice severity.");
+}
 
 inline TextBlock text(const wchar_t* value, double size = 14) {
     TextBlock block;
@@ -49,6 +59,6 @@ inline std::wstring currentException() {
             std::to_wstring(static_cast<unsigned long>(error.code().value)) + L")";
     }
     catch (const std::exception& error) { return std::wstring(to_hstring(error.what())); }
-    catch (...) { return L"Unknown Dashboard error."; }
+    catch (...) { return L"Unknown desktop error."; }
 }
 }

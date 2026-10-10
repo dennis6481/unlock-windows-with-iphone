@@ -5,7 +5,20 @@
 #include "EnrollmentSession.h"
 #include "EnrollmentChannel.h"
 #include "../Resources/resource.h"
-#include "../Resources/DesktopUi.h"
+#include "../DesktopApp/DesktopApplication.h"
+#include "../DesktopApp/DesktopNotifications.h"
+#include "../DesktopApp/Dashboard/Pages/PageControls.h"
+#include <microsoft.ui.xaml.window.h>
+#include <winrt/Microsoft.UI.Dispatching.h>
+#include <winrt/Microsoft.UI.Windowing.h>
+#include <winrt/Microsoft.UI.Xaml.Input.h>
+#include <winrt/Windows.System.h>
+#include <commctrl.h>
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
+#include <utility>
 #include "SavedCredentialIpc.h"
 
 #include <Windows.h>
@@ -119,8 +132,56 @@ private:
     bool busy_ = false;
 };
 
+struct EnrollmentView final {
+    DWORD session = 0xffffffff;
+    std::wstring account, text, fingerprint, notice;
+    std::wstring action = L"Pair iPhone";
+    bool remove = false;
+    bool destructive = false;
+    bool canConfirm = false;
+    bool waiting = false;
+    bool busy = false;
+};
+
+struct EnrollmentUi final {
+    std::mutex mutex;
+    std::condition_variable wake;
+    EnrollmentView view;
+    bool present = false;
+    bool changed = false;
+    bool started = false;
+    bool tick = false;
+    bool confirmed = false;
+    bool done = false;
+    std::optional<ExitCode> cancellation;
+    ExitCode result = ExitCode::cancelled;
+    std::wstring message, title, displayError;
+    unlock_windows::desktop_app::NoticeSeverity severity = unlock_windows::desktop_app::NoticeSeverity::error;
+
+    void cancel(ExitCode code) {
+        std::lock_guard lock(mutex);
+        if (!done && !cancellation) cancellation = code;
+        wake.notify_all();
+    }
+    void publish(EnrollmentView value) {
+        std::lock_guard lock(mutex);
+        view = std::move(value);
+        present = changed = true;
+        wake.notify_all();
+    }
+    void notice(std::wstring value, std::wstring caption,
+        unlock_windows::desktop_app::NoticeSeverity kind = unlock_windows::desktop_app::NoticeSeverity::error) {
+        OutputDebugStringW((caption + L": " + value + L"\n").c_str());
+        std::lock_guard lock(mutex);
+        message = std::move(value);
+        title = std::move(caption);
+        severity = kind;
+    }
+};
+
 class Confirmation final {
 public:
+    explicit Confirmation(EnrollmentUi& ui) : ui_(ui) {}
     Console target;
     ULONGLONG deadline = 0;
     HANDLE cancel = nullptr;
@@ -136,6 +197,10 @@ public:
 
     ExitCode check() {
         if (invalidated_) return result_;
+        {
+            std::lock_guard lock(ui_.mutex);
+            if (ui_.cancellation) return invalidate(*ui_.cancellation);
+        }
         if (GetTickCount64() >= deadline) return invalidate(ExitCode::expired);
         for (const HANDLE handle : {cancel, parent}) {
             if (!handle) continue;
@@ -153,40 +218,42 @@ public:
     }
     ExitCode run() {
         if (const auto code = check(); code != ExitCode::saved) return code;
-        unlock_windows::desktop_ui::initialize();
-        window_ = CreateDialogParamW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDD_PHONE_PAIRING),
-            nullptr, procedure, reinterpret_cast<LPARAM>(this));
-        require(window_ != nullptr, "CreateDialogParamW(phone pairing)");
-        try {
-            if (!error_.empty()) throw std::runtime_error(error_);
-            require(WTSRegisterSessionNotification(window_, NOTIFY_FOR_ALL_SESSIONS), "WTSRegisterSessionNotification");
-            registered_ = true;
-            if (!SetTimer(window_, 1, 250, nullptr)) require(FALSE, "SetTimer(enrollment confirmation)");
-            unlock_windows::desktop_ui::centerOnActiveMonitor(window_);
-            ShowWindow(window_, SW_SHOW);
-            SetForegroundWindow(window_);
-            if (channel) { requireValid(); channel->announceReady(); }
-            MSG message{};
-            BOOL received;
-            while ((received = GetMessageW(&message, nullptr, 0, 0)) > 0) {
-                if (!IsDialogMessageW(window_, &message)) {
-                    TranslateMessage(&message);
-                    DispatchMessageW(&message);
-                }
-            }
-            if (received == -1) require(FALSE, "GetMessageW(enrollment confirmation)");
-            cleanup();
-            if (!error_.empty()) throw std::runtime_error(error_);
-            return result_;
-        } catch (...) { cleanup(); throw; }
+        update();
+        {
+            std::unique_lock lock(ui_.mutex);
+            ui_.wake.wait(lock, [&] { return ui_.started || ui_.cancellation.has_value(); });
+        }
+        requireValid();
+        if (channel) channel->announceReady();
+        for (;;) {
+            std::unique_lock lock(ui_.mutex);
+            ui_.wake.wait(lock, [&] { return ui_.tick || ui_.confirmed || ui_.cancellation.has_value(); });
+            const bool accepted = std::exchange(ui_.confirmed, false);
+            ui_.tick = false;
+            lock.unlock();
+            if (const auto code = check(); code != ExitCode::saved) return code;
+            pollCandidate();
+            if (!accepted || (channel && !candidateReceived_)) continue;
+            requireValid();
+            update(true);
+            return ExitCode::saved;
+        }
     }
 private:
-    void update() {
-        require(SetDlgItemTextW(window_, IDC_UI_MESSAGE, text.c_str()), "SetDlgItemTextW(pairing instructions)");
-        require(SetDlgItemTextW(window_, IDC_UI_FINGERPRINT, fingerprint.c_str()), "SetDlgItemTextW(fingerprint)");
-        require(SetDlgItemTextW(window_, IDC_UI_NOTICE, notice.c_str()), "SetDlgItemTextW(pairing notice)");
-        require(SetDlgItemTextW(window_, IDOK, actionLabel), "SetDlgItemTextW(pairing action)");
-        EnableWindow(GetDlgItem(window_, IDOK), !channel || candidateReceived_);
+    void update(bool busy = false) {
+        EnrollmentView view;
+        view.session = target.session;
+        view.account = target.account;
+        view.text = text;
+        view.fingerprint = fingerprint;
+        view.notice = notice;
+        view.action = actionLabel;
+        view.remove = remove;
+        view.destructive = remove || replacement;
+        view.canConfirm = !busy && (!channel || candidateReceived_);
+        view.waiting = channel && !candidateReceived_;
+        view.busy = busy;
+        ui_.publish(std::move(view));
     }
     void pollCandidate() {
         if (!channel || candidateReceived_) return;
@@ -197,97 +264,314 @@ private:
         requireValid();
         candidateReceived_ = true;
         update();
-        unlock_windows::desktop_ui::defaultButton(window_, replacement ? IDCANCEL : IDOK);
-        SetForegroundWindow(window_);
     }
     ExitCode invalidate(ExitCode code) { invalidated_ = true; result_ = code; return code; }
+    EnrollmentUi& ui_;
+    bool candidateReceived_ = false;
+    bool invalidated_ = false;
+    ExitCode result_ = ExitCode::cancelled;
+};
+
+class EnrollmentWindow final : public std::enable_shared_from_this<EnrollmentWindow> {
+public:
+    explicit EnrollmentWindow(std::shared_ptr<EnrollmentUi> ui) : ui_(std::move(ui)) {}
+    ~EnrollmentWindow() {
+        try {
+            ui_->cancel(ExitCode::error);
+            cleanup();
+            if (window_ && !closed_) window_.Close();
+        }
+        catch (...) { unlock_windows::desktop_app::showNativeUiError(L"Could not release the pairing window.",
+            unlock_windows::desktop_app::dashboard_ui::currentException(), L"Phone enrollment failed"); }
+    }
+    void show() {
+        using namespace winrt;
+        using namespace Microsoft::UI::Xaml;
+        using namespace Microsoft::UI::Xaml::Controls;
+        using unlock_windows::desktop_app::dashboard_ui::text;
+        window_ = Window{};
+        appWindow_ = window_.AppWindow();
+        appWindow_.TitleBar().PreferredTheme(Microsoft::UI::Windowing::TitleBarTheme::UseDefaultAppMode);
+        check_hresult(window_.as<IWindowNative>()->get_WindowHandle(&hwnd_));
+        const auto dpi = GetDpiForWindow(hwnd_);
+        appWindow_.Resize({MulDiv(600, dpi, 96), MulDiv(570, dpi, 96)});
+        const auto appIcon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDI_UNLOCK_APP));
+        if (!appIcon) throw_last_error();
+        SendMessageW(hwnd_, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(appIcon));
+        SendMessageW(hwnd_, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(appIcon));
+        StackPanel content;
+        content.Margin({28, 24, 28, 24});
+        content.Spacing(16);
+        title_ = text(L"Pair your iPhone", 24);
+        account_ = text(L"", 18);
+        instructions_ = text(L"");
+        content.Children().Append(title_);
+        content.Children().Append(account_);
+        content.Children().Append(instructions_);
+        progress_ = ProgressRing{};
+        progress_.Width(28);
+        progress_.Height(28);
+        progress_.HorizontalAlignment(HorizontalAlignment::Left);
+        content.Children().Append(progress_);
+        fingerprint_ = TextBox{};
+        fingerprint_.Header(box_value(L"iPhone fingerprint"));
+        fingerprint_.IsReadOnly(true);
+        fingerprint_.AcceptsReturn(true);
+        fingerprint_.TextWrapping(TextWrapping::Wrap);
+        fingerprint_.FontFamily(Microsoft::UI::Xaml::Media::FontFamily(L"Consolas"));
+        content.Children().Append(fingerprint_);
+        notice_ = InfoBar{};
+        notice_.IsClosable(false);
+        content.Children().Append(notice_);
+        StackPanel actions;
+        actions.Orientation(Orientation::Horizontal);
+        actions.HorizontalAlignment(HorizontalAlignment::Right);
+        actions.Spacing(12);
+        action_ = Button{};
+        action_.Style(Application::Current().Resources().Lookup(box_value(L"AccentButtonStyle")).as<Style>());
+        cancel_ = Button{};
+        cancel_.Content(box_value(L"Cancel"));
+        const auto weak = weak_from_this();
+        content.Loaded([weak](const auto&, const auto&) {
+            if (const auto self = weak.lock()) {
+                try { self->focusAction(); }
+                catch (...) { self->displayFailure(); }
+            }
+        });
+        action_.Click([weak](const auto&, const auto&) {
+            if (const auto self = weak.lock()) self->accept();
+        });
+        cancel_.Click([weak](const auto&, const auto&) {
+            if (const auto self = weak.lock()) self->ui_->cancel(ExitCode::cancelled);
+        });
+        Input::KeyboardAccelerator escape;
+        escape.Key(Windows::System::VirtualKey::Escape);
+        escape.Invoked([weak](const auto&, const auto& args) {
+            args.Handled(true);
+            if (const auto self = weak.lock()) {
+                bool done;
+                { std::lock_guard lock(self->ui_->mutex); done = self->ui_->done; }
+                if (done) self->accept();
+                else self->ui_->cancel(ExitCode::cancelled);
+            }
+        });
+        content.KeyboardAccelerators().Append(escape);
+        actions.Children().Append(action_);
+        actions.Children().Append(cancel_);
+        content.Children().Append(actions);
+        ScrollViewer scroll;
+        scroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Disabled);
+        scroll.Content(content);
+        window_.Content(scroll);
+        closingToken_ = appWindow_.Closing([weak](const auto&, const auto& args) {
+            if (const auto self = weak.lock()) {
+                args.Cancel(true);
+                bool done;
+                { std::lock_guard lock(self->ui_->mutex); done = self->ui_->done; }
+                if (!done) self->ui_->cancel(ExitCode::cancelled);
+                else {
+                    try { self->close(); }
+                    catch (...) { self->displayFailure(); }
+                }
+            }
+        });
+        closedToken_ = window_.Closed([weak](const auto&, const auto&) {
+            if (const auto self = weak.lock()) {
+                self->closed_ = true;
+                self->ui_->cancel(ExitCode::cancelled);
+            }
+        });
+        require(SetWindowSubclass(hwnd_, procedure, 1, reinterpret_cast<DWORD_PTR>(this)), "SetWindowSubclass(pairing)");
+        subclassed_ = true;
+        require(WTSRegisterSessionNotification(hwnd_, NOTIFY_FOR_ALL_SESSIONS), "WTSRegisterSessionNotification");
+        registered_ = true;
+        dispatcher_ = window_.DispatcherQueue();
+        timer_ = dispatcher_.CreateTimer();
+        timer_.Interval(std::chrono::milliseconds(250));
+        timerToken_ = timer_.Tick([weak](const auto&, const auto&) {
+            if (const auto self = weak.lock()) {
+                try { self->poll(); }
+                catch (...) { self->displayFailure(); }
+            }
+        });
+        poll();
+        if (closed_) return;
+        window_.Activate();
+        timer_.Start();
+        {
+            std::lock_guard lock(ui_->mutex);
+            ui_->started = true;
+            ui_->wake.notify_all();
+        }
+    }
     void cleanup() {
         if (registered_) {
             registered_ = false;
-            if (!WTSUnRegisterSessionNotification(window_))
-                error_ += " WTSUnRegisterSessionNotification failed: " + std::to_string(GetLastError());
+            require(WTSUnRegisterSessionNotification(hwnd_), "WTSUnRegisterSessionNotification(pairing)");
         }
-        if (window_) { DestroyWindow(window_); window_ = nullptr; }
+        if (subclassed_) {
+            subclassed_ = false;
+            require(RemoveWindowSubclass(hwnd_, procedure, 1), "RemoveWindowSubclass(pairing)");
+        }
+        if (appWindow_ && closingToken_.value) appWindow_.Closing(closingToken_);
+        closingToken_ = {};
+        if (window_ && closedToken_.value) window_.Closed(closedToken_);
+        closedToken_ = {};
+        if (timer_) { timer_.Stop(); timer_.Tick(timerToken_); timer_ = nullptr; }
     }
-    void finish(ExitCode code) { result_ = code; PostQuitMessage(0); }
-    static INT_PTR CALLBACK procedure(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
-        auto* self = reinterpret_cast<Confirmation*>(GetWindowLongPtrW(window, DWLP_USER));
-        if (message == WM_INITDIALOG) {
-            self = reinterpret_cast<Confirmation*>(lparam);
-            self->window_ = window;
-            SetWindowLongPtrW(window, DWLP_USER, reinterpret_cast<LONG_PTR>(self));
+private:
+    void focusAction() {
+        bool safe;
+        {
+            std::lock_guard lock(ui_->mutex);
+            safe = !ui_->done && (ui_->view.destructive || !ui_->view.canConfirm);
         }
-        if (!self) return FALSE;
+        (safe ? cancel_ : action_).Focus(winrt::Microsoft::UI::Xaml::FocusState::Programmatic);
+    }
+    void accept() {
         try {
-            switch (message) {
-            case WM_INITDIALOG:
-                self->appearance_.apply(window, IDC_UI_TITLE);
-                SetWindowTextW(window, self->remove ? L"Remove paired iPhone" : L"Pair iPhone");
-                SetDlgItemTextW(window, IDC_UI_TITLE, self->remove ? L"Remove paired iPhone" : L"Pair your iPhone");
-                SetDlgItemTextW(window, IDC_UI_ACCOUNT, (L"Windows account: " + self->target.account).c_str());
-                self->update();
-                unlock_windows::desktop_ui::defaultButton(window,
-                    self->remove || self->replacement || self->channel ? IDCANCEL : IDOK);
-                return FALSE;
-            case WM_DPICHANGED:
-                unlock_windows::desktop_ui::scheduleDpiAppearance(window, HIWORD(wparam));
-                return FALSE;
-            case unlock_windows::desktop_ui::kApplyDpiAppearance:
-                self->appearance_.apply(window, IDC_UI_TITLE, static_cast<UINT>(wparam));
-                return TRUE;
-            case WM_CTLCOLORSTATIC:
-                if (reinterpret_cast<HWND>(lparam) == GetDlgItem(window, IDC_UI_FINGERPRINT) ||
-                    reinterpret_cast<HWND>(lparam) == GetDlgItem(window, IDC_UI_ACCOUNT))
-                    return unlock_windows::desktop_ui::readOnlyBackground(wparam);
-                return FALSE;
-            case WM_COMMAND:
-                if (LOWORD(wparam) == IDOK && (!self->channel || self->candidateReceived_)) self->finish(self->check());
-                else if (LOWORD(wparam) == IDCANCEL) self->finish(self->invalidate(ExitCode::cancelled));
-                return TRUE;
-            case WM_TIMER:
-                if (self->check() != ExitCode::saved) self->finish(self->result_);
-                else self->pollCandidate();
-                return TRUE;
-            case WM_WTSSESSION_CHANGE:
-                if ((static_cast<DWORD>(lparam) == self->target.session &&
-                        (wparam == WTS_SESSION_LOCK || wparam == WTS_SESSION_LOGOFF ||
-                         wparam == WTS_CONSOLE_DISCONNECT || wparam == WTS_REMOTE_CONNECT)) ||
-                    WTSGetActiveConsoleSessionId() != self->target.session)
-                    self->finish(self->invalidate(ExitCode::invalidated));
-                else if (self->check() != ExitCode::saved) self->finish(self->result_);
-                return TRUE;
-            case WM_POWERBROADCAST:
-                if (wparam == PBT_APMSUSPEND) self->finish(self->invalidate(ExitCode::invalidated));
-                return TRUE;
-            case WM_QUERYENDSESSION: self->finish(self->invalidate(ExitCode::invalidated)); return TRUE;
-            case WM_CLOSE: self->finish(self->invalidate(ExitCode::cancelled)); return TRUE;
+            bool done;
+            {
+                std::lock_guard lock(ui_->mutex);
+                done = ui_->done;
+                if (!done && ui_->view.canConfirm && !ui_->cancellation && !ui_->confirmed) {
+                    ui_->confirmed = true;
+                    ui_->wake.notify_all();
+                } else if (!done) return;
             }
-        } catch (const EnrollmentAborted& aborted) {
-            self->finish(self->invalidate(aborted.code));
-            return TRUE;
-        } catch (const std::exception& error) {
-            self->error_ = error.what();
-            self->finish(self->invalidate(ExitCode::error));
-            return TRUE;
-        }
-        return FALSE;
+            if (done) close();
+            else action_.IsEnabled(false);
+        } catch (...) { displayFailure(); }
     }
-    HWND window_ = nullptr;
-    unlock_windows::desktop_ui::DialogAppearance appearance_;
-    bool candidateReceived_ = false;
-    bool registered_ = false;
-    bool invalidated_ = false;
-    ExitCode result_ = ExitCode::cancelled;
-    std::string error_;
+    void poll() {
+        using namespace winrt;
+        using namespace Microsoft::UI::Xaml;
+        using namespace Microsoft::UI::Xaml::Controls;
+        EnrollmentView view;
+        std::wstring message, title, displayError;
+        unlock_windows::desktop_app::NoticeSeverity severity;
+        bool changed, done;
+        {
+            std::lock_guard lock(ui_->mutex);
+            view = ui_->view;
+            changed = std::exchange(ui_->changed, false);
+            done = ui_->done;
+            message = ui_->message;
+            title = ui_->title;
+            displayError = ui_->displayError;
+            severity = ui_->severity;
+            ui_->tick = true;
+            ui_->wake.notify_all();
+        }
+        if (!displayError.empty()) {
+            if (done) {
+                if (!message.empty() && !resultShown_) {
+                    resultShown_ = true;
+                    unlock_windows::desktop_app::showNativeUiError(message, displayError, title);
+                }
+                close();
+            }
+            return;
+        }
+        if (done && (closed_ || message.empty())) { close(); return; }
+        if (closed_) return;
+        if (changed) {
+            window_.Title(view.remove ? L"Remove paired iPhone" : L"Pair iPhone");
+            title_.Text(view.remove ? L"Remove paired iPhone" : L"Pair your iPhone");
+            account_.Text(L"Windows account: " + view.account);
+            instructions_.Text(view.busy ? L"Applying your confirmed operation..." : view.text);
+            fingerprint_.Text(view.fingerprint);
+            fingerprint_.Visibility(view.remove ? Visibility::Collapsed : Visibility::Visible);
+            progress_.IsActive(view.waiting || view.busy);
+            progress_.Visibility(view.waiting || view.busy ? Visibility::Visible : Visibility::Collapsed);
+            notice_.Severity(view.destructive ? InfoBarSeverity::Warning : InfoBarSeverity::Informational);
+            notice_.Title(L"");
+            notice_.Message(view.notice);
+            notice_.IsOpen(!view.notice.empty());
+            action_.Content(box_value(view.action));
+            action_.IsEnabled(view.canConfirm);
+            if (!view.busy) focusAction();
+        }
+        if (done && !resultShown_) {
+            resultShown_ = true;
+            window_.Title(title);
+            title_.Text(title);
+            account_.Visibility(view.account.empty() ? Visibility::Collapsed : Visibility::Visible);
+            fingerprint_.Visibility(view.fingerprint.empty() ? Visibility::Collapsed : Visibility::Visible);
+            instructions_.Text(L"The operation has finished. Close this window to return to the desktop app.");
+            progress_.IsActive(false);
+            progress_.Visibility(Visibility::Collapsed);
+            notice_.Severity(unlock_windows::desktop_app::dashboard_ui::infoBarSeverity(severity));
+            notice_.Message(message);
+            notice_.IsOpen(true);
+            action_.Content(box_value(L"Close"));
+            action_.IsEnabled(true);
+            cancel_.Visibility(Visibility::Collapsed);
+        }
+    }
+    void close() {
+        cleanup();
+        if (!closed_) { window_.Close(); closed_ = true; }
+        winrt::Microsoft::UI::Xaml::Application::Current().Exit();
+    }
+    void displayFailure() {
+        const auto error = unlock_windows::desktop_app::dashboard_ui::currentException();
+        std::wstring message;
+        bool done, alreadyFailed;
+        {
+            std::lock_guard lock(ui_->mutex);
+            alreadyFailed = !ui_->displayError.empty();
+            ui_->displayError += error + L"\n";
+            done = ui_->done;
+            message = ui_->message;
+        }
+        ui_->cancel(ExitCode::error);
+        if (!alreadyFailed) unlock_windows::desktop_app::showNativeUiError(
+            message.empty() ? L"The pairing interface could not continue." : message, error, L"Phone enrollment failed");
+        else OutputDebugStringW((L"Pairing UI cleanup failed: " + error + L"\n").c_str());
+        if (done && !message.empty()) resultShown_ = true;
+        if (done) winrt::Microsoft::UI::Xaml::Application::Current().Exit();
+    }
+    static LRESULT CALLBACK procedure(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam,
+        UINT_PTR, DWORD_PTR data) {
+        auto* self = reinterpret_cast<EnrollmentWindow*>(data);
+        if (message == WM_NCDESTROY) {
+            self->registered_ = false;
+            self->subclassed_ = false;
+            self->hwnd_ = nullptr;
+        } else if (message == WM_WTSSESSION_CHANGE) {
+            DWORD session;
+            { std::lock_guard lock(self->ui_->mutex); session = self->ui_->view.session; }
+            if ((static_cast<DWORD>(lparam) == session &&
+                    (wparam == WTS_SESSION_LOCK || wparam == WTS_SESSION_LOGOFF ||
+                     wparam == WTS_CONSOLE_DISCONNECT || wparam == WTS_REMOTE_CONNECT)) ||
+                WTSGetActiveConsoleSessionId() != session) self->ui_->cancel(ExitCode::invalidated);
+        } else if ((message == WM_POWERBROADCAST && wparam == PBT_APMSUSPEND) || message == WM_QUERYENDSESSION) {
+            self->ui_->cancel(ExitCode::invalidated);
+        }
+        return DefSubclassProc(hwnd, message, wparam, lparam);
+    }
+    std::shared_ptr<EnrollmentUi> ui_;
+    winrt::Microsoft::UI::Xaml::Window window_{nullptr};
+    winrt::Microsoft::UI::Windowing::AppWindow appWindow_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::TextBlock title_{nullptr}, account_{nullptr}, instructions_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::TextBox fingerprint_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::InfoBar notice_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::ProgressRing progress_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::Button action_{nullptr}, cancel_{nullptr};
+    winrt::Microsoft::UI::Dispatching::DispatcherQueue dispatcher_{nullptr};
+    winrt::Microsoft::UI::Dispatching::DispatcherQueueTimer timer_{nullptr};
+    winrt::event_token timerToken_{}, closingToken_{}, closedToken_{};
+    HWND hwnd_ = nullptr;
+    bool registered_ = false, subclassed_ = false, closed_ = false, resultShown_ = false;
 };
-
-ExitCode enroll(wchar_t* argv[], const unlock_windows::desktop_app::Launch& launch) {
+ExitCode enroll(wchar_t* argv[], const unlock_windows::desktop_app::Launch& launch, EnrollmentUi& ui) {
     const bool bluetooth = launch.role == unlock_windows::desktop_app::Role::bluetoothEnrollment;
     if (!elevatedAdmin()) throw std::runtime_error("Run the enrollment role as an elevated administrator");
     EnrollmentWriter writer;
     if (writer.busy()) return ExitCode::busy;
     EnrollmentStore store;
-    Confirmation confirmation;
+    Confirmation confirmation(ui);
     confirmation.target = queryConsole();
     if (confirmation.target.locked) return ExitCode::invalidated;
     DWORD processSession = 0;
@@ -350,7 +634,7 @@ ExitCode enroll(wchar_t* argv[], const unlock_windows::desktop_app::Launch& laun
     const auto original = store.load();
     bool alreadyRegistered = false;
     if (clear && !original) {
-        MessageBoxW(nullptr, L"No phone is registered.", L"Phone enrollment", MB_OK | MB_ICONINFORMATION);
+        ui.notice(L"No phone is registered.", L"Phone enrollment", unlock_windows::desktop_app::NoticeSeverity::information);
         return ExitCode::rejected;
     }
     confirmation.remove = clear;
@@ -359,8 +643,8 @@ ExitCode enroll(wchar_t* argv[], const unlock_windows::desktop_app::Launch& laun
         const auto action = classifyCandidate(original, publicKey, confirmation.target.sid);
         alreadyRegistered = action == CandidateAction::alreadyRegistered;
         if (!bluetooth && !alreadyRegistered && ((original && !replace) || (!original && replace))) {
-            MessageBoxW(nullptr, original ? L"A different iPhone is registered. Use --replace to replace it explicitly."
-                : L"No iPhone is registered. Omit --replace for first pairing.", L"Pair iPhone", MB_OK | MB_ICONWARNING);
+            ui.notice(original ? L"A different iPhone is registered. Use --replace to replace it explicitly."
+                : L"No iPhone is registered. Omit --replace for first pairing.", L"Pair iPhone", unlock_windows::desktop_app::NoticeSeverity::warning);
             throw EnrollmentAborted(ExitCode::rejected);
         }
         confirmation.replacement = action == CandidateAction::replace;
@@ -406,7 +690,7 @@ ExitCode enroll(wchar_t* argv[], const unlock_windows::desktop_app::Launch& laun
     catch (const std::exception& error) {
         const std::string message = std::string(clear ? "Enrollment removed, service reload failed. "
             : "Enrollment saved, service reload failed. ") + error.what();
-        MessageBoxW(nullptr, std::wstring(message.begin(), message.end()).c_str(), L"Phone enrollment", MB_OK | MB_ICONERROR);
+        ui.notice(std::wstring(message.begin(), message.end()), L"Phone enrollment");
         return ExitCode::savedReloadFailed;
     }
     return ExitCode::saved;
@@ -415,18 +699,70 @@ ExitCode enroll(wchar_t* argv[], const unlock_windows::desktop_app::Launch& laun
 
 int unlock_windows::desktop_app::runEnrollment(wchar_t* argv[], const Launch& launch) {
     const bool bluetooth = launch.role == Role::bluetoothEnrollment;
+    auto ui = std::make_shared<EnrollmentUi>();
+    std::thread worker;
+    bool uiStarted = false;
     try {
-        const auto result = enroll(argv, launch);
-        if (!bluetooth) std::cout << "Enrollment exit code: " << static_cast<DWORD>(result) << '\n';
-        return static_cast<int>(result);
-    } catch (const EnrollmentAborted& error) {
-        OutputDebugStringW((L"Enrollment role: enrollment ended, exit code=" +
-            std::to_wstring(static_cast<DWORD>(error.code)) + L"\n").c_str());
-        return static_cast<int>(error.code);
-    } catch (const std::exception& error) {
-        std::cerr << "[Unlock with iPhone] " << error.what() << '\n';
-        const std::string message(error.what());
-        MessageBoxW(nullptr, std::wstring(message.begin(), message.end()).c_str(), L"Phone enrollment failed", MB_OK | MB_ICONERROR);
-        return static_cast<int>(ExitCode::error);
+        worker = std::thread([ui, argv, launch] {
+            ExitCode result;
+            try { result = enroll(argv, launch, *ui); }
+            catch (const EnrollmentAborted& error) {
+                result = error.code;
+                OutputDebugStringW((L"Enrollment role: enrollment ended, exit code=" +
+                    std::to_wstring(static_cast<DWORD>(result)) + L"\n").c_str());
+            } catch (...) {
+                const auto message = dashboard_ui::currentException();
+                std::cerr << "[Unlock with iPhone] " << winrt::to_string(message) << '\n';
+                ui->notice(message, L"Phone enrollment failed");
+                result = ExitCode::error;
+            }
+            std::lock_guard lock(ui->mutex);
+            ui->result = result;
+            ui->done = true;
+            OutputDebugStringW((L"Enrollment role completed, exit code=" +
+                std::to_wstring(static_cast<DWORD>(result)) + L"\n").c_str());
+            ui->wake.notify_all();
+        });
+        bool show;
+        {
+            std::unique_lock lock(ui->mutex);
+            ui->wake.wait(lock, [&] { return ui->present || ui->done; });
+            show = !ui->done || !ui->message.empty();
+        }
+        if (show) {
+            winrt::init_apartment(winrt::apartment_type::single_threaded);
+            struct Apartment final { ~Apartment() { winrt::uninit_apartment(); } } apartment;
+            auto window = std::make_shared<EnrollmentWindow>(ui);
+            winrt::com_ptr<DesktopApplication> app;
+            uiStarted = true;
+            winrt::Microsoft::UI::Xaml::Application::Start([&](const auto&) {
+                app = winrt::make_self<DesktopApplication>([window] { window->show(); });
+            });
+            {
+                std::lock_guard lock(ui->mutex);
+                if (!ui->done) throw std::runtime_error("The WinUI message loop ended before pairing cleanup completed");
+            }
+            window->cleanup();
+            app = nullptr;
+            window.reset();
+        }
+        worker.join();
+    } catch (...) {
+        const auto error = dashboard_ui::currentException();
+        ui->cancel(ExitCode::error);
+        if (worker.joinable()) worker.join();
+        std::wstring message;
+        {
+            std::lock_guard lock(ui->mutex);
+            ui->displayError += error + L"\n";
+            message = ui->message;
+        }
+        if (uiStarted) showNativeUiError(message.empty() ? L"The pairing interface could not continue." : message,
+            error, L"Phone enrollment failed");
+        else showStartupError(error, L"Phone enrollment failed");
     }
+    const auto result = ui->displayError.empty() || ui->result == ExitCode::savedReloadFailed
+        ? ui->result : ExitCode::error;
+    if (!bluetooth) std::cout << "Enrollment exit code: " << static_cast<DWORD>(result) << '\n';
+    return static_cast<int>(result);
 }

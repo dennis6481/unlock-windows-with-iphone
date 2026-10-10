@@ -28,7 +28,7 @@ The target user's persistent ComputerId identifies the configured computer. The 
 
 1. On the unlocked console open tray **Status…** and choose **Pair iPhone**. The tray requests UAC once and launches the same EXE's elevated enrollment role.
 2. After the restricted local channel reports that the tool is ready, the tray advertises for registration. Start registration in the iOS app.
-3. Confirm the actual console account and the full eight-group SHA-256 phone fingerprint in the Windows window. Another administrator's UAC credentials do not change the target user.
+3. Confirm the actual console account and the full eight-group SHA-256 phone fingerprint in the elevated WinUI window. Another administrator's UAC credentials do not change the target user.
 4. A matching key/SID is already registered: confirmation reloads the service without rewriting the file. A different phone needs explicit replacement confirmation.
 
 The two-minute deadline begins at the initiating click, including UAC time. Cancellation, timeout, disconnection, lock, session change, sleep or tray exit terminates pairing. The enrollment code rechecks console state, authority, cancellation, parent liveness and the original record before committing.

@@ -24,7 +24,7 @@ Only a valid phone assertion creates a grant. `takeAutoSubmitOffer` returns a no
 
 ## Password management
 
-After the first native sign-in, choose **Start setup** on the installation result page or launch `--setup`. The elevated WinUI password window verifies the installed target account. Only a saved copy matching the complete verified identity permits skipping the password step. Setup also requires the service to reload phone registration before handing control back to the ordinary tray. Saving a copy successfully advances to the existing iPhone pairing window; cancellation and failure do not. For independent maintenance, open tray **Password…** and choose save, update or removal.
+After the first native sign-in, choose **Start setup** on the installation result page or launch `--setup`. The elevated WinUI password window verifies the installed target account. Only a saved copy matching the complete verified identity permits skipping the password step. Setup also requires the service to reload phone registration before handing control back to the ordinary tray. Saving a copy successfully advances to the WinUI iPhone pairing window; cancellation and failure do not. For independent maintenance, open tray **Password…** and choose save, update or removal.
 
 `credentialSummary` returns the verified account and saved-copy state to the unlocked installation target's ordinary console session. It returns no password or snapshot nonce and creates no management snapshot or phone approval. The management pipe accepts local authenticated connections, but status/nonces and credential changes still require an administrator; phone-pipe operations remain unchanged.
 

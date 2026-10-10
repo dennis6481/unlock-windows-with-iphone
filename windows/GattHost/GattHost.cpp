@@ -118,11 +118,11 @@ struct CallbackState final {
         notify();
     }
 
-    void notice(std::wstring message, std::wstring title, UINT flags, bool requireRunning = false) {
+    void notice(std::wstring message, std::wstring title, NoticeSeverity severity, bool requireRunning = false) {
         {
             std::lock_guard lock(mutex);
             if (requireRunning && stopRequested) return;
-            notices.push_back({std::move(message), std::move(title), flags});
+            notices.push_back({std::move(message), std::move(title), severity});
         }
         notify();
     }
@@ -923,7 +923,7 @@ public:
         } catch (...) {
             const auto error = exceptionText();
             state_->record(L"Desktop request: " + error, true);
-            state_->notice(error, L"Requested operation could not start", MB_OK | MB_ICONERROR);
+            state_->notice(error, L"Requested operation could not start", NoticeSeverity::error);
         }
     }
 private:
@@ -995,7 +995,7 @@ private:
             const auto error = exceptionText();
             state_->record(L"Pairing start: " + error, true);
             finishPairing("enrollment_error");
-            state_->notice(error.c_str(), L"Could not start iPhone pairing", MB_OK | MB_ICONERROR);
+            state_->notice(error.c_str(), L"Could not start iPhone pairing", NoticeSeverity::error);
         }
     }
 
@@ -1020,7 +1020,7 @@ private:
         if (guided && !job->remove && !savedReloadFailed &&
             (std::string_view(result) == "enrollment_saved" || std::string_view(result) == "enrollment_already_registered"))
             state_->notice(L"Setup is configured. Lock this PC to test iPhone unlock. Windows has not yet verified the saved password.",
-                L"Setup configured", MB_OK | MB_ICONINFORMATION);
+                L"Setup configured", NoticeSeverity::information);
     }
 
     void checkPairing() {
@@ -1290,7 +1290,7 @@ private:
             throw std::runtime_error("The paired iPhone belongs to a different Windows account.");
         if (registration) {
             state_->notice(L"A password copy and iPhone registration are present. Lock this PC to test iPhone unlock. Windows has not yet verified the saved password.",
-                L"Setup configured", MB_OK | MB_ICONINFORMATION);
+                L"Setup configured", NoticeSeverity::information);
             return;
         }
         setupPairing_ = true;
@@ -1342,7 +1342,7 @@ private:
                     } catch (...) {
                         const auto message = exceptionText();
                         state_->record(L"Setup: " + message, true);
-                        state_->notice(message, L"Setup needs attention", MB_OK | MB_ICONERROR);
+                        state_->notice(message, L"Setup needs attention", NoticeSeverity::error);
                     }
                 });
             }).detach();
@@ -1432,7 +1432,7 @@ private:
                 self->state_->failed = true;
             }
             self->close();
-            self->state_->notice(self->lastError_, L"Phone connectivity stopped", MB_OK | MB_ICONERROR);
+            self->state_->notice(self->lastError_, L"Phone connectivity stopped", NoticeSeverity::error);
             return message == WM_QUERYENDSESSION ? TRUE : 0;
         }
         return DefWindowProcW(window, message, wparam, lparam);
@@ -1480,7 +1480,7 @@ void GattController::start(HINSTANCE instance) {
                 std::lock_guard lock(state->mutex);
                 state->failed = true;
             }
-            state->notice(error, L"Phone connectivity stopped", MB_OK | MB_ICONERROR);
+            state->notice(error, L"Phone connectivity stopped", NoticeSeverity::error);
         }
         state->stop();
     });
@@ -1523,7 +1523,7 @@ void GattController::record(const std::wstring& message) { state_->record(messag
 std::function<void(std::wstring)> GattController::errorReporter(std::wstring title, bool notify) {
     return [state = state_, title = std::move(title), notify](std::wstring message) {
         state->record(message, false);
-        if (notify) state->notice(std::move(message), title, MB_OK | MB_ICONERROR, true);
+        if (notify) state->notice(std::move(message), title, NoticeSeverity::error, true);
     };
 }
 

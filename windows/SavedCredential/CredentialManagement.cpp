@@ -3,9 +3,9 @@
 #include "SavedCredentialIpc.h"
 #include "../DesktopApp/DesktopApp.h"
 #include "../DesktopApp/DesktopApplication.h"
+#include "../DesktopApp/DesktopNotifications.h"
 #include "../DesktopApp/Dashboard/Pages/PageControls.h"
 #include "../Resources/resource.h"
-#include "../Resources/DesktopUi.h"
 #include "../Enrollment/EnrollmentSession.h"
 #include <microsoft.ui.xaml.window.h>
 #include <winrt/Microsoft.UI.Dispatching.h>
@@ -319,14 +319,15 @@ private:
 }
 
 int unlock_windows::desktop_app::runSavedPassword(HINSTANCE, int, bool setup, saved_credential::Operation operation) {
+    bool uiStarted = false;
     try {
         if (!unlock_windows::enrollment::elevatedAdmin())
             throw std::runtime_error("Run the password manager as administrator on the physical console.");
-        desktop_ui::initialize();
         init_apartment(apartment_type::single_threaded);
         struct Apartment final { ~Apartment() { uninit_apartment(); } } apartment;
         auto window = std::make_shared<PasswordWindow>(setup, operation);
         com_ptr<DesktopApplication> app;
+        uiStarted = true;
         Application::Start([&](const auto&) {
             app = make_self<DesktopApplication>([window] { window->show(); });
         });
@@ -337,7 +338,8 @@ int unlock_windows::desktop_app::runSavedPassword(HINSTANCE, int, bool setup, sa
     } catch (...) {
         const auto message = currentException();
         OutputDebugStringW(message.c_str());
-        MessageBoxW(nullptr, message.c_str(), L"Could not run password window", MB_OK | MB_ICONERROR);
+        if (uiStarted) showNativeUiError(L"Could not run password window.", message, L"Could not run password window");
+        else showStartupError(message, L"Could not run password window");
         return static_cast<int>(SetupResult::error);
     }
 }

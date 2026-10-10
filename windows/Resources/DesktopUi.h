@@ -16,11 +16,6 @@ inline void require(BOOL value, const char* operation) {
     if (!value) throw std::runtime_error(std::string(operation) + ": Win32=" + std::to_string(GetLastError()));
 }
 
-inline void initialize() {
-    INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_STANDARD_CLASSES | ICC_PROGRESS_CLASS};
-    require(InitCommonControlsEx(&controls), "InitCommonControlsEx(desktop UI)");
-}
-
 inline void scheduleDpiAppearance(HWND window, UINT dpi) {
     require(PostMessageW(window, kApplyDpiAppearance, dpi, 0), "PostMessageW(dialog DPI appearance)");
 }

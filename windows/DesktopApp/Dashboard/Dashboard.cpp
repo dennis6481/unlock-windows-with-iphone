@@ -136,6 +136,7 @@ private:
         nav_.FooterMenuItems().Append(pages_[3]);
 
         root_ = Grid{};
+        root_.MaxWidth(1744);
         root_.Padding({28, 24, 28, 24});
         RowDefinition headerRow;
         headerRow.Height(automatic());
@@ -215,7 +216,6 @@ private:
                     get_self<winrt::UnlockDesktop::implementation::AboutPage>(aboutPage_)->Bind(
                         state_->reportError);
                 } else throw hresult_invalid_argument(L"Unknown Dashboard page.");
-                root_.MaxWidth(diagnosticsPage ? 900 : 560);
                 title_.Text(unbox_value<hstring>(item.Content()));
                 action_.Visibility(statusPage ? Visibility::Visible : Visibility::Collapsed);
                 refresh_.Visibility(statusPage || diagnosticsPage || pageId == DashboardPage::password

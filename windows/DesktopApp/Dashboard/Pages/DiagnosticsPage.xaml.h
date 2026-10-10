@@ -15,6 +15,7 @@ struct DiagnosticsPage : DiagnosticsPageT<DiagnosticsPage> {
 
 private:
     Microsoft::UI::Xaml::Controls::TextBox diagnostics_{nullptr};
+    std::wstring displayedDiagnostics_;
 };
 }
 

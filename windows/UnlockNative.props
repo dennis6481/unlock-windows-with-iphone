@@ -1,0 +1,40 @@
+<!-- Created by Rui MA on 10 Oct 2026 -->
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <UnlockBuildDirectory Condition="'$(UnlockBuildDirectory)' == ''">$(MSBuildThisFileDirectory)build</UnlockBuildDirectory>
+    <UnlockGeneratedDirectory>$(UnlockBuildDirectory)\generated</UnlockGeneratedDirectory>
+    <OutDir Condition="'$(OutDir)' == ''">$(UnlockBuildDirectory)\</OutDir>
+    <IntDir Condition="'$(IntDir)' == ''">$(UnlockBuildDirectory)\obj\$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+    <PlatformToolset Condition="'$(PlatformToolset)' == ''">v145</PlatformToolset>
+    <PlatformToolset Condition="'$(VisualStudioVersion)' == '17.0'">v143</PlatformToolset>
+    <WindowsTargetPlatformVersion Condition="'$(WindowsTargetPlatformVersion)' == ''">$(WindowsSDKVersion)</WindowsTargetPlatformVersion>
+    <UseDebugLibraries Condition="'$(Configuration)' == 'Debug'">true</UseDebugLibraries>
+    <UseDebugLibraries Condition="'$(Configuration)' == 'Release'">false</UseDebugLibraries>
+  </PropertyGroup>
+
+  <Import Project="$(UnlockGeneratedDirectory)\UnlockBuild.props" Condition="Exists('$(UnlockGeneratedDirectory)\UnlockBuild.props') and '$(UnlockBuildResourcesImported)' != 'true'" />
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <RuntimeLibrary Condition="'$(Configuration)' == 'Debug'">MultiThreadedDebug</RuntimeLibrary>
+      <RuntimeLibrary Condition="'$(Configuration)' == 'Release'">MultiThreaded</RuntimeLibrary>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <ProgramDataBaseFileName>$(IntDir)$(ProjectName).pdb</ProgramDataBaseFileName>
+      <WarningLevel>Level3</WarningLevel>
+      <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>UNICODE;_UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ResourceCompile>
+    <Link>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <Target Name="GenerateUnlockBuildResources" BeforeTargets="PrepareForBuild" Condition="'$(DesignTimeBuild)' != 'true' and !Exists('$(UnlockGeneratedDirectory)\UnlockBuild.props')">
+    <MakeDir Directories="$(UnlockGeneratedDirectory)" />
+    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)WindowsArchitecture.ps1&quot; -WriteBuildResources -OutputDirectory &quot;$(UnlockGeneratedDirectory)&quot; -TargetArchitecture &quot;$(Platform)&quot;" />
+  </Target>
+</Project>

@@ -45,13 +45,10 @@ $versionSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\ProductVe
 $version = [regex]::Matches($versionSource, 'kProductVersion\{(\d+), (\d+), (\d+)\}')
 if ($version.Count -ne 1) { throw 'Could not parse the authoritative product version.' }
 $packageVersion = $version[0].Groups[1..3].Value -join '.'
-$buildSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\CMakeLists.txt') -Raw -ErrorAction Stop
-$setupOutput = [regex]::Matches($buildSource, 'set\(UNLOCK_SETUP_OUTPUT_NAME "([^"]+)"\)')
-if ($setupOutput.Count -ne 1) { throw 'Could not parse the authoritative setup output name.' }
-$setupBuildName = $setupOutput[0].Groups[1].Value.Replace('${UNLOCK_VERSION_TEXT}', $packageVersion) + '.exe'
-$distOutput = [regex]::Matches($buildSource, 'set\(UNLOCK_DIST_DIRECTORY "([^"]+)"\)')
-if ($distOutput.Count -ne 1) { throw 'Could not parse the authoritative setup output directory.' }
-$distDirectory = $distOutput[0].Groups[1].Value.Replace('${CMAKE_CURRENT_SOURCE_DIR}', [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..')))
+$buildMetadata = Get-ProductBuildMetadata -Architecture (Get-NativeWindowsArchitecture)
+if ($buildMetadata.Version -cne $packageVersion) { throw 'Build metadata version does not match the authoritative product version.' }
+$setupBuildName = $buildMetadata.SetupFile
+$distDirectory = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\dist'))
 
 $entries = [regex]::Matches($manifest, '\{(k\w+), (true|false)\}')
 $count = [regex]::Match($manifest, 'std::array<ComponentFile, (\d+)>')

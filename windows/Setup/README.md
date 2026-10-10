@@ -22,13 +22,13 @@ Progress logs append in chronological order and scroll to the latest entry. Unch
 
 Flow: entry/UI -> transaction -> package and Windows deployment -> SYSTEM exit finalizer -> ordinary-user result acknowledgment. The active transaction takes precedence over the formal installation. Deployment verification does not mean exit cleanup or user handoff has completed.
 
-This refactor has static checks only; compilation and runtime acceptance remain unverified.
+The MSBuild project graph and native components have static and target-level checks; full WinUI/package compilation and runtime acceptance remain pending the local PDB/toolchain and package-source fixes.
 
 ## Package and deployment
 
 The build produces a self-contained `windows/dist/UnlockWithIPhone_<version>_<architecture>_setup.exe` with `x64` or `arm64` as the compiler target architecture suffix; the version is read automatically from [ProductVersion.h](../ProductVersion.h). The service, CP DLL and desktop app are embedded as resources after their builds complete. Component changes regenerate the resource and SHA-256 manifest and rebuild setup. The installed/staged maintenance program is named `setup.exe` and retains the embedded payload. Fixed component names are defined in [ComponentFiles.h](../ComponentFiles.h).
 
-The desktop uses official Windows App SDK self-contained output and Hybrid CRT; authentication components and setup retain their runtime policy. The revised build integration, package generation, final linking and clean-machine operation remain unverified.
+The desktop uses official Windows App SDK self-contained output and Hybrid CRT; authentication components and setup retain their runtime policy. The native build is driven by the checked-in MSBuild projects through `make`; package generation, final linking and clean-machine operation remain unverified.
 
 | Location | Contents |
 |---|---|

@@ -6,7 +6,10 @@ param(
     [Parameter(Position = 1)][string]$PackageResourcePath,
     [Parameter(Position = 2)][string]$PackageManifestPath,
     [Parameter(Position = 3)][string]$DesktopFileList,
-    [Parameter(Position = 4, ValueFromRemainingArguments)][string[]]$PackageFiles
+    [Parameter(Position = 4, ValueFromRemainingArguments)][string[]]$PackageFiles,
+    [switch]$WriteBuildResources,
+    [string]$OutputDirectory,
+    [ValidateSet('x64', 'arm64', 'X64', 'ARM64')][string]$TargetArchitecture
 )
 
 function Get-NativeWindowsArchitecture {
@@ -95,6 +98,124 @@ function Get-CurrentPowerShellArchitecture {
 
     $processPath = (Get-Process -Id $PID -ErrorAction Stop).Path
     return Get-PortableExecutableArchitecture -Path $processPath
+}
+
+function Get-ProductBuildMetadata {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][ValidateSet('x64', 'arm64', 'X64', 'ARM64')][string]$Architecture
+    )
+
+    $componentHeader = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'ComponentFiles.h'))
+    $productHeader = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'ProductVersion.h'))
+    $versionMatch = [regex]::Match($productHeader, 'kProductVersion\{(\d+),\s*(\d+),\s*(\d+)\}')
+    if (!$versionMatch.Success) { throw 'Missing Windows product version.' }
+    $version = '{0}.{1}.{2}' -f $versionMatch.Groups[1].Value, $versionMatch.Groups[2].Value, $versionMatch.Groups[3].Value
+    $names = @{}
+    foreach ($match in [regex]::Matches($componentHeader, 'wchar_t\s+(\w+)\[\]\s*=\s*L"([^"]+)";')) {
+        $names[$match.Groups[1].Value] = $match.Groups[2].Value
+    }
+    foreach ($required in @('kCredentialProviderFile', 'kSavedCredentialServiceFile', 'kMainAppFile', 'kInstallerFile')) {
+        if (!$names.ContainsKey($required)) { throw "Missing shared component filename: $required" }
+    }
+    $minimumBuildMatch = [regex]::Match($componentHeader, 'kMinimumWindowsBuild\s*=\s*(\d+)')
+    if (!$minimumBuildMatch.Success) { throw 'Missing minimum Windows build.' }
+    $normalizedArchitecture = $Architecture.ToLowerInvariant()
+    $versionFiles = @{
+        CredentialProvider = "unlock_credential_provider-version.rc"
+        SavedCredentialService = "unlock_saved_credential_service-version.rc"
+        MainApp = "UnlockWithIPhone-version.rc"
+        Installer = "setup-version.rc"
+    }
+    [pscustomobject]@{
+        Architecture = $normalizedArchitecture
+        Version = $version
+        Major = $versionMatch.Groups[1].Value
+        Minor = $versionMatch.Groups[2].Value
+        Patch = $versionMatch.Groups[3].Value
+        MinimumWindowsBuild = $minimumBuildMatch.Groups[1].Value
+        CredentialProviderFile = $names.kCredentialProviderFile
+        SavedCredentialServiceFile = $names.kSavedCredentialServiceFile
+        MainAppFile = $names.kMainAppFile
+        InstallerFile = $names.kInstallerFile
+        SetupFile = "UnlockWithIPhone_${version}_${normalizedArchitecture}_setup.exe"
+        VersionFiles = $versionFiles
+    }
+}
+
+function Write-BuildResources {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Directory,
+        [Parameter(Mandatory)][ValidateSet('x64', 'arm64', 'X64', 'ARM64')][string]$Architecture
+    )
+
+    $metadata = Get-ProductBuildMetadata -Architecture $Architecture
+    [IO.Directory]::CreateDirectory($Directory) | Out-Null
+    $props = @(
+        '<!-- Created by Rui MA on 10 Oct 2026 -->',
+        '<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">',
+        '  <PropertyGroup>',
+        "    <UnlockProductVersion>$($metadata.Version)</UnlockProductVersion>",
+        "    <UnlockProductVersionParts>$($metadata.Major),$($metadata.Minor),$($metadata.Patch),0</UnlockProductVersionParts>",
+        "    <UnlockArchitecture>$($metadata.Architecture)</UnlockArchitecture>",
+        "    <UnlockPlatform>$($metadata.Architecture.ToUpperInvariant())</UnlockPlatform>",
+        "    <UnlockMinimumWindowsBuild>$($metadata.MinimumWindowsBuild)</UnlockMinimumWindowsBuild>",
+        "    <UnlockCredentialProviderFile>$($metadata.CredentialProviderFile)</UnlockCredentialProviderFile>",
+        "    <UnlockSavedCredentialServiceFile>$($metadata.SavedCredentialServiceFile)</UnlockSavedCredentialServiceFile>",
+        "    <UnlockMainAppFile>$($metadata.MainAppFile)</UnlockMainAppFile>",
+        "    <UnlockMainAppBaseName>$([IO.Path]::GetFileNameWithoutExtension($metadata.MainAppFile))</UnlockMainAppBaseName>",
+        "    <UnlockInstallerFile>$($metadata.InstallerFile)</UnlockInstallerFile>",
+        "    <UnlockSetupFile>$($metadata.SetupFile)</UnlockSetupFile>",
+        '  </PropertyGroup>',
+        '</Project>'
+    )
+    [IO.File]::WriteAllLines((Join-Path $Directory 'UnlockBuild.props'), $props, [Text.UTF8Encoding]::new($false))
+
+    $resourceHeader = (Join-Path $PSScriptRoot 'Resources/resource.h').Replace('\', '/')
+    $resourceDefinitions = @{
+        CredentialProvider = @{ Type = 'VFT_DLL'; Filename = $metadata.CredentialProviderFile }
+        SavedCredentialService = @{ Type = 'VFT_APP'; Filename = $metadata.SavedCredentialServiceFile }
+        MainApp = @{ Type = 'VFT_APP'; Filename = $metadata.MainAppFile }
+        Installer = @{ Type = 'VFT_APP'; Filename = $metadata.InstallerFile }
+    }
+    foreach ($name in $resourceDefinitions.Keys) {
+        $definition = $resourceDefinitions[$name]
+        $content = @(
+            '// Created by Rui MA on 10 Oct 2026',
+            '',
+            '#include <windows.h>',
+            "#include ""$resourceHeader""",
+            '',
+            '1 VERSIONINFO',
+            "FILEVERSION $($metadata.Major),$($metadata.Minor),$($metadata.Patch),0",
+            "PRODUCTVERSION $($metadata.Major),$($metadata.Minor),$($metadata.Patch),0",
+            'FILEFLAGSMASK VS_FFI_FILEFLAGSMASK',
+            'FILEFLAGS 0',
+            'FILEOS VOS_NT_WINDOWS32',
+            "FILETYPE $($definition.Type)",
+            'FILESUBTYPE 0',
+            'BEGIN',
+            '    BLOCK "StringFileInfo"',
+            '    BEGIN',
+            '        BLOCK "040904b0"',
+            '        BEGIN',
+            '            VALUE "CompanyName", "Rui MA\0"',
+            '            VALUE "FileDescription", UNLOCK_PRODUCT_NAME',
+            "            VALUE ""FileVersion"", ""$($metadata.Version)\0""",
+            "            VALUE ""ProductVersion"", ""$($metadata.Version)\0""",
+            '            VALUE "ProductName", UNLOCK_PRODUCT_NAME',
+            "            VALUE ""OriginalFilename"", ""$($definition.Filename)\0""",
+            '        END',
+            '    END',
+            '    BLOCK "VarFileInfo"',
+            '    BEGIN',
+            '        VALUE "Translation", 0x0409, 1200',
+            '    END',
+            'END'
+        )
+        [IO.File]::WriteAllLines((Join-Path $Directory $metadata.VersionFiles[$name]), $content, [Text.UTF8Encoding]::new($false))
+    }
 }
 
 function Write-EmbeddedPackage {
@@ -251,7 +372,10 @@ function Write-EmbeddedPackage {
 
 
 if ($MyInvocation.InvocationName -ne '.') {
-    if ($PackageVersion) {
+    if ($WriteBuildResources) {
+        if (!$OutputDirectory -or !$TargetArchitecture) { throw 'OutputDirectory and TargetArchitecture are required with WriteBuildResources.' }
+        Write-BuildResources -Directory $OutputDirectory -Architecture $TargetArchitecture
+    } elseif ($PackageVersion) {
         Write-EmbeddedPackage -Version $PackageVersion -ResourcePath $PackageResourcePath -ManifestPath $PackageManifestPath -DesktopFileList $DesktopFileList -Files $PackageFiles
     } else {
         Get-NativeWindowsArchitecture

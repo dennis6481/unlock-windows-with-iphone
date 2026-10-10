@@ -28,7 +28,6 @@ jobs:
     env:
       UNLOCK_TARGET_ARCH: ${{ matrix.architecture }}
       UNLOCK_VS_DEV_CMD: auto
-      UNLOCK_CMAKE_COMMAND: cmake
     steps:
       - name: Check out tagged revision
         uses: actions/checkout@v7
@@ -49,9 +48,9 @@ jobs:
           if errorlevel 1 exit /b %errorlevel%
           set "TEMP=%CD%\..\.tmp"
           set "TMP=%TEMP%"
-          call Invoke-NativeVsDevCmd.cmd --fresh -S . -B build -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+          call Invoke-NativeVsDevCmd.cmd --prepare build
           if errorlevel 1 exit /b %errorlevel%
-          call Invoke-NativeVsDevCmd.cmd --build build --config Release --target unlock_windows_setup
+          call Invoke-NativeVsDevCmd.cmd --msbuild "UnlockWindows.sln" /restore /m /nologo "/p:Configuration=Release" "/p:UnlockBuildDirectory=%CD%\build" "/p:BuildTesting=OFF"
           if errorlevel 1 exit /b %errorlevel%
 
       - name: Verify installer version and architecture

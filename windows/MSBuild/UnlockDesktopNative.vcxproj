@@ -1,0 +1,58 @@
+<!-- Created by Rui MA on 10 Oct 2026 -->
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>8F9E1E4D-FD09-4C16-80A4-0E9E1B9C157B</ProjectGuid>
+    <ProjectName>UnlockDesktopNative</ProjectName>
+    <RootNamespace>UnlockDesktopNative</RootNamespace>
+
+  </PropertyGroup>
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64"><Configuration>Debug</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|ARM64"><Configuration>Debug</Configuration><Platform>ARM64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|ARM64"><Configuration>Release</Configuration><Platform>ARM64</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <PlatformToolset>v145</PlatformToolset>
+    <PlatformToolset Condition="'$(VisualStudioVersion)' == '17.0'">v143</PlatformToolset>
+    <UseDebugLibraries Condition="'$(Configuration)' == 'Debug'">true</UseDebugLibraries>
+    <UseDebugLibraries Condition="'$(Configuration)' == 'Release'">false</UseDebugLibraries>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <Import Project="$(MSBuildThisFileDirectory)..\UnlockNative.props" />
+  <PropertyGroup>
+    <TargetName>unlock_desktop_native</TargetName>
+    <OutDir>$(UnlockBuildDirectory)\</OutDir>
+    <IntDir>$(UnlockBuildDirectory)\obj\$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>..;..\DesktopApp;..\DesktopApp\Dashboard\Pages;..\SavedCredential;..\PhoneApproval;..\Protocol;..\GattHost;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <AdditionalDependencies>windowsapp.lib;user32.lib;shell32.lib;wtsapi32.lib;ole32.lib;advapi32.lib;comctl32.lib;gdi32.lib;bcrypt.lib;crypt32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="..\DesktopApp\TrayManager.cpp" />
+    <ClCompile Include="..\GattHost\GattHost.cpp" />
+    <ClInclude Include="..\DesktopApp\TrayManager.h" />
+    <ClInclude Include="..\GattHost\GattController.h" />
+
+    <ProjectReference Include="UnlockSavedCredentialIpc.vcxproj"><LinkLibraryDependencies>false</LinkLibraryDependencies></ProjectReference>
+    <ProjectReference Include="UnlockEnrollmentStore.vcxproj"><LinkLibraryDependencies>false</LinkLibraryDependencies></ProjectReference>
+    <ProjectReference Include="UnlockProtocolCrypto.vcxproj"><LinkLibraryDependencies>false</LinkLibraryDependencies></ProjectReference>
+  </ItemGroup>
+  <ItemDefinitionGroup>
+    <Link>
+
+    </Link>
+  </ItemDefinitionGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

@@ -28,13 +28,9 @@ From the repository root on Windows:
 make -C windows test
 ```
 
-This builds first and runs CTest. To run previously built Release tests without rebuilding:
+This builds first and runs `UnlockWindowsTests.proj`, which builds and executes the six native test programs in the existing order. To run previously built Release tests without rebuilding, invoke the six test executables in that same order from the selected MSBuild output directory; the project intentionally does not add retries or hide failures.
 
-```powershell
-ctest --test-dir '.\windows\build' -C Release --output-on-failure
-```
-
-Adjust the test directory as needed. Windows tests cover protocol/crypto, approval policy, enrollment storage, saved-credential IPC, CP policy and installer decisions.
+Adjust `BUILD_DIR`, `CONFIG` and `TARGET_ARCH` as needed. Windows tests cover protocol/crypto, approval policy, enrollment storage, saved-credential IPC, CP policy and installer decisions.
 
 For the iOS policy tests, open `ios/ios.xcodeproj`, select the `ios` scheme and choose **Product → Test** (`⌘U`).
 

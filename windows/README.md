@@ -13,8 +13,8 @@ The Windows side contains four installed components: the desktop app, LocalSyste
 ## Build prerequisites
 
 - Windows and Visual Studio 2022 / 2026 or matching Build Tools with **Desktop development with C++**, **C++ WinUI app development tools**, MSVC C++20 support and the target architecture's tools. The WinUI tools supply native XAML MSBuild targets. ARM64 requires the ARM64 C++ tools component.
-- Windows SDK **10.0.22621.0 or newer** with C++/WinRT headers and `cppwinrt.exe`; a recent SDK is recommended. The desktop projection generator uses the same SDK tool directory as CMake's manifest tool; the C++/WinRT NuGet package supplies MSBuild integration.
-- **CMake 3.25 or newer**, `ctest`, and **GNU Make** available on `PATH`. `make` here is GNU Make; the CMake generator uses the separate MSVC `nmake` supplied by Visual Studio.
+- Windows SDK **10.0.22621.0 or newer** with C++/WinRT headers and `cppwinrt.exe`; a recent SDK is recommended. The C++/WinRT NuGet package supplies the MSBuild integration.
+- **GNU Make** available on `PATH`, plus the Visual Studio `MSBuild.exe` and Windows SDK tools supplied by the installation above. `make` remains the public entry point; it invokes the checked-in MSBuild solution and projects directly.
 - Run from a native Windows PowerShell or command prompt. The Makefile uses Windows commands and is not a WSL build workflow.
 
 From the repository root:
@@ -25,7 +25,7 @@ make -C windows test
 make -C windows build-release
 ```
 
-`test` builds first. `make -C windows` builds and runs tests; `build-release` builds Release targets without executing them. The helper finds Visual Studio with `vswhere`, selects native `x64` or `arm64`, and configures CMake with `NMake Makefiles`. It redirects compiler temporary files into the ignored root `.tmp/` directory.
+`test` builds first and then runs the six native test programs in their existing order. `make -C windows` builds and runs tests; `build-release` builds Release targets without executing them. The helper finds Visual Studio with `vswhere`, selects native `x64` or `arm64`, initializes the MSBuild environment and validates the Windows SDK tools. It redirects compiler temporary files into the ignored root `.tmp/` directory.
 
 To select a target and separate build directories explicitly:
 
@@ -37,7 +37,7 @@ make -C windows build-release TARGET_ARCH=arm64 BUILD_DIR=build/arm64-release
 
 The installer is generated at `windows/dist/UnlockWithIPhone_<version>_<architecture>_setup.exe`, with `x64` or `arm64` matching the compiler target and the version read from [ProductVersion.h](ProductVersion.h). Distribute only the **Release** setup EXE; it embeds the desktop app and its runtime files, service and Credential Provider. Use separate build directories per architecture/configuration; the active desktop EXE remains at the build root for existing make commands.
 
-The desktop build follows make → CMake → MSBuild. CMake compiles the native desktop and shared libraries; MSBuild compiles the entry point and WinUI, links the generated library paths and uses pinned Windows App SDK packages with Hybrid CRT. Other components retain their runtime policy. `DesktopApp.files` comes from MSBuild output; packaging embeds one dependency manifest for paths, sizes, SHA-256 and PE machine types. Third-party files retain their versions. Release x64 build and embedded packaging have been checked; runtime, clean-machine deployment and ARM64 remain unverified.
+The desktop build follows make → MSBuild Solution/.vcxproj. Native libraries, the service, Credential Provider, desktop WinUI app and installer are separate projects with explicit dependencies and outputs. Pinned Windows App SDK packages and Hybrid CRT remain in use; local NuGet caches and Visual Studio user settings are ignored by Git. XAML generation and `DesktopApp.files` preserve the pages' relative directories. `DesktopApp.files` comes from the WinUI project; packaging embeds one dependency manifest for paths, sizes, SHA-256 and PE machine types. Third-party files retain their versions. Release packaging and runtime, clean-machine deployment and ARM64 remain unverified until the matching toolchain and package sources are available.
 
 ## Install and configure
 
@@ -77,7 +77,7 @@ windows/
 ├── Protocol/           Signing payload, hashing and signature verification.
 ├── Setup/              Installation, updates, removal and restart continuation.
 ├── Resources/          Win32 appearance, manifests, icons and version resources.
-├── *Tests/             C++ regression tests registered with CTest.
+├── *Tests/             C++ regression tests orchestrated by UnlockWindowsTests.proj.
 └── Diagnostics/        Read-only component and installation-state inspection.
 ```
 
@@ -102,7 +102,7 @@ Left-clicking the tray shows the current page. Its right-click menu contains **S
 
 Pairing uses a separate WinUI window with the console account, complete fingerprint, waiting progress and replacement/removal warnings. Its worker owns registration, IPC and the writer lock; cancellation and session/power invalidation are checked before committing. Post-commit reload failures report the changed registration. Manual enrollment keeps its console input and exit codes.
 
-Desktop notifications use independent WinUI windows, one at a time, including when the main window is hidden. Closing a notification leaves the tray running; Quit waits for queued notifications to be acknowledged after transport stops. Native emergency errors are used only when WinUI cannot start or continue displaying. The installer and its result scripts retain their existing UI. Pairing and notification changes have static review only; compilation and runtime validation remain pending.
+Desktop notifications use independent WinUI windows, one at a time, including when the main window is hidden. Closing a notification leaves the tray running; Quit waits for queued notifications to be acknowledged after transport stops. Native emergency errors are used only when WinUI cannot start or continue displaying. The installer and its result scripts retain their existing UI. The x64 Debug desktop build has passed; pairing and notification runtime validation remains pending.
 
 Navigation contains **Status**, **Password**, **Diagnostics**, and **About** at the bottom. A Frame navigates between cached pages below the shared fixed header and action buttons in one centered container with a maximum width of 1744 effective pixels; each page owns its UI, scroll area and interactions. Diagnostics skips unchanged text snapshots and preserves selection and reading position when content updates. Dashboard coordinates navigation, the header and host callbacks; About owns update checks, which Quit cancels. Password shows the verified console account and saved-copy status, with **Save password** or **Update password** beside removal when a copy exists and **Refresh** in the header. Account queries read Windows identity properties even after the service restarts. Operations request UAC and use a separate WinUI PasswordBox/ContentDialog; InfoBar reports results and failures. Unknown status disables operations and offers Refresh. About shows the shared product version, GitHub project/MIT license links and a manual **Check for updates** against the latest formal GitHub Release. It compares numeric versions and links to a newer release without downloading or installing it; failures are shown separately from an up-to-date result.
 
@@ -118,7 +118,7 @@ Manual enrollment still requires fingerprint confirmation; replacement requires 
 
 ## Tag builds
 
-Windows installers are automatically built and published when a version tag is pushed. See the [Release workflow](../.github/workflows/release.yml).
+Windows installers are automatically built and published when a version tag is pushed. CI prepares build resources and invokes the MSBuild solution through `Invoke-NativeVsDevCmd.cmd`, without requiring GNU Make. See the [Release workflow](../.github/workflows/release.yml).
 
 ## References
 

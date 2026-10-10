@@ -923,7 +923,7 @@ public:
         } catch (...) {
             const auto error = exceptionText();
             state_->record(L"Desktop request: " + error, true);
-            state_->notice(error, L"Requested operation could not start", NoticeSeverity::error);
+            state_->notice(error, L"Requested operation could not start", unlock_windows::desktop_app::NoticeSeverity::error);
         }
     }
 private:
@@ -995,7 +995,7 @@ private:
             const auto error = exceptionText();
             state_->record(L"Pairing start: " + error, true);
             finishPairing("enrollment_error");
-            state_->notice(error.c_str(), L"Could not start iPhone pairing", NoticeSeverity::error);
+            state_->notice(error.c_str(), L"Could not start iPhone pairing", unlock_windows::desktop_app::NoticeSeverity::error);
         }
     }
 
@@ -1020,7 +1020,7 @@ private:
         if (guided && !job->remove && !savedReloadFailed &&
             (std::string_view(result) == "enrollment_saved" || std::string_view(result) == "enrollment_already_registered"))
             state_->notice(L"Setup is configured. Lock this PC to test iPhone unlock. Windows has not yet verified the saved password.",
-                L"Setup configured", NoticeSeverity::information);
+                L"Setup configured", unlock_windows::desktop_app::NoticeSeverity::information);
     }
 
     void checkPairing() {
@@ -1290,7 +1290,7 @@ private:
             throw std::runtime_error("The paired iPhone belongs to a different Windows account.");
         if (registration) {
             state_->notice(L"A password copy and iPhone registration are present. Lock this PC to test iPhone unlock. Windows has not yet verified the saved password.",
-                L"Setup configured", NoticeSeverity::information);
+                L"Setup configured", unlock_windows::desktop_app::NoticeSeverity::information);
             return;
         }
         setupPairing_ = true;
@@ -1342,7 +1342,7 @@ private:
                     } catch (...) {
                         const auto message = exceptionText();
                         state_->record(L"Setup: " + message, true);
-                        state_->notice(message, L"Setup needs attention", NoticeSeverity::error);
+                        state_->notice(message, L"Setup needs attention", unlock_windows::desktop_app::NoticeSeverity::error);
                     }
                 });
             }).detach();
@@ -1432,7 +1432,7 @@ private:
                 self->state_->failed = true;
             }
             self->close();
-            self->state_->notice(self->lastError_, L"Phone connectivity stopped", NoticeSeverity::error);
+            self->state_->notice(self->lastError_, L"Phone connectivity stopped", unlock_windows::desktop_app::NoticeSeverity::error);
             return message == WM_QUERYENDSESSION ? TRUE : 0;
         }
         return DefWindowProcW(window, message, wparam, lparam);
@@ -1480,7 +1480,7 @@ void GattController::start(HINSTANCE instance) {
                 std::lock_guard lock(state->mutex);
                 state->failed = true;
             }
-            state->notice(error, L"Phone connectivity stopped", NoticeSeverity::error);
+            state->notice(error, L"Phone connectivity stopped", unlock_windows::desktop_app::NoticeSeverity::error);
         }
         state->stop();
     });
@@ -1523,7 +1523,7 @@ void GattController::record(const std::wstring& message) { state_->record(messag
 std::function<void(std::wstring)> GattController::errorReporter(std::wstring title, bool notify) {
     return [state = state_, title = std::move(title), notify](std::wstring message) {
         state->record(message, false);
-        if (notify) state->notice(std::move(message), title, NoticeSeverity::error, true);
+        if (notify) state->notice(std::move(message), title, unlock_windows::desktop_app::NoticeSeverity::error, true);
     };
 }
 

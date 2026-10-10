@@ -1,0 +1,94 @@
+<!-- Created by Rui MA on 10 Oct 2026 -->
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{1EBD0A80-803E-4A5E-9D15-7F4495D95845}</ProjectGuid>
+    <ProjectName>UnlockWindowsSetup</ProjectName>
+    <RootNamespace>UnlockWindowsSetup</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64"><Configuration>Debug</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|ARM64"><Configuration>Debug</Configuration><Platform>ARM64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|ARM64"><Configuration>Release</Configuration><Platform>ARM64</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <PlatformToolset>v145</PlatformToolset>
+    <PlatformToolset Condition="'$(VisualStudioVersion)' == '17.0'">v143</PlatformToolset>
+    <UseDebugLibraries Condition="'$(Configuration)' == 'Debug'">true</UseDebugLibraries>
+    <UseDebugLibraries Condition="'$(Configuration)' == 'Release'">false</UseDebugLibraries>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <Import Project="$(MSBuildThisFileDirectory)..\UnlockNative.props" />
+  <PropertyGroup>
+    <TargetName>setup</TargetName>
+    <OutDir>$(UnlockBuildDirectory)\</OutDir>
+    <IntDir>$(UnlockBuildDirectory)\obj\$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+    <GenerateManifest>false</GenerateManifest>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>..\Setup;..\SavedCredential;..;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <AdditionalDependencies>advapi32.lib;bcrypt.lib;comctl32.lib;gdi32.lib;ole32.lib;oleaut32.lib;secur32.lib;shell32.lib;taskschd.lib;uuid.lib;wtsapi32.lib;user32.lib;version.lib;$(UnlockBuildDirectory)\unlock_saved_credential_ipc.lib;$(UnlockBuildDirectory)\unlock_protocol_crypto.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalOptions>/MANIFEST:NO %(AdditionalOptions)</AdditionalOptions>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="..\Setup\main.cpp" />
+    <ClCompile Include="..\Setup\ComponentState.cpp" />
+    <ClCompile Include="..\Setup\SetupTransaction.cpp" />
+    <ClCompile Include="..\Setup\WindowsAdapter.cpp" />
+    <ClCompile Include="..\Setup\PackageManifest.cpp" />
+    <ClCompile Include="..\Setup\DesktopIntegration.cpp" />
+    <ClCompile Include="..\Setup\PackageDeployment.cpp" />
+    <ClCompile Include="..\Setup\SetupStateStore.cpp" />
+    <ClCompile Include="..\Setup\SetupFinalization.cpp" />
+    <ResourceCompile Include="..\Setup\Setup.rc" />
+    <ResourceCompile Include="$(UnlockGeneratedDirectory)\setup-version.rc" />
+    <ResourceCompile Include="..\Resources\AppIcon.rc" />
+    <ResourceCompile Include="$(UnlockBuildDirectory)\package\$(Configuration)\PackagePayload.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="UnlockSavedCredentialIpc.vcxproj">
+      <Project>{8CBDEB42-8B4B-4F2B-9D52-0BF1A9824D02}</Project>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+    <ProjectReference Include="UnlockProtocolCrypto.vcxproj">
+      <Project>{0F62E4AF-0B7D-47D9-9E01-37DD7FE0D1C1}</Project>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+    <ProjectReference Include="UnlockSavedCredentialService.vcxproj">
+      <Project>{7B2692DD-A3CD-4311-8E33-7D10B22D3B2E}</Project>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+    <ProjectReference Include="UnlockCredentialProvider.vcxproj">
+      <Project>{0CD8485B-190B-4B1C-BB16-0DB1B7B31B10}</Project>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+    <ProjectReference Include="..\DesktopApp\DesktopApp.vcxproj">
+      <Project>{A952BE06-DB40-4984-B6B1-7C8907D74E6A}</Project>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <Target Name="GeneratePackagePayload" BeforeTargets="ResourceCompile" DependsOnTargets="BuildOnlySettings" Inputs="$(UnlockBuildDirectory)\unlock_credential_provider.dll;$(UnlockBuildDirectory)\unlock_saved_credential_service.exe;$(UnlockBuildDirectory)\UnlockWithIPhone.exe;$(UnlockBuildDirectory)\DesktopApp.files;$(MSBuildThisFileDirectory)..\WindowsArchitecture.ps1;$(MSBuildThisFileDirectory)..\ProductVersion.h;$(MSBuildThisFileDirectory)..\ComponentFiles.h" Outputs="$(UnlockBuildDirectory)\package\$(Configuration)\PackagePayload.rc;$(UnlockBuildDirectory)\package\$(Configuration)\PackagePayload.bin">
+    <MakeDir Directories="$(UnlockBuildDirectory)\package\$(Configuration)" />
+    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\WindowsArchitecture.ps1&quot; &quot;$(UnlockProductVersion)&quot; &quot;$(UnlockBuildDirectory)\package\$(Configuration)\PackagePayload.rc&quot; &quot;$(UnlockBuildDirectory)\package\$(Configuration)\PackagePayload.bin&quot; &quot;$(UnlockBuildDirectory)\DesktopApp.files&quot; &quot;$(UnlockBuildDirectory)\unlock_credential_provider.dll&quot; &quot;$(UnlockBuildDirectory)\unlock_saved_credential_service.exe&quot; &quot;$(UnlockBuildDirectory)\UnlockWithIPhone.exe&quot;" />
+  </Target>
+  <Target Name="CopySetupToDist" AfterTargets="Build" DependsOnTargets="GeneratePackagePayload">
+    <MakeDir Directories="$(MSBuildThisFileDirectory)..\dist" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFiles="$(MSBuildThisFileDirectory)..\dist\$(UnlockSetupFile)" />
+  </Target>
+</Project>

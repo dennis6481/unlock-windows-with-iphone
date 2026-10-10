@@ -105,7 +105,7 @@ target_link_libraries(unlock_phone_approval_core PUBLIC unlock_protocol_crypto w
 
 target_link_libraries(unlock_saved_credential_service PRIVATE
     unlock_saved_credential_ipc unlock_phone_approval_core unlock_enrollment_store
-    advapi32 wtsapi32 crypt32 bcrypt windowsapp ole32
+    advapi32 wtsapi32 netapi32 crypt32 bcrypt windowsapp ole32
 )
 
 if(BUILD_TESTING)

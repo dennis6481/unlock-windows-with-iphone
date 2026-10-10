@@ -8,6 +8,7 @@
 #include "../Setup/SetupIdentity.h"
 
 #include <WtsApi32.h>
+#include <lm.h>
 #include <bcrypt.h>
 #include <sddl.h>
 #include <identitystore.h>
@@ -223,17 +224,42 @@ Console currentConsole() {
 }
 
 Identity consoleIdentity(const Console& console) {
+    PSID rawSid = nullptr;
+    winrt::check_bool(ConvertStringSidToSidW(console.sid.c_str(), &rawSid));
+    struct Sid final { PSID value; ~Sid() { LocalFree(value); } } ownedSid{rawSid};
+    DWORD nameChars = 0, domainChars = 0;
+    SID_NAME_USE use{};
+    if (LookupAccountSidW(nullptr, rawSid, nullptr, &nameChars, nullptr, &domainChars, &use) ||
+        GetLastError() != ERROR_INSUFFICIENT_BUFFER || nameChars == 0)
+        fail("Windows console account name lookup failed");
+    std::vector<wchar_t> accountName(nameChars), domainName(domainChars);
+    winrt::check_bool(LookupAccountSidW(nullptr, rawSid, accountName.data(), &nameChars,
+        domainName.data(), &domainChars, &use));
+    struct UserInfo final {
+        LPBYTE value = nullptr;
+        ~UserInfo() { if (value) NetApiBufferFree(value); }
+    } userInfo;
+    const auto status = NetUserGetInfo(nullptr, accountName.data(), 24, &userInfo.value);
+    if (status != NERR_Success)
+        throw std::runtime_error("Windows online identity query failed (Win32 " + std::to_string(status) + ").");
+    if (!userInfo.value) fail("Windows online identity query returned no account information");
+    const auto* online = reinterpret_cast<const USER_INFO_24*>(userInfo.value);
+    if (!online->usri24_internet_identity)
+        fail("Windows console account is not connected to an online identity");
+    if (!online->usri24_user_sid || sidText(online->usri24_user_sid) != console.sid ||
+        !online->usri24_internet_provider_name || !*online->usri24_internet_provider_name ||
+        !online->usri24_internet_principal_name || !*online->usri24_internet_principal_name)
+        fail("Windows online identity is incomplete or does not match the console token");
+    const std::wstring qualifiedName = std::wstring(online->usri24_internet_provider_name) +
+        L"\\" + online->usri24_internet_principal_name;
+
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
     struct Apartment final { ~Apartment() { winrt::uninit_apartment(); } } apartment;
     winrt::com_ptr<IIdentityStore> store;
     winrt::check_hresult(CoCreateInstance(__uuidof(CoClassIdentityStore), nullptr, CLSCTX_INPROC_SERVER,
         __uuidof(IIdentityStore), store.put_void()));
-    PROPVARIANT filter{};
-    filter.vt = VT_LPWSTR;
-    filter.pwszVal = const_cast<LPWSTR>(console.sid.c_str());
     winrt::com_ptr<IEnumUnknown> identities;
-    winrt::check_hresult(store->EnumerateIdentities(IDENTITIES_ALL, &PKEY_Identity_PrimarySid,
-        &filter, identities.put()));
+    winrt::check_hresult(store->EnumerateIdentities(IDENTITIES_ALL, nullptr, nullptr, identities.put()));
     struct Property final {
         PROPVARIANT value{};
         ~Property() { PropVariantClear(&value); }
@@ -245,15 +271,15 @@ Identity consoleIdentity(const Console& console) {
         winrt::check_hresult(next);
         if (next == S_FALSE) break;
         const auto properties = item.as<IPropertyStore>();
-        Property sid, name, provider;
+        Property sid, provider;
         winrt::check_hresult(properties->GetValue(PKEY_Identity_PrimarySid, &sid.value));
-        winrt::check_hresult(properties->GetValue(PKEY_Identity_QualifiedUserName, &name.value));
+        if (sid.value.vt != VT_LPWSTR || !sid.value.pwszVal)
+            fail("Windows identity store returned an invalid primary SID");
+        if (console.sid != sid.value.pwszVal) continue;
         winrt::check_hresult(properties->GetValue(PKEY_Identity_ProviderID, &provider.value));
-        if (sid.value.vt != VT_LPWSTR || !sid.value.pwszVal || console.sid != sid.value.pwszVal ||
-            name.value.vt != VT_LPWSTR || !name.value.pwszVal ||
-            provider.value.vt != VT_CLSID || !provider.value.puuid)
-            fail("Windows identity properties are incomplete or do not match the console token");
-        Identity identity{console.sid, name.value.pwszVal, *provider.value.puuid};
+        if (provider.value.vt != VT_CLSID || !provider.value.puuid)
+            fail("Windows console identity provider ID is unavailable");
+        Identity identity{console.sid, qualifiedName, *provider.value.puuid};
         SensitiveBytes encoded;
         if (!encodeIdentity(identity, encoded)) fail("Windows identity properties are invalid");
         if (result && !sameIdentity(*result, identity)) fail("Windows console identity is ambiguous");

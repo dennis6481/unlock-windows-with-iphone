@@ -2,7 +2,7 @@
 
 # Saved credential service
 
-The LocalSystem service is the Windows authority for requests, phone approval and password release. Saved identity consists of SID, the original system QualifiedUserName and ProviderID; a matching SID alone is insufficient when the online identity has changed.
+The LocalSystem service is the Windows authority for requests, phone approval and password release. Saved identity consists of SID, the Windows-qualified account name and ProviderID; a matching SID alone is insufficient when the online identity has changed.
 
 ## Password protection
 
@@ -28,7 +28,9 @@ After the first native sign-in, choose **Start setup** on the installation resul
 
 `credentialSummary` returns the verified account and saved-copy state to the unlocked installation target's ordinary console session. It returns no password or snapshot nonce and creates no management snapshot or phone approval. The management pipe accepts local authenticated connections, but status/nonces and credential changes still require an administrator; phone-pipe operations remain unchanged.
 
-Before a console user token exists, `captureProvisioningIdentity` accepts only a real physical-console LogonUI caller and the installer-recorded target SID. It records system-provided identity metadata in memory and returns no password, snapshot nonce or phone grant. After sign-in, summary and management queries read PrimarySid, QualifiedUserName and ProviderID from the Windows identity store, verify the installation target and console token, and recheck session/logon identity before publishing them. Updating or restarting the service does not require another lock/unlock cycle to obtain account information.
+Before a console user token exists, `captureProvisioningIdentity` accepts only a real physical-console LogonUI caller and the installer-recorded target SID. It records system-provided identity metadata in memory and returns no password, snapshot nonce or phone grant.
+
+After sign-in, queries use `NetUserGetInfo` level 24 for the online provider/name and local SID, and match unfiltered identity-store entries by PrimarySid for ProviderID. The qualified name uses Windows `provider\principal` format; the store's QualifiedUserName property is not required. Target, console and logon checks remain required. Service restart does not require another lock/unlock cycle.
 
 The snapshot lasts five minutes. A new management query can renew it without another sign-in. Candidates are invalidated by logoff, console disconnection, another console account or service restart. Unavailable or ambiguous Windows identity properties are explicit verification failures. The target is the console user, not an alternate administrator entered at UAC. Identity must not be reconstructed from diagnostics or the saved credential.
 

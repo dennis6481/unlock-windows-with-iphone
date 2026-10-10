@@ -5,7 +5,7 @@
 #include "SavedCredentialVault.h"
 #include "EnrollmentStore.h"
 #include "PhoneApprovalCore.h"
-#include "../ComponentsWizard/SetupIdentity.h"
+#include "../Setup/SetupIdentity.h"
 
 #include <WtsApi32.h>
 #include <bcrypt.h>

@@ -51,7 +51,7 @@ jobs:
           set "TMP=%TEMP%"
           call Invoke-NativeVsDevCmd.cmd --fresh -S . -B build -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
           if errorlevel 1 exit /b %errorlevel%
-          call Invoke-NativeVsDevCmd.cmd --build build --config Release --target unlock_windows_components_wizard
+          call Invoke-NativeVsDevCmd.cmd --build build --config Release --target unlock_windows_setup
           if errorlevel 1 exit /b %errorlevel%
 
       - name: Verify installer version and architecture

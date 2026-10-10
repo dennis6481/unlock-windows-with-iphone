@@ -53,7 +53,7 @@ Alongside the end-to-end check below, verify these setup cases:
 - Matching SID, QualifiedUserName and ProviderID skip password saving. Mismatched identity requires updating the copy. Existing pairing is skipped only after confirmed service reload; reload failure must allow retry without advancing.
 - After five minutes, a management query renews the snapshot without another sign-in. After Update or a service restart while already signed in, the first Password-page query must show the Windows-verified account without locking/unlocking first. Missing, ambiguous or malformed Windows identity properties remain errors.
 - Account changes, sign-out, console disconnection and another administrator's UAC must not let stale candidates/nonces authorize another user or change the installation target. Resume only from the target's unlocked tray.
-- Update/reinstall retain data and show their normal completion result. Failures and uninstall must not start configuration.
+- Update/reinstall retain data, start the tray in the background and silently clear the successful result task/record. First install retains Start setup / Later. Failures and uninstall must not start configuration.
 
 ## Minimum end-to-end check
 
@@ -120,7 +120,11 @@ Force-quit recovery is not promised. Collect both platforms' timelines to separa
 
 ## Installer and removal
 
-Inspect normal and delay-load imports of Release setup and all three embedded components: no Debug CRT, dynamic VC++ runtime or unprovided non-system dependencies. Copy only the setup EXE to a clean machine of the same architecture without development tools or VC++ Redistributable, then run the end-to-end check. See the [installer guide](../windows/ComponentsWizard/README.md) for installation compatibility.
+Check that the progress heading has no garbled punctuation. Logs append oldest to newest and follow new entries at the bottom, including after restart; unchanged polling must not jump back to the top.
+
+After reboot following install/update/uninstall, check that result handoff shows no console flash or transient Dashboard. First install starts the tray in the background and displays Start setup / Later. Successful update/reinstall and uninstall exit silently after verification; update/reinstall clears its one-time result task/record. Failed or incomplete operations still display errors. Repeat with the target user initially absent and with failed finalization. The temporary Settings recovery entry must also avoid a console window, preserve UAC cancellation/errors and retain the transaction until cleanup succeeds.
+
+Inspect normal and delay-load imports of Release setup and all three embedded components: no Debug CRT, dynamic VC++ runtime or unprovided non-system dependencies. Copy only the setup EXE to a clean machine of the same architecture without development tools or VC++ Redistributable, then run the end-to-end check. See the [installer guide](../windows/Setup/README.md) for installation compatibility.
 
 Check that component changes refresh setup's embedded resources/manifest. Reject missing/corrupt resources, mixed versions and wrong architecture before deployment. Interrupted extraction must resume the same transaction and set `payloadReady` only after every component is verified. Resource hashes verify integrity, not publisher identity.
 
@@ -132,7 +136,7 @@ During update, hold an operation window open or start another installed-app inst
 
 For failure scenarios, check interrupted preparation, invalid package/version/architecture, replacement failure, deletion failure, unknown contents, unsafe ACL/reparse point, absent target user, result-handoff race and repeated continuation. The transaction must retain ownership and a real error/continuation path; incomplete finalization cannot be announced as success.
 
-After completed install/update and Finish, verify staging and one-time result tasks/records are released. After repeated updates, only the current formal installation should remain.
+After completed installation and result acknowledgment, or silent update/reinstall completion, verify staging and one-time result tasks/records are released. After repeated updates, only the current formal installation should remain.
 
 After completed uninstall verify the service, CP/main/setup files, password and registration data, target user's ComputerId/Run entry, transaction staging/tasks/records and Settings entry are absent. Unknown files must block a full-removal success claim. No mounted offline hive or surviving product task should be overlooked. Removal does not erase iPhone data, backups or SSD history.
 

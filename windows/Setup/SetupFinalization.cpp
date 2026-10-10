@@ -4,15 +4,113 @@
 #define _UNICODE
 #include "SetupFinalization.h"
 #include "../DesktopApp/DesktopApp.h"
-#include "../Resources/resource.h"
-#include "InstallationPaths.h"
+#include "SetupPlatform.h"
+#include <taskschd.h>
+#include <wrl/client.h>
 #include "../SavedCredential/SavedCredentialVault.h"
 #include <Windows.h>
 #include <array>
 #include <map>
 
 namespace unlock::components {
+// Task scheduling and generated scripts share the same transaction/result contract.
 namespace {
+using Microsoft::WRL::ComPtr;
+struct Bstr {
+    BSTR value;
+    explicit Bstr(const std::wstring& s) : value(SysAllocString(s.c_str())) {
+        if (!value) throw ComponentError(L"Out of memory allocating task text.");
+    }
+    ~Bstr() { SysFreeString(value); }
+};
+struct Scheduler {
+    ScopedComApartment apartment;
+    ComPtr<ITaskService> service;
+    ComPtr<ITaskFolder> root;
+    Scheduler() {
+        checkHresult(CoCreateInstance(CLSID_TaskScheduler, nullptr, CLSCTX_INPROC_SERVER,
+            IID_PPV_ARGS(&service)), L"Create scheduler");
+        VARIANT empty{}; VariantInit(&empty);
+        checkHresult(service->Connect(empty, empty, empty, empty), L"Connect scheduler");
+        Bstr name(L"\\"); checkHresult(service->GetFolder(name.value, &root), L"Open task folder");
+    }
+    ComPtr<IRegisteredTask> get(const wchar_t* name) {
+        Bstr taskName(name); ComPtr<IRegisteredTask> task;
+        HRESULT result = root->GetTask(taskName.value, &task);
+        if (result == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)) return {};
+        checkHresult(result, L"Read task " + std::wstring(name)); return task;
+    }
+    void remove(const wchar_t* name) {
+        Bstr taskName(name);
+        HRESULT result = root->DeleteTask(taskName.value, 0);
+        if (result != HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)) checkHresult(result, L"Delete task " + std::wstring(name));
+    }
+};
+
+void startResultTask(const WindowsAdapter& adapter) {
+    Scheduler scheduler;
+    const auto task = scheduler.get(kResultTask);
+    if (!task) throw ComponentError(L"The registered user-result task is missing.");
+    VARIANT empty{}; VariantInit(&empty); ComPtr<IRunningTask> running;
+    const HRESULT result = task->Run(empty, &running);
+    if (result == SCHED_E_USER_NOT_LOGGED_ON) {
+        adapter.logOperation(L"The target user is not signed in; the result task waits for that user's next sign-in.");
+        return;
+    }
+    checkHresult(result, L"Start the registered ordinary-user result task");
+}
+
+void registerTask(const wchar_t* name, const std::wstring& sid,
+    const std::filesystem::path& executable, const std::wstring& arguments,
+    bool system, bool notification) {
+    validateTargetSid(sid);
+    Scheduler scheduler; ComPtr<ITaskDefinition> definition;
+    checkHresult(scheduler.service->NewTask(0, &definition), L"Create task definition");
+    ComPtr<IPrincipal> principal; checkHresult(definition->get_Principal(&principal), L"Get principal");
+    Bstr user(system ? L"S-1-5-18" : sid);
+    checkHresult(principal->put_UserId(user.value), L"Set task SID");
+    const auto logon = system ? TASK_LOGON_SERVICE_ACCOUNT : TASK_LOGON_INTERACTIVE_TOKEN;
+    checkHresult(principal->put_LogonType(logon), L"Set task logon");
+    checkHresult(principal->put_RunLevel(system ? TASK_RUNLEVEL_HIGHEST : TASK_RUNLEVEL_LUA), L"Set task privilege");
+    ComPtr<ITriggerCollection> triggers; checkHresult(definition->get_Triggers(&triggers), L"Get triggers");
+    ComPtr<ITrigger> trigger;
+    checkHresult(triggers->Create(system ? TASK_TRIGGER_BOOT : TASK_TRIGGER_LOGON, &trigger), L"Create trigger");
+    Bstr unlimited(L"PT0S");
+    checkHresult(trigger->put_ExecutionTimeLimit(unlimited.value), L"Set unlimited trigger execution time");
+    if (!system) {
+        ComPtr<ILogonTrigger> login; checkHresult(trigger.As(&login), L"Get logon trigger");
+        checkHresult(login->put_UserId(user.value), L"Bind logon trigger SID");
+    }
+    ComPtr<ITaskSettings> settings; checkHresult(definition->get_Settings(&settings), L"Get settings");
+    checkHresult(settings->put_ExecutionTimeLimit(unlimited.value), L"Set unlimited running time");
+    checkHresult(settings->put_DisallowStartIfOnBatteries(VARIANT_FALSE), L"Allow battery start");
+    checkHresult(settings->put_StopIfGoingOnBatteries(VARIANT_FALSE), L"Allow battery running");
+    checkHresult(settings->put_StartWhenAvailable(VARIANT_TRUE), L"Set start availability");
+    checkHresult(settings->put_MultipleInstances(wcscmp(name, kFinalizeTask) == 0 ? TASK_INSTANCES_QUEUE : TASK_INSTANCES_IGNORE_NEW), L"Set serialized task execution");
+    checkHresult(settings->put_AllowDemandStart(VARIANT_TRUE), L"Allow explicit scheduler startup");
+    checkHresult(settings->put_Enabled(VARIANT_TRUE), L"Enable registered task");
+    ComPtr<IActionCollection> actions; checkHresult(definition->get_Actions(&actions), L"Get actions");
+    ComPtr<IAction> action; checkHresult(actions->Create(TASK_ACTION_EXEC, &action), L"Create executable action");
+    ComPtr<IExecAction> execution; checkHresult(action.As(&execution), L"Get executable action");
+    Bstr path(executable.wstring()), args(arguments), directory(executable.parent_path().wstring());
+    checkHresult(execution->put_Path(path.value), L"Set executable path");
+    checkHresult(execution->put_Arguments(args.value), L"Set arguments");
+    checkHresult(execution->put_WorkingDirectory(directory.value), L"Set working directory");
+    Bstr taskName(name);
+    Bstr security(wcscmp(name, kFinalizeTask) == 0
+        ? L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGX;;;" + sid + L")"
+        : notification
+        ? L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGXSD;;;" + sid + L")"
+        : L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGX;;;" + (system ? L"SY" : sid) + L")");
+    VARIANT account{}, empty{}, acl{};
+    VariantInit(&account); VariantInit(&empty); VariantInit(&acl);
+    account.vt = VT_BSTR; account.bstrVal = user.value;
+    acl.vt = VT_BSTR; acl.bstrVal = security.value;
+    ComPtr<IRegisteredTask> registered;
+    checkHresult(scheduler.root->RegisterTaskDefinition(taskName.value, definition.Get(),
+        TASK_CREATE_OR_UPDATE, account, empty, logon, acl, &registered), L"Register task " + std::wstring(name));
+}
+
 std::wstring literal(const std::wstring& text) {
     std::wstring result = L"'";
     for (auto value : text) { result += value; if (value == L'\'') result += L"'"; }
@@ -39,7 +137,6 @@ std::wstring contractParameters(const std::wstring& script) {
         if (!scriptUses(script, name)) return;
         result += L"$" + std::wstring(name) + L"=" + std::to_wstring(value) + L"\n";
     };
-    text(L"productName", UNLOCK_PRODUCT_DISPLAY_NAME);
     text(L"setupRole", unlock_windows::desktop_app::kSetupRole);
     text(L"stPath", kWizardStateRegistryPath.c_str());
     text(L"inPath", kInstalledProductRegistryPath.c_str());
@@ -98,7 +195,7 @@ std::wstring contractParameters(const std::wstring& script) {
             literal(kResultKeyName) + L"," + literal(kInstalledProductKeyName) + L")\n";
     return result;
 }
-std::wstring prefix(const WindowsAdapter& adapter, const WizardState& state, const std::wstring& script) {
+std::wstring prefix(const PackageDeployment& package, const SetupTransactionState& state, const std::wstring& script) {
     if (state.transactionId.empty() || state.transactionId.find_first_not_of(L"0123456789-") != std::wstring::npos)
         throw ComponentError(L"Invalid finalization transaction ID.");
     const std::wstring reader = LR"ps(
@@ -130,13 +227,12 @@ function Read-Result{
     if (scriptUses(body, L"uninstall"))
         result += L"$uninstall=" + std::wstring(state.operation == SetupOperation::uninstall ? L"$true\n" : L"$false\n");
     if (scriptUses(body, L"setup")) result += L"$setup=" + literal((desktopDirectory() / kInstallerFile).wstring()) + L"\n";
-    if (scriptUses(body, L"stage")) result += L"$stage=" + literal(adapter.updateDirectory(state).wstring()) + L"\n";
+    if (scriptUses(body, L"stage")) result += L"$stage=" + literal(package.transactionDirectory(state).wstring()) + L"\n";
     if (scriptUses(body, L"version")) result += L"$version=" + literal(state.packageVersion) + L"\n";
     result += L"$hk=[Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine,[Microsoft.Win32.RegistryView]::Registry64)\n";
     return result + contractParameters(body) + body;
 }
-}
-std::wstring encodedPowerShell(const std::wstring& script) {
+std::wstring powerShellArguments(const std::wstring& script, bool headless = false) {
     std::wstring compact;
     bool lineStart = true;
     for (const auto character : script) {
@@ -162,10 +258,13 @@ std::wstring encodedPowerShell(const std::wstring& script) {
         encoded += i + 2 < count ? alphabet[value & 63] : L'=';
     }
     auto arguments = L"-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -Command \"& ([scriptblock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" + encoded + L"'))))\"";
+    if (headless) {
+        const auto executable = system32Directory() / L"WindowsPowerShell" / L"v1.0" / L"powershell.exe";
+        arguments = L"--headless \"" + executable.wstring() + L"\" " + arguments;
+    }
     if (arguments.size() > 32000) throw ComponentError(L"Finalization command exceeds the supported command-line size.");
     return arguments;
 }
-namespace {
 std::wstring alertScript() {
     return LR"ps(
 function Show-SetupAlert($title,$text,$icon){
@@ -202,8 +301,8 @@ Marshal.ThrowExceptionForHR(hr);
 }
 )ps";
 }
-std::wstring observerScript(const WindowsAdapter& adapter, const WizardState& state) {
-    return prefix(adapter, state, LR"ps(
+std::wstring observerScript(const PackageDeployment& package, const SetupTransactionState& state) {
+    return prefix(package, state, LR"ps(
 try{
     if([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -ne $userSid){throw 'Only the recorded console user can display this result.'}
     $scheduler=New-Object -ComObject 'Schedule.Service';$scheduler.Connect();$folder=$scheduler.GetFolder('\')
@@ -256,7 +355,6 @@ try{
             if($failure){throw($failure[$msgKey]+"`r`n"+$failure[$logKey])}
             throw 'Uninstall finalization is incomplete. The transaction remains available for inspection.'
 }
-        Show-SetupAlert $productName 'Uninstall completed and verified. Windows credentials, phone enrollment and computer identity were removed. Remove the computer record on your iPhone separately.' -3
 }finally{foreach($event in $events){$event.Dispose()}}
 }catch{
     Show-SetupAlert 'Setup needs attention' $_.Exception.Message -2
@@ -264,15 +362,12 @@ try{
 }finally{$hk.Dispose()}
 )ps");
 }
+std::wstring resultObserverScript(const PackageDeployment& package, const SetupTransactionState& state) {
+    return alertScript() + observerScript(package, state);
 }
-std::wstring resultObserverScript(const WindowsAdapter& adapter, const WizardState& state) {
-    return alertScript() + observerScript(adapter, state);
-}
-std::wstring finalizationRecoveryScript(const WindowsAdapter& adapter, const WizardState& state) {
-    std::array<wchar_t, 32768> directory{};
-    if (!GetSystemDirectoryW(directory.data(), static_cast<UINT>(directory.size()))) throw ComponentError(L"Cannot resolve system PowerShell.");
-    const auto executable = (std::filesystem::path(directory.data()) / L"WindowsPowerShell" / L"v1.0" / L"powershell.exe").wstring();
-    const auto trigger = prefix(adapter, state, LR"ps(
+std::wstring finalizationRecoveryScript(const PackageDeployment& package, const SetupTransactionState& state) {
+    const auto executable = (system32Directory() / L"WindowsPowerShell" / L"v1.0" / L"powershell.exe").wstring();
+    const auto trigger = prefix(package, state, LR"ps(
 $state=$hk.OpenSubKey($stPath)
 try{if(!$state -or $state.GetValue($tidKey)-ne $id -or $state.GetValue($sidKey)-ne $userSid -or $state.GetValue($phaseKey)-ne $fp){throw 'Finalization transaction changed.'}}
 finally{if($state){$state.Dispose()}}
@@ -287,43 +382,15 @@ $scheduler=New-Object -ComObject 'Schedule.Service';$scheduler.Connect();$schedu
 $hk.Dispose()
 )ps");
     return alertScript() + L"$ErrorActionPreference='Stop'\ntry { $handoff=Start-Process -FilePath " + literal(executable) +
-        L" -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList " + literal(encodedPowerShell(trigger)) +
+        L" -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList " + literal(powerShellArguments(trigger)) +
         L"\nif ($handoff.ExitCode -ne 0) { throw 'Could not start finalization. Inspect the preserved operation result.' }\n" +
-        observerScript(adapter, state) + LR"ps(
+        observerScript(package, state) + LR"ps(
 }catch{Show-SetupAlert 'Setup needs attention' $_.Exception.Message -2;exit 1}
 )ps";
 }
-std::wstring finalizationScript(const WindowsAdapter& adapter, const WizardState& state) {
-    FILETIME created{}, exited{}, kernel{}, user{};
-    if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) throw ComponentError(L"Cannot pin finalization parent creation time.");
-    ULARGE_INTEGER stamp{}; stamp.LowPart = created.dwLowDateTime; stamp.HighPart = created.dwHighDateTime;
-    std::wstring script = L"$parentId=" + std::to_wstring(GetCurrentProcessId()) +
-        L"\n$created=" + std::to_wstring(stamp.QuadPart) + L"\n$image=" + literal(adapter.wizardPath().wstring()) +
-        L"\n$productDir=" + literal(productDataDirectory().wstring()) + L"\n$desktopDir=" + literal(desktopDirectory().wstring()) +
-        L"\n$vaultDir=" + literal((setupKnownFolder(FOLDERID_ProgramData) / unlock_windows::saved_credential::kVaultDirectoryName).wstring()) + L"\n$names=@(";
-    std::map<std::wstring, std::vector<std::wstring>> groups;
-    for (const auto& entry : packageFiles()) {
-        (void)adapter.componentTarget(entry.component());
-        const std::filesystem::path path(entry.name);
-        groups[path.filename().wstring()].push_back(path.parent_path().wstring());
-    }
-    for (const auto& [filename, parents] : groups) {
-        if (parents.size() == 1) script += literal((std::filesystem::path(parents[0]) / filename).wstring()) + L";";
-        else {
-            script += L"@(";
-            for (size_t index = 0; index < parents.size(); ++index) {
-                if (index) script += L",";
-                script += literal(parents[index]);
-            }
-            script += L")|ForEach-Object{if($_){Join-Path $_ " + literal(filename) +
-                L"}else{" + literal(filename) + L"}};";
-        }
-    }
-    script += L")\n$systemTargets=@{";
-    for (const auto& entry : packageFiles())
-        if (!entry.desktopTool)
-            script += literal(entry.name) + L"=" + literal(adapter.componentTarget(entry.component()).wstring()) + L";";
-    script += LR"ps(}
+// These fragments form one script: the try/catch and local state span the named stages.
+std::wstring finalizationSupportScript() {
+    return LR"ps(}
 $targets=@(foreach($name in $names){if($systemTargets.ContainsKey($name)){$systemTargets[$name]}else{Join-Path $desktopDir $name}})
 $dirs=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 foreach($name in $names){$dir=Split-Path $name -Parent;while($dir){[void]$dirs.Add($dir);$dir=Split-Path $dir -Parent}}
@@ -381,7 +448,11 @@ function Remove-Task([string]$name){
 }
     $folder.DeleteTask($name,0)
 }
-try{
+)ps";
+}
+// Seal transaction identity, acquire the maintenance lock and wait for the pinned parent to exit.
+std::wstring verifyFinalizationScript() {
+    return LR"ps(try{
     if([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -ne 'S-1-5-18'){throw 'Finalization requires SYSTEM.'}
     $lock=[Threading.Mutex]::new($false,$mutex)
     try{$locked=$lock.WaitOne(30000)}catch [Threading.AbandonedMutexException]{$locked=$true}
@@ -393,8 +464,7 @@ try{
             $key.GetValue($sidKey)-ne $userSid -or $key.GetValue($phaseKey)-ne $fp -or
             $key.GetValue($pvKey)-ne $version -or($key.GetValue($opKey)-eq $uo)-ne $uninstall){throw 'Sealed transaction mismatch.'}
         foreach($name in $key.GetValueNames()){$saved[$name]=@($key.GetValue($name),$key.GetValueKind($name))}
-}finally{$key.Dispose()})ps"
-        LR"ps(
+}finally{$key.Dispose()}
     $prior=Read-Result
     if($prior){$log=$prior[$logKey]}
     $scheduler=New-Object -ComObject 'Schedule.Service';$scheduler.Connect();$folder=$scheduler.GetFolder('\')
@@ -413,7 +483,11 @@ try{
 }
 }finally{$parent.Dispose()}
 }
-    if(Test-Path -LiteralPath $stage){
+)ps";
+}
+// Delete only manifest-owned files and empty protected directories; unknown contents are errors.
+std::wstring releaseTransactionFilesScript() {
+    return LR"ps(    if(Test-Path -LiteralPath $stage){
         Check-Dir $productDir
         Check-Dir(Split-Path -Path(Split-Path -Path $stage -Parent)-Parent)
         Check-Dir(Split-Path -Path $stage -Parent)
@@ -438,7 +512,11 @@ try{
         if($uninstall -and(Test-Path -LiteralPath $path)){throw "Program remains: $path"}
         if(Test-Path -LiteralPath($path+'.update')){throw "Replacement remains: $path.update"}
 }
-    if($uninstall){
+)ps";
+}
+// Install commits a formal record; uninstall waits for the user to copy the result before deletion.
+std::wstring commitFinalizationScript() {
+    return LR"ps(    if($uninstall){
         foreach($dir in $dirs){Remove-Dir(Join-Path $desktopDir $dir)}
         Remove-Dir $desktopDir;Remove-Dir $vaultDir;Remove-Dir $productDir
         $key=$hk.OpenSubKey($stPath,$true)
@@ -478,7 +556,11 @@ try{
         $hk.DeleteSubKeyTree($stPath,$false)
 }
     exit 0
-}catch{
+)ps";
+}
+// Restore continuation evidence on failure rather than rolling back deployed product files.
+std::wstring preserveFinalizationFailureScript() {
+    return LR"ps(}catch{
     $detail=$_.Exception.Message
     if(!$saved.Count){Write-Error('Finalization refused: '+$detail)-ErrorAction Continue;exit 1}
     try{
@@ -507,6 +589,131 @@ try{
     $hk.Dispose()
 }
 )ps";
-    return prefix(adapter, state, script);
+}
+std::wstring finalizationScript(const WindowsAdapter& adapter, const PackageDeployment& package, const SetupTransactionState& state) {
+    FILETIME created{}, exited{}, kernel{}, user{};
+    if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) throw ComponentError(L"Cannot pin finalization parent creation time.");
+    ULARGE_INTEGER stamp{}; stamp.LowPart = created.dwLowDateTime; stamp.HighPart = created.dwHighDateTime;
+    std::wstring script = L"$parentId=" + std::to_wstring(GetCurrentProcessId()) +
+        L"\n$created=" + std::to_wstring(stamp.QuadPart) + L"\n$image=" + literal(adapter.wizardPath().wstring()) +
+        L"\n$productDir=" + literal(productDataDirectory().wstring()) + L"\n$desktopDir=" + literal(desktopDirectory().wstring()) +
+        L"\n$vaultDir=" + literal((setupKnownFolder(FOLDERID_ProgramData) / unlock_windows::saved_credential::kVaultDirectoryName).wstring()) + L"\n$names=@(";
+    std::map<std::wstring, std::vector<std::wstring>> groups;
+    for (const auto& entry : packageFiles()) {
+        (void)adapter.componentTarget(entry.component());
+        const std::filesystem::path path(entry.name);
+        groups[path.filename().wstring()].push_back(path.parent_path().wstring());
+    }
+    for (const auto& [filename, parents] : groups) {
+        if (parents.size() == 1) script += literal((std::filesystem::path(parents[0]) / filename).wstring()) + L";";
+        else {
+            script += L"@(";
+            for (size_t index = 0; index < parents.size(); ++index) {
+                if (index) script += L",";
+                script += literal(parents[index]);
+            }
+            script += L")|ForEach-Object{if($_){Join-Path $_ " + literal(filename) +
+                L"}else{" + literal(filename) + L"}};";
+        }
+    }
+    script += L")\n$systemTargets=@{";
+    for (const auto& entry : packageFiles())
+        if (!entry.desktopTool)
+            script += literal(entry.name) + L"=" + literal(adapter.componentTarget(entry.component()).wstring()) + L";";
+    script += finalizationSupportScript() + verifyFinalizationScript() +
+        releaseTransactionFilesScript() + commitFinalizationScript() + preserveFinalizationFailureScript();
+    return prefix(package, state, script);
+}
+} // namespace
+bool SetupFinalization::continuationTaskExists() const {
+    Scheduler scheduler;
+    return scheduler.get(kBootTask).Get() != nullptr;
+}
+void SetupFinalization::registerContinuationTask(const SetupTransactionState& state) const {
+    adapter_.logOperation(L"Register SYSTEM boot task and ordinary-user result task for SID " + state.targetSid);
+    validateTargetSid(state.targetSid);
+    if (std::filesystem::path(state.wizardPath) != package_.transactionDirectory(state) / kInstallerFile)
+        throw ComponentError(L"Reboot continuation must use this transaction's protected staged installer.");
+    registerTask(kBootTask, state.targetSid, state.wizardPath,
+        L"--resume-operation " + state.transactionId, true, false);
+    registerResultTask(state);
+}
+// Result observation runs as the ordinary target user; cleanup authority remains with SYSTEM.
+void SetupFinalization::registerResultTask(const SetupTransactionState& state) const {
+    registerTask(kResultTask, state.targetSid, system32Directory() / L"conhost.exe",
+        powerShellArguments(resultObserverScript(package_, state), true), false, true);
+}
+void SetupFinalization::startFinalization(const SetupTransactionState& state) const {
+    adapter_.assertSupportedAdministratorEnvironment();
+    const auto current = store_.readTransaction();
+    if (!current || current->phase != WizardPhase::finalizing || current->transactionId != state.transactionId ||
+        current->targetSid != state.targetSid || current->packageVersion != state.packageVersion)
+        throw ComponentError(L"Finalization requires the matching verified deployment transaction.");
+    registerTask(kFinalizeTask, state.targetSid, system32Directory() / L"WindowsPowerShell" / L"v1.0" / L"powershell.exe",
+        powerShellArguments(finalizationScript(adapter_, package_, state)), true, false);
+    registerResultTask(state);
+    registerFinalizationUninstall(state);
+    retryFinalization(state);
+}
+void SetupFinalization::runContinuation(const SetupTransactionState& state) const {
+    const auto current = store_.readTransaction();
+    if (!current || current->transactionId != state.transactionId || store_.transactionRebootRequired())
+        throw ComponentError(L"Continuation does not match a reboot-completed transaction.");
+    Scheduler scheduler; const auto task = scheduler.get(kBootTask);
+    if (!task) throw ComponentError(L"SYSTEM continuation task is missing. No new transaction was started.");
+    auto record = store_.readCompletion();
+    if (!record || record->transactionId != state.transactionId) throw ComponentError(L"Continuation result record is missing or belongs to another transaction.");
+    record->finished = record->success = false;
+    record->message = L"Continuing the registered operation..."; store_.writeCompletion(*record);
+    registerResultTask(state); startResultTask(adapter_);
+    VARIANT empty{}; VariantInit(&empty); ComPtr<IRunningTask> running;
+    checkHresult(task->Run(empty, &running), L"Continue the registered SYSTEM operation");
+}
+bool SetupFinalization::finalizationTaskExists() const {
+    Scheduler scheduler; return scheduler.get(kFinalizeTask).Get() != nullptr;
+}
+void SetupFinalization::retryFinalization(const SetupTransactionState& state) const {
+    const auto current = store_.readTransaction();
+    if (!current || current->transactionId != state.transactionId || current->phase != WizardPhase::finalizing)
+        throw ComponentError(L"Finalization does not match the registered transaction.");
+    Scheduler scheduler; const auto task = scheduler.get(kFinalizeTask);
+    if (!task) { startFinalization(state); return; }
+    registerResultTask(state);
+    auto record = store_.readCompletion();
+    if (!record || record->transactionId != state.transactionId) throw ComponentError(L"Finalization result record is missing or belongs to another transaction.");
+    record->finished = record->success = false;
+    record->message = L"Continuing finalization..."; store_.writeCompletion(*record);
+    startResultTask(adapter_);
+    VARIANT empty{}; VariantInit(&empty); ComPtr<IRunningTask> running;
+    checkHresult(task->Run(empty, &running), L"Run this transaction's finalization task");
+}
+void SetupFinalization::registerFinalizationUninstall(const SetupTransactionState& state) const {
+    const auto executable = system32Directory() / L"conhost.exe";
+    if (!fileExists(executable)) fail(L"System console host is missing; finalization cannot start.");
+    adapter_.registerApplicationUninstall(executable, state.installedVersion.empty() ? state.packageVersion : state.installedVersion);
+    writeRegistryString(HKEY_LOCAL_MACHINE, kApplicationUninstallRegistryPath, kUninstallStringValueName,
+        L"\"" + executable.wstring() + L"\" " + powerShellArguments(finalizationRecoveryScript(package_, state), true));
+}
+
+void SetupFinalization::acknowledgeCompletion(const std::wstring& transaction) const {
+    const auto result = store_.readCompletion();
+    if (!result || !result->finished || result->transactionId != transaction ||
+        result->targetSid != adapter_.currentUserSid())
+        throw ComponentError(L"Only the target user can dismiss the matching completed result.");
+    // Only the recorded user may consume the one-time result and remove its observer task.
+    Scheduler scheduler; scheduler.remove(kResultTask);
+    store_.removeCompletion();
+}
+void SetupFinalization::startTrayForCompletedOperation(const std::wstring& transaction, bool setup) const {
+    const auto result = store_.readCompletion();
+    if (!result || !result->finished || !result->success || result->transactionId != transaction)
+        throw ComponentError(L"Bluetooth startup requires the matching successful completion result.");
+    if (store_.readTransaction())
+        throw ComponentError(L"Bluetooth startup does not match the completed installation.");
+    const auto installed = store_.readInstalledProduct();
+    if (!installed) return;
+    if (installed->targetSid != result->targetSid)
+        throw ComponentError(L"Bluetooth startup does not match the completed installation.");
+    adapter_.startTray(installed->targetSid, setup);
 }
 }

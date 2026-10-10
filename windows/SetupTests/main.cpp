@@ -1,6 +1,6 @@
 // Created by Rui MA on 28 Sep 2026
 
-#include "../ComponentsWizard/ComponentState.h"
+#include "../Setup/ComponentState.h"
 #include "../ComponentFiles.h"
 #include "../DesktopApp/DesktopApp.h"
 #include <cwchar>
@@ -18,7 +18,7 @@ ComponentSnapshot completeInstallation() {
     snapshot.credentialProviderDllPresent = snapshot.credentialProviderRegistered = snapshot.credentialProviderClsidRegistered = true;
     snapshot.savedCredentialServiceExePresent = snapshot.savedCredentialServiceRegistered = true;
     snapshot.savedCredentialServiceMatchesInstallation = snapshot.savedCredentialServiceRunning = true;
-    snapshot.toolsPresent = snapshot.userStartupPresent = snapshot.applicationUninstallPresent = snapshot.desktopArtifactsPresent = snapshot.versionsMatch = true;
+    snapshot.desktopPackagePresent = snapshot.userStartupPresent = snapshot.applicationUninstallPresent = snapshot.desktopArtifactsPresent = snapshot.versionsMatch = true;
     snapshot.targetSid = L"S-1-5-21-1-2-3-1001";
     return snapshot;
 }
@@ -61,68 +61,93 @@ int main() {
     }
     expect(kComponentFiles.size() == 4 && desktopTools == 2, "manifest describes the current four components");
     expect(wcscmp(kComponentFiles.back().name, L"setup.exe") == 0, "setup keeps its fixed name in staging and installation");
-    expect(determineMaintenancePlan({}, nullptr, nullptr, false).action == MaintenanceAction::install, "empty machine offers Install");
+    expect(determineMaintenancePlan({}, nullptr, nullptr, nullptr, false).action == MaintenanceAction::install,
+        "empty machine offers Install");
+    expect(isKnownPhase(static_cast<std::uint32_t>(WizardPhase::installed)), "installed phase remains in the persisted contract");
     auto snapshot = completeInstallation();
-    WizardState state;
-    state.phase = WizardPhase::installed;
-    state.targetSid = snapshot.targetSid;
-    state.transactionId = L"123-456";
-    state.installedVersion = state.packageVersion = kProductVersion.text();
-    expect(isKnownPhase(static_cast<std::uint32_t>(state.phase)), "installed phase is defined");
+    InstalledProduct installed;
+    installed.targetSid = snapshot.targetSid;
+    installed.lastOperationId = L"123-456";
+    installed.installedVersion = kProductVersion.text();
+    SetupTransactionState transaction;
+    transaction.targetSid = installed.targetSid;
+    transaction.transactionId = installed.lastOperationId;
+    transaction.installedVersion = transaction.packageVersion = installed.installedVersion;
+    bool activeTransaction = false;
     auto plan = [&] (bool reboot = false, const CompletionRecord* completion = nullptr) {
-        return determineMaintenancePlan(snapshot, &state, completion, reboot);
+        return determineMaintenancePlan(snapshot, &installed,
+            activeTransaction ? &transaction : nullptr, completion, reboot);
     };
-    expect(plan().action == MaintenanceAction::maintain, "current full installation offers maintenance");
+    expect(plan().action == MaintenanceAction::maintain, "formal installation offers maintenance without a transaction");
     snapshot.versionsMatch = false;
     snapshot.versionError = L"Installed component version mismatch";
     expect(plan().action == MaintenanceAction::blocked, "mixed installed versions block new maintenance");
     expect(plan().explanation.find(snapshot.versionError) != std::wstring::npos, "version mismatch preserves its diagnostic");
-    state.phase = WizardPhase::updating;
-    state.lastError = L"File replacement failed";
+    activeTransaction = true;
+    transaction.phase = WizardPhase::updating;
+    transaction.lastError = L"File replacement failed";
     expect(plan().action == MaintenanceAction::resume, "mixed versions in an interrupted update retain continuation");
-    state.phase = WizardPhase::installed; state.lastError.clear(); snapshot.versionError.clear();
+    activeTransaction = false;
+    transaction.lastError.clear();
+    snapshot.versionError.clear();
     snapshot.versionsMatch = true;
     snapshot.trayRunning = false;
     expect(plan().action == MaintenanceAction::maintain, "tray not running is not an incomplete installation");
     snapshot.applicationUninstallPresent = false;
     expect(plan().action == MaintenanceAction::maintain,
         "application listing is not a prerequisite for maintaining intact installed components");
-    snapshot.toolsPresent = snapshot.userStartupPresent = false;
-    expect(plan().action == MaintenanceAction::blocked, "old core-only installation is unsupported");
+    snapshot.desktopPackagePresent = snapshot.userStartupPresent = false;
+    expect(plan().action == MaintenanceAction::blocked, "core-only installation is unsupported");
     snapshot = completeInstallation();
-    snapshot.targetSid.clear(); state.targetSid.clear();
+    snapshot.targetSid.clear();
+    installed.targetSid.clear();
     expect(plan().action == MaintenanceAction::blocked, "missing recorded target cannot be rebound");
-    snapshot = completeInstallation(); state.targetSid = snapshot.targetSid;
-    state.schemaVersion = kWizardStateSchemaVersion - 1;
-    expect(plan().action == MaintenanceAction::blocked, "old schema is unsupported");
-    state.phase = WizardPhase::finalizing;
+    snapshot = completeInstallation();
+    installed.targetSid = snapshot.targetSid;
+    installed.schemaVersion = kWizardStateSchemaVersion - 1;
+    expect(plan().action == MaintenanceAction::blocked, "old installed schema is unsupported");
+    installed.schemaVersion = kWizardStateSchemaVersion;
+    activeTransaction = true;
+    transaction.phase = WizardPhase::finalizing;
+    transaction.schemaVersion = kWizardStateSchemaVersion - 1;
     expect(plan().action == MaintenanceAction::blocked, "previous-schema transaction cannot resume with the new installer");
-    state.phase = WizardPhase::installed;
-    state.schemaVersion = kWizardStateSchemaVersion;
+    transaction.schemaVersion = kWizardStateSchemaVersion;
+    // The transaction owns continuation even if the previous formal installation is unsupported.
+    installed.schemaVersion = kWizardStateSchemaVersion - 1;
+    expect(plan().action == MaintenanceAction::resume, "active current transaction takes precedence over the installed record");
+    installed.schemaVersion = kWizardStateSchemaVersion;
+    activeTransaction = false;
     snapshot.continuationTaskPresent = true;
     expect(plan().action == MaintenanceAction::blocked, "unexpected continuation blocks new maintenance");
+    activeTransaction = true;
     for (auto phase : {WizardPhase::installPendingReboot, WizardPhase::updatePendingReboot,
             WizardPhase::updating, WizardPhase::uninstallPendingReboot, WizardPhase::cleaningUp}) {
-        state.phase = phase;
+        transaction.phase = phase;
         expect(isKnownPhase(static_cast<std::uint32_t>(phase)), "pending phase is defined");
-        snapshot.toolsPresent = snapshot.userStartupPresent = false;
+        snapshot.desktopPackagePresent = snapshot.userStartupPresent = false;
         snapshot.savedCredentialServiceRunning = false;
         expect(plan(true).action == MaintenanceAction::restart && plan(true).pending,
             "current pending transaction survives intentionally disabled components");
-        state.lastError = L"Operation failed";
+        transaction.lastError = L"Operation failed";
         expect(plan().action == MaintenanceAction::resume && plan().attentionRequired && plan().pending,
             "failed current transaction offers only continuation");
         expect(plan(true).action == MaintenanceAction::restart && plan(true).attentionRequired,
             "failed pending transaction respects reboot boundary");
-        state.lastError.clear();
+        transaction.lastError.clear();
     }
-    snapshot = completeInstallation(); state.phase = WizardPhase::installed;
-    CompletionRecord completion{state.transactionId, state.targetSid, L"", L"", false, false};
-    expect(plan(false, &completion).action == MaintenanceAction::resume, "unfinished result handoff resumes verification");
+    snapshot = completeInstallation();
+    activeTransaction = false;
+    CompletionRecord completion{installed.lastOperationId, installed.targetSid, L"", L"", false, false};
+    expect(plan(false, &completion).action == MaintenanceAction::resume, "unfinished installed result handoff resumes verification");
+    completion.transactionId = L"999-999";
+    expect(plan(false, &completion).action == MaintenanceAction::maintain, "unrelated result does not block maintenance");
+    completion.transactionId = installed.lastOperationId;
     completion.finished = true;
     expect(plan(false, &completion).action == MaintenanceAction::maintain, "finished result allows maintenance");
+    activeTransaction = true;
     for (const auto phase : {WizardPhase::preparing, WizardPhase::finalizing}) {
-        state.phase = phase; snapshot.toolsPresent = false;
+        transaction.phase = phase;
+        snapshot.desktopPackagePresent = false;
         expect(isKnownPhase(static_cast<std::uint32_t>(phase)), "owned preparation/finalization phase is defined");
         expect(plan().action == MaintenanceAction::resume && plan().pending,
             "preparation and finalization own their resources until verified cleanup");
@@ -131,25 +156,29 @@ int main() {
     }
     for (const auto phase : {1U, 5U, 11U, UINT32_MAX}) {
         expect(!isKnownPhase(phase), "undefined phase values are rejected");
-        state.phase = static_cast<WizardPhase>(phase);
-        expect(plan().action == MaintenanceAction::blocked, "interrupted initial state never triggers cleanup");
+        transaction.phase = static_cast<WizardPhase>(phase);
+        expect(plan().action == MaintenanceAction::blocked, "undefined phase never triggers cleanup");
         completion.finished = false;
         expect(plan(false, &completion).action == MaintenanceAction::blocked,
             "unfinished result cannot authorize an undefined phase");
     }
-    state.phase = WizardPhase::none;
-    expect(plan().action == MaintenanceAction::blocked, "empty phase cannot represent an installation");
-    snapshot = {}; snapshot.desktopArtifactsPresent = true;
-    expect(determineMaintenancePlan(snapshot, nullptr, nullptr, false).action == MaintenanceAction::blocked,
+    transaction.phase = WizardPhase::none;
+    expect(plan().action == MaintenanceAction::blocked, "empty phase cannot represent a transaction");
+    snapshot = {};
+    snapshot.desktopArtifactsPresent = true;
+    expect(determineMaintenancePlan(snapshot, nullptr, nullptr, nullptr, false).action == MaintenanceAction::blocked,
         "unregistered artifacts block installation");
-    snapshot = {}; snapshot.applicationUninstallPresent = true;
+    snapshot = {};
+    snapshot.applicationUninstallPresent = true;
     expect(snapshot.hasAnyArtifacts() &&
-        determineMaintenancePlan(snapshot, nullptr, nullptr, false).action == MaintenanceAction::blocked,
+        determineMaintenancePlan(snapshot, nullptr, nullptr, nullptr, false).action == MaintenanceAction::blocked,
         "an orphan Installed apps entry is still a registered artifact, not an empty installation");
-    snapshot = completeInstallation(); state.phase = WizardPhase::installed;
+    snapshot = completeInstallation();
+    activeTransaction = false;
     snapshot.stateValid = false;
-    expect(plan().action == MaintenanceAction::blocked, "invalid transaction fails closed");
-    snapshot.stateValid = true; snapshot.observationValid = false;
+    expect(plan().action == MaintenanceAction::blocked, "invalid record fails closed");
+    snapshot.stateValid = true;
+    snapshot.observationValid = false;
     expect(plan().action == MaintenanceAction::blocked, "unreadable status fails closed");
     std::cout << "Component maintenance checks passed.\n";
     return EXIT_SUCCESS;

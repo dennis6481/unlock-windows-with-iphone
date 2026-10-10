@@ -142,7 +142,7 @@ function Write-EmbeddedPackage {
         $entries.Add([pscustomobject]@{Name=$component.Name;Path=$path;Desktop=$component.Desktop;Product=$true})
     }
     if ($Files.Count -ne $entries.Count) { throw 'Unexpected product component input.' }
-    $schema = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'ComponentsWizard/PackageManifest.h'))
+    $schema = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'Setup/PackageManifest.h'))
     $pathPattern = [regex]::Match($schema, '(?s)kPackagePathComponentPattern\[\]\s*=\s*LR"regex\((.*?)\)regex";').Groups[1].Value
     if (!$pathPattern) { throw 'Missing package relative path policy.' }
     $desktopRoot = [IO.Path]::GetDirectoryName((Resolve-Path -LiteralPath $DesktopFileList).Path)

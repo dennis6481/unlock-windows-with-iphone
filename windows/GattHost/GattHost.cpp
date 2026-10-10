@@ -171,7 +171,7 @@ void requireWin32(BOOL result, const wchar_t* operation) {
 
 std::string loadComputerId() {
     HKEY key = nullptr;
-    const auto opened = RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\UnlockWindowsWithIPhone\\GattHost",
+    const auto opened = RegCreateKeyExW(HKEY_CURRENT_USER, unlock_windows::desktop_app::kComputerIdentityRegistryPath,
         0, nullptr, 0, KEY_QUERY_VALUE | KEY_SET_VALUE, nullptr, &key, nullptr);
     if (opened != ERROR_SUCCESS) throw hresult_error(HRESULT_FROM_WIN32(opened), L"Open persistent computer ID");
     struct RegistryKey final {

@@ -3,7 +3,8 @@
 #define UNICODE
 #define _UNICODE
 #include "../Resources/resource.h"
-#include "ComponentTransaction.h"
+#include "SetupTransaction.h"
+#include "SetupPlatform.h"
 #include "../DesktopApp/DesktopApp.h"
 #include "resource.h"
 #include "../Resources/DesktopUi.h"
@@ -17,6 +18,7 @@
 #include <vector>
 
 namespace {
+// Entry checks and Win32 presentation; transaction decisions live in SetupTransaction.
 using namespace unlock::components;
 constexpr UINT progressMessage = WM_APP + 1;
 constexpr UINT completeMessage = WM_APP + 2;
@@ -38,10 +40,6 @@ int alert(HWND parent, const wchar_t* title, const wchar_t* content,
     return selected;
 }
 struct Progress { int percent; std::wstring message; };
-std::wstring errorText(const std::exception& error) {
-    if (auto component = dynamic_cast<const ComponentError*>(&error)) return component->wideWhat();
-    std::string text(error.what()); return {text.begin(), text.end()};
-}
 std::filesystem::path modulePath() {
     std::vector<wchar_t> text(32768);
     DWORD n = GetModuleFileNameW(nullptr, text.data(), static_cast<DWORD>(text.size()));
@@ -87,63 +85,23 @@ struct OperationLock {
     }
     ~OperationLock() { if (value) { ReleaseMutex(value); CloseHandle(value); } }
 };
-OperationResult continueOperation(WindowsAdapter& adapter, const ProgressCallback& progress) {
-    const auto state = adapter.readState();
-    if (!state) return {false, false, false, L"No registered transaction is pending."};
-    ComponentTransaction transaction(adapter);
-    switch (state->phase) {
-        case WizardPhase::installed:
-            if (adapter.inspect().isFullInstallation())
-                return {true, false, true, L"Completed installation verified after interrupted result handoff."};
-            return {false, false, true, L"Installed component verification failed."};
-        case WizardPhase::installPendingReboot: return transaction.completeInstall(progress);
-        case WizardPhase::updatePendingReboot:
-        case WizardPhase::updating: return transaction.completeUpdate(progress);
-        case WizardPhase::uninstallPendingReboot:
-        case WizardPhase::cleaningUp: return transaction.completeUninstall(progress);
-        case WizardPhase::preparing: return transaction.continuePreparation(progress);
-        case WizardPhase::finalizing:
-            return {true, false, true, L"Finalization is pending.", true};
-        default: return {false, false, true, L"This transaction is not eligible for reboot continuation."};
-    }
-}
-int resume(WindowsAdapter& adapter, const std::wstring& id) {
+int resume(WindowsAdapter& adapter, SetupStateStore& store, PackageDeployment& package,
+    SetupTransaction& transaction, const std::wstring& id) {
     if (!adapter.isSystem()) return ERROR_ACCESS_DENIED;
     OperationLock operationLock;
-    auto state = adapter.readState();
+    auto state = store.readTransaction();
     if (!state || state->transactionId != id ||
         std::filesystem::path(state->wizardPath) != adapter.wizardPath() ||
-        adapter.wizardPath() != adapter.updateDirectory(*state) / kInstallerFile)
+        adapter.wizardPath() != package.transactionDirectory(*state) / kInstallerFile)
         return ERROR_INVALID_STATE;
-    CompletionRecord record{id, state->targetSid, L"Completing operation after restart...", L"", false, false};
-    const auto previous = adapter.readCompletion();
-    if (previous && previous->transactionId == id) record.log = previous->log;
-    adapter.writeCompletion(record);
-    try {
-        const auto result = continueOperation(adapter, [&](int, const std::wstring& message) {
-            record.log += message + L"\r\n"; adapter.writeCompletion(record);
-        });
-        adapter.setOperationLog({});
-        record.message = result.message;
-        record.success = result.success && !result.rebootRequired && !result.finalizationPending;
-        if (result.finalizationPending) {
-            record.finished = false; adapter.writeCompletion(record);
-            const auto current = adapter.readState();
-            if (!current) throw ComponentError(L"Finalization transaction disappeared.");
-            adapter.startFinalization(*current);
-            return 0;
-        }
-        record.finished = true;
-        adapter.writeCompletion(record);
-        return record.success ? 0 : ERROR_INSTALL_FAILURE;
-    } catch (const std::exception& error) {
-        adapter.setOperationLog({});
-        record.message = errorText(error); record.finished = true; record.success = false;
-        adapter.writeCompletion(record); return ERROR_INSTALL_FAILURE;
-    }
+    return transaction.completeSystemOperation(*state);
 }
 struct Window {
     WindowsAdapter adapter;
+    SetupStateStore store;
+    PackageDeployment package{adapter};
+    SetupFinalization finalization{adapter, store, package};
+    SetupTransaction transaction{adapter, store, package, finalization};
     HWND hwnd = nullptr;
     Page page = Page::home;
     std::thread worker;
@@ -274,10 +232,11 @@ struct Window {
         applyAppearance();
         if (!SetWindowTextW(hwnd, next == Page::home && installed ? title.c_str() : (std::wstring(UNLOCK_PRODUCT_DISPLAY_NAME) + L" Setup").c_str()))
             throw ComponentError(L"Could not set installer window title.");
-        text(IDC_DETAILS, next == Page::progress ? details : L"");
+        if (next != Page::progress) text(IDC_DETAILS, L"");
         ShowWindow(GetDlgItem(hwnd, IDC_PAGE_DESCRIPTION), next == Page::progress ? SW_HIDE : SW_SHOW);
         ShowWindow(GetDlgItem(hwnd, IDC_PROGRESS), next == Page::progress ? SW_SHOW : SW_HIDE);
         layout();
+        if (next == Page::progress) setLog(details);
     }
     void showUninstallConfirmation() {
         setPage(Page::uninstall, L"Uninstall " + std::wstring(UNLOCK_PRODUCT_DISPLAY_NAME),
@@ -287,11 +246,12 @@ struct Window {
         buttons(L"Back", L"Uninstall", L"Cancel");
     }
     void home(bool requestUninstall = false) {
-        const auto status = adapter.inspect();
-        const auto state = adapter.readState();
-        const auto completion = adapter.readCompletion();
-        const auto plan = determineMaintenancePlan(status, state ? &*state : nullptr,
-            completion ? &*completion : nullptr, adapter.updateRebootRequired());
+        const auto status = transaction.inspect();
+        const auto state = store.readTransaction();
+        const auto installedProduct = state ? std::nullopt : store.readInstalledProduct();
+        const auto completion = store.readCompletion();
+        const auto plan = determineMaintenancePlan(status, installedProduct ? &*installedProduct : nullptr, state ? &*state : nullptr,
+            completion ? &*completion : nullptr, store.transactionRebootRequired());
         installed = plan.action == MaintenanceAction::maintain;
         pending = plan.pending;
         if (plan.action == MaintenanceAction::blocked) throw ComponentError(plan.explanation);
@@ -310,14 +270,14 @@ struct Window {
         if (installed) {
             log.clear();
             const auto incoming = adapter.binaryVersion(adapter.wizardPath());
-            const auto existing = parseProductVersion(state->installedVersion);
+            const auto existing = parseProductVersion(installedProduct->installedVersion);
             if (!existing) throw ComponentError(L"Installed product version is invalid.");
             const auto action = packageAction(incoming, *existing);
             reinstall = action == PackageAction::reinstall;
-            const auto account = startupAccountLabel(state->targetSid, log);
+            const auto account = startupAccountLabel(installedProduct->targetSid, log);
             if (requestUninstall) showUninstallConfirmation();
             else {
-                setPage(Page::home, std::wstring(UNLOCK_PRODUCT_DISPLAY_NAME) + L" installed", L"Installed version: " + state->installedVersion +
+                setPage(Page::home, std::wstring(UNLOCK_PRODUCT_DISPLAY_NAME) + L" installed", L"Installed version: " + installedProduct->installedVersion +
                     L"\r\nPackage version: " + incoming.text() + L"\r\nStartup account: " + account +
                     L"\r\nBluetooth tray: " + (status.trayRunning ? L"running" : L"not running") +
                     L"\r\n\r\nUpdate and reinstall preserve credentials and pairing. Uninstall removes Windows product data." +
@@ -334,20 +294,31 @@ struct Window {
             buttons(nullptr, L"Install", L"Cancel");
         }
     }
-    void append(const Progress& progress) {
-        log += progress.message + L"\r\n";
-        text(IDC_DETAILS, log);
-        SendDlgItemMessageW(hwnd, IDC_DETAILS, EM_SETSEL, static_cast<WPARAM>(-1), static_cast<LPARAM>(-1));
+    void setLog(const std::wstring& value) {
+        if (value == log) return;
+        if (value.starts_with(log)) {
+            SendDlgItemMessageW(hwnd, IDC_DETAILS, EM_SETSEL, static_cast<WPARAM>(log.size()), static_cast<LPARAM>(log.size()));
+            SendDlgItemMessageW(hwnd, IDC_DETAILS, EM_REPLACESEL, FALSE,
+                reinterpret_cast<LPARAM>(value.c_str() + log.size()));
+        } else text(IDC_DETAILS, value);
+        log = value;
+        SendDlgItemMessageW(hwnd, IDC_DETAILS, EM_SETSEL, static_cast<WPARAM>(log.size()), static_cast<LPARAM>(log.size()));
         SendDlgItemMessageW(hwnd, IDC_DETAILS, EM_SCROLLCARET, 0, 0);
+    }
+    void append(const Progress& progress) {
+        setLog(log + progress.message + L"\r\n");
         if (progress.percent >= 0) SendDlgItemMessageW(hwnd, IDC_PROGRESS, PBM_SETPOS, progress.percent, 0);
     }
-    void start(WizardAction action, bool continuation = false) {
+    void start(WizardAction action) { runWorker(action); }
+    void continuePendingOperation() { runWorker(std::nullopt); }
+    void runWorker(std::optional<WizardAction> action) {
+        const bool continuation = !action.has_value();
         if (continuation) {
-            const auto state = adapter.readState();
+            const auto state = store.readTransaction();
             if (state && state->phase != WizardPhase::preparing) {
                 if (releaseOperation) releaseOperation();
-                if (state->phase == WizardPhase::finalizing) adapter.retryFinalization(*state);
-                else adapter.runContinuation(*state);
+                if (state->phase == WizardPhase::finalizing) finalization.retryFinalization(*state);
+                else finalization.runContinuation(*state);
                 DestroyWindow(hwnd);
                 return;
             }
@@ -361,7 +332,6 @@ struct Window {
             OperationResult result;
             std::wstring operationLog;
             try {
-                ComponentTransaction transaction(adapter);
                 auto progress = [this, &operationLog](int percent, const std::wstring& message) {
                     operationLog += message + L"\r\n";
                     auto update = std::make_unique<Progress>(Progress{percent, message});
@@ -369,17 +339,17 @@ struct Window {
                         throw ComponentError(L"Could not deliver installation progress to the window.");
                     update.release();
                 };
-                if (continuation) result = continueOperation(adapter, progress);
-                else if (action == WizardAction::install) result = transaction.install(progress);
-                else if (action == WizardAction::update) result = transaction.beginUpdate(progress);
+                if (continuation) result = transaction.continueOperation(progress);
+                else if (*action == WizardAction::install) result = transaction.install(progress);
+                else if (*action == WizardAction::update) result = transaction.beginUpdate(progress);
                 else result = transaction.beginUninstall(progress);
                 {
-                    auto state = adapter.readState();
+                    auto state = store.readTransaction();
                     if (state && state->phase != WizardPhase::installed)
-                        adapter.writeCompletion({state->transactionId, state->targetSid, result.message, operationLog,
+                        store.writeCompletion({state->transactionId, state->targetSid, result.message, operationLog,
                             !result.success, false});
                 }
-            } catch (const std::exception& error) { result = {false, false, true, errorText(error)}; }
+            } catch (const std::exception& error) { result = {false, false, setupErrorText(error)}; }
             adapter.setOperationLog({});
             auto value = std::make_unique<OperationResult>(std::move(result));
             if (PostMessageW(hwnd, completeMessage, 0, reinterpret_cast<LPARAM>(value.get()))) value.release();
@@ -401,38 +371,44 @@ struct Window {
         }
     }
     bool firstSetup = false;
-    bool offerSetup = false;
 
     void pollResult() {
-        const auto record = adapter.readCompletion();
+        const auto record = store.readCompletion();
         if (!record || record->transactionId != resultId) {
-            setPage(Page::progress, L"Waiting for verified operation result", L"No successful completion result has been recorded.");
+            if (page != Page::progress) setPage(Page::progress, L"Waiting for verified operation result", L"");
+            setLog(L"No successful completion result has been recorded.");
             buttons(nullptr, nullptr, nullptr); return;
         }
         if (!record->finished) {
-            setPage(Page::progress, L"Completing operation after restart", record->message + L"\r\n" + record->log);
+            if (page != Page::progress) setPage(Page::progress, L"Completing operation after restart", L"");
+            else text(IDC_MAIN_INSTRUCTION, L"Completing operation after restart");
+            setLog(record->message + L"\r\n" + record->log);
             buttons(nullptr, nullptr, nullptr); return;
         }
         log = record->log;
         KillTimer(hwnd, 1);
-        if (record->success && !adapter.environment().elevated) adapter.startTrayForCompletedOperation(resultId);
-        setPage(record->success ? Page::result : Page::failure,
-            record->success ? L"Operation completed and verified" : L"Operation failed",
-            record->message);
-        offerSetup = record->success && firstSetup && !adapter.environment().elevated;
-        if (offerSetup) {
-            setPage(Page::result, L"Installation completed", L"Start setup to save your Windows account password, then pair your iPhone. You can continue later from the tray.");
-            buttons(nullptr, L"Start setup", L"Later");
-        } else buttons(nullptr, L"Finish", nullptr);
+        if (!record->success) {
+            setPage(Page::failure, L"Operation failed", record->message);
+            buttons(nullptr, nullptr, L"Close");
+            return;
+        }
+        finalization.startTrayForCompletedOperation(resultId);
+        if (!firstSetup) {
+            finalization.acknowledgeCompletion(resultId);
+            DestroyWindow(hwnd);
+            return;
+        }
+        setPage(Page::result, L"Installation completed", L"Start setup to save your Windows account password, then pair your iPhone. You can continue later from the tray.");
+        buttons(nullptr, L"Start setup", L"Later");
     }
     void command(int id) {
         if (busy) return;
         if (id == IDC_CANCEL_ACTION) {
-            if (resultMode && (page == Page::result || page == Page::failure)) adapter.acknowledgeCompletion(resultId);
+            if (resultMode && (page == Page::result || page == Page::failure)) finalization.acknowledgeCompletion(resultId);
             DestroyWindow(hwnd); return;
         }
         if (id == IDCANCEL) {
-            if (resultMode && (page == Page::result || page == Page::failure)) adapter.acknowledgeCompletion(resultId);
+            if (resultMode && (page == Page::result || page == Page::failure)) finalization.acknowledgeCompletion(resultId);
             DestroyWindow(hwnd); return;
         }
         if (id == IDC_BACK) {
@@ -442,8 +418,8 @@ struct Window {
         }
         if (id != IDC_ACTION) return;
         if (resultMode) {
-            if (offerSetup) adapter.startTrayForCompletedOperation(resultId, true);
-            adapter.acknowledgeCompletion(resultId); DestroyWindow(hwnd); return;
+            if (firstSetup && page == Page::result) finalization.startTrayForCompletedOperation(resultId, true);
+            finalization.acknowledgeCompletion(resultId); DestroyWindow(hwnd); return;
         }
         if (page == Page::home) {
             if (!installed) start(WizardAction::install);
@@ -455,10 +431,10 @@ struct Window {
             }
         } else if (page == Page::update) start(WizardAction::update);
         else if (page == Page::uninstall) start(WizardAction::uninstall);
-        else if (page == Page::restart || (page == Page::failure && pending && adapter.updateRebootRequired())) {
+        else if (page == Page::restart || (page == Page::failure && pending && store.transactionRebootRequired())) {
             if (alert(hwnd, L"Restart Windows", L"Restart Windows now? Save your work first. Applications will not be forcibly closed.",
                 TDCBF_OK_BUTTON | TDCBF_CANCEL_BUTTON, TD_WARNING_ICON) == IDOK) { adapter.restartWindows(); DestroyWindow(hwnd); }
-        } else if (page == Page::failure && pending) start(WizardAction::blocked, true);
+        } else if (page == Page::failure && pending) continuePendingOperation();
         else DestroyWindow(hwnd);
     }
 };
@@ -505,7 +481,7 @@ INT_PTR CALLBACK procedure(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
             case WM_CLOSE:
                 if (!window->busy) {
                     if (window->resultMode && (window->page == Page::result || window->page == Page::failure))
-                        window->adapter.acknowledgeCompletion(window->resultId);
+                        window->finalization.acknowledgeCompletion(window->resultId);
                     DestroyWindow(hwnd);
                 }
                 return TRUE;
@@ -526,7 +502,7 @@ INT_PTR CALLBACK procedure(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
         }
     } catch (const std::exception& error) {
         window->busy = false;
-        window->setPage(Page::failure, L"Unable to continue", errorText(error));
+        window->setPage(Page::failure, L"Unable to continue", setupErrorText(error));
         window->buttons(nullptr, nullptr, L"Close");
     }
     return FALSE;
@@ -545,13 +521,21 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
         LocalFree(args);
         headless = sessionZero || mode == L"--resume-operation";
         Window window(modulePath());
-        if (mode == L"--resume-operation") return transaction.empty() ? ERROR_INVALID_PARAMETER : resume(window.adapter, transaction);
+        if (mode == L"--resume-operation") return transaction.empty() ? ERROR_INVALID_PARAMETER : resume(window.adapter, window.store, window.package, window.transaction, transaction);
         if (sessionZero) return ERROR_INVALID_PARAMETER;
         window.resultMode = mode == L"--show-result"; window.resultId = transaction; window.firstSetup = firstSetup;
         window.uninstallMode = mode == L"--uninstall";
         if ((!mode.empty() && !window.resultMode && !window.uninstallMode) ||
             (window.resultMode && (transaction.empty() || (count != 3 && !firstSetup))) || (window.uninstallMode && count != 2))
             throw ComponentError(L"Unsupported installer command line.");
+        if (window.resultMode && !firstSetup) {
+            const auto result = window.store.readCompletion();
+            if (result && result->transactionId == transaction && result->finished && result->success) {
+                window.finalization.startTrayForCompletedOperation(transaction);
+                window.finalization.acknowledgeCompletion(transaction);
+                return 0;
+            }
+        }
         if (!window.resultMode && !window.adapter.environment().elevated) {
             SHELLEXECUTEINFOW request{sizeof(request)};
             request.lpVerb = L"runas"; request.lpFile = window.adapter.wizardPath().c_str(); request.nShow = SW_SHOWNORMAL;
@@ -577,12 +561,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
         return 0;
     } catch (const std::exception& error) {
         if (!headless) {
-            try { alert(nullptr, UNLOCK_PRODUCT_DISPLAY_NAME, errorText(error).c_str(), TDCBF_OK_BUTTON, TD_ERROR_ICON); }
+            try { alert(nullptr, UNLOCK_PRODUCT_DISPLAY_NAME, setupErrorText(error).c_str(), TDCBF_OK_BUTTON, TD_ERROR_ICON); }
             catch (const std::exception& displayError) {
-                OutputDebugStringW((errorText(error) + L"\nUI display failure: " + errorText(displayError)).c_str());
+                OutputDebugStringW((setupErrorText(error) + L"\nUI display failure: " + setupErrorText(displayError)).c_str());
             }
         }
-        else OutputDebugStringW(errorText(error).c_str());
+        else OutputDebugStringW(setupErrorText(error).c_str());
         return ERROR_INSTALL_FAILURE;
     }
 }

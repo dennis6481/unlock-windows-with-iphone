@@ -28,7 +28,7 @@ Status text distinguishes phone waiting, signal failure, disconnected transport,
 
 `AppTile.bmp` is derived from the standard iOS icon and is a provider logo, not a replacement user avatar. LogonUI controls tile typography; desktop DPI settings are not injected into CP.
 
-Install/update through the [installer](../ComponentsWizard/README.md) and honor its restart boundary. Do not overwrite a DLL already loaded by LogonUI. Service, CP and app must be from the same build. Use the [testing guide](../../docs/Testing.md#authentication-and-security-boundaries) for repeated enumeration, single consumption and native-login recovery.
+Install/update through the [installer](../Setup/README.md) and honor its restart boundary. Do not overwrite a DLL already loaded by LogonUI. Service, CP and app must be from the same build. Use the [testing guide](../../docs/Testing.md#authentication-and-security-boundaries) for repeated enumeration, single consumption and native-login recovery.
 
 ## References
 

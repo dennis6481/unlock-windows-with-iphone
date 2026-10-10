@@ -2,7 +2,27 @@
 
 # Installer and maintenance
 
-The native Components Wizard installs, updates, reinstalls and removes the four Windows product components. It handles restart continuation and finalization. Authentication and BLE contracts remain outside the installer.
+The native Setup installs, updates, reinstalls and removes the four Windows product components. It handles restart continuation and finalization. Authentication and BLE contracts remain outside the installer.
+
+Progress logs append in chronological order and scroll to the latest entry. Unchanged result polling preserves the scroll position. Installer C++ sources compile as UTF-8.
+
+## Code responsibilities
+
+| Module | Responsibility |
+|---|---|
+| `main.cpp` and resources | Launch modes, elevation/operation lock and Win32 pages. |
+| `SetupTransaction` | Operation sequencing, maintenance inspection and phase-based continuation. |
+| `ComponentState` | Separate installed-product/active-transaction types and pure maintenance decisions. |
+| `WindowsAdapter` / `DesktopIntegration.cpp` | Windows mechanisms; console identity, user hive, Run, shortcut and normal app exit. |
+| `PackageDeployment` / `PackageManifest` | Embedded package verification, protected staging, file replacement/removal and package format. |
+| `SetupStateStore` | Installation/transaction registry records, reboot guard and atomic completion snapshots. |
+| `SetupFinalization` | Scheduled continuation, generated exit-cleanup stages and ordinary-user result handoff. |
+| `SetupContract` / `SetupIdentity` | Shared persisted contract and service-side target-user lookup. |
+| `SetupPlatform.h` | Internal Windows handles, error/registry primitives and installation paths. |
+
+Flow: entry/UI -> transaction -> package and Windows deployment -> SYSTEM exit finalizer -> ordinary-user result acknowledgment. The active transaction takes precedence over the formal installation. Deployment verification does not mean exit cleanup or user handoff has completed.
+
+This refactor has static checks only; compilation and runtime acceptance remain unverified.
 
 ## Package and deployment
 
@@ -53,13 +73,14 @@ Deployment and exit finalization are separate. Formal installation records, acti
 
 - A SYSTEM completion task runs the protected staged installer for the current transaction.
 - A serialized SYSTEM finalizer uses short-lived Windows PowerShell, waits for the verified continuation process and holds the maintenance mutex. Generated commands enforce a 32,000-character limit.
+- The ordinary-user result task and temporary Settings recovery entry start PowerShell through system `conhost --headless`, without a console window. The verified result record/events determine completion; the host's exit code is not the operation result.
 - Deletion is limited to the transaction's known files and empty directories. Unknown contents, unsafe ACLs, reparse points and deletion errors prevent a success claim.
-- Install/update finalization releases staging before launching the ordinary target user's result page. A fresh install offers **Start setup** and **Later**, reusing existing page controls. Start setup hands off to the ordinary tray; either choice acknowledges the one-time installation result. Update/reinstall keep the normal **Finish** result and do not automatically repeat configuration.
+- Install/update finalization releases staging before handing the result to the ordinary target user. The tray starts with `--background`. A fresh install shows **Start setup** and **Later**; either choice acknowledges the one-time result. Successful update/reinstall silently starts the tray and acknowledges the result without creating a window. Failures retain their result UI.
 - The observer derives the first-install handoff from the existing transaction operation. It passes an internal setup argument to the verified result UI; no persisted installation or completion schema is added. Setup progress comes from credential and enrollment records.
-- Uninstall copies a non-secret result into the target-user process, signals a transaction/user-bound acknowledgment event, then finishes SYSTEM cleanup. The event conveys receipt, not paths or authentication authority; its owner/ACL are checked.
+- Uninstall copies a non-secret result into the target-user process, signals a transaction/user-bound acknowledgment event, then finishes SYSTEM cleanup. Verified success exits silently; failed or timed-out cleanup displays an error. The event conveys receipt, not paths or authentication authority; its owner/ACL are checked.
 - With the target user absent, result handoff remains pending until sign-in. Starting a task, scheduling deletion or deleting components alone is not full completion.
 
-File replacement verifies staging and prepares all `.update` files before replacing targets. Obsolete dependencies are removed before the resident installer is replaced last. Failure preserves staging and transaction diagnostics; continuation repeats verification and replacement without automatic rollback. The Settings entry may temporarily refer to protected staging or a constrained PowerShell continuation while its normal EXE is being released. Finish only after the final result, and use the maintained continuation entry for an incomplete transaction.
+File replacement verifies staging and prepares all `.update` files before replacing targets. Obsolete dependencies are removed before the resident installer is replaced last. Failure preserves staging and transaction diagnostics; continuation repeats verification and replacement without automatic rollback. The Settings entry may temporarily refer to protected staging or a constrained PowerShell continuation while its normal EXE is being released. Completion requires the verified final result; use the maintained continuation entry for an incomplete transaction.
 
 File removal is not physical erasure of SSD, backup or snapshot history. See [SECURITY.md](../../SECURITY.md).
 

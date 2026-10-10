@@ -12,6 +12,8 @@
 
 namespace unlock_windows::desktop_app {
 
+inline constexpr wchar_t kComputerIdentityRegistryPath[] = L"Software\\UnlockWindowsWithIPhone\\GattHost";
+
 struct CallbackState;
 
 struct GattNotice final {

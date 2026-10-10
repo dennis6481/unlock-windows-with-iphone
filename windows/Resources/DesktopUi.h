@@ -56,11 +56,11 @@ public:
         const auto instance = reinterpret_cast<HINSTANCE>(GetWindowLongPtrW(window, GWLP_HINSTANCE));
         const auto big = LoadImageW(instance, MAKEINTRESOURCEW(IDI_UNLOCK_APP), IMAGE_ICON,
             GetSystemMetricsForDpi(SM_CXICON, dpi), GetSystemMetricsForDpi(SM_CYICON, dpi), LR_SHARED);
-        const auto small = LoadImageW(instance, MAKEINTRESOURCEW(IDI_UNLOCK_APP), IMAGE_ICON,
+        const auto smallIcon = LoadImageW(instance, MAKEINTRESOURCEW(IDI_UNLOCK_APP), IMAGE_ICON,
             GetSystemMetricsForDpi(SM_CXSMICON, dpi), GetSystemMetricsForDpi(SM_CYSMICON, dpi), LR_SHARED);
-        require(big != nullptr && small != nullptr, "LoadImageW(dialog icons)");
+        require(big != nullptr && smallIcon != nullptr, "LoadImageW(dialog icons)");
         SendMessageW(window, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(big));
-        SendMessageW(window, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(small));
+        SendMessageW(window, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(smallIcon));
     }
 private:
     HFONT titleFont_ = nullptr;

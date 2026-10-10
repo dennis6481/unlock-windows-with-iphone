@@ -1,6 +1,6 @@
 <!-- Created by Rui MA on 28 Sep 2026 -->
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <assemblyIdentity type="win32" name="UnlockWindowsWithIPhone.ComponentsWizard" version="1.0.0.0" processorArchitecture="*"/>
+  <assemblyIdentity type="win32" name="UnlockWindowsWithIPhone.Setup" version="1.0.0.0" processorArchitecture="*"/>
   <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
     <application><supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/></application>
   </compatibility>

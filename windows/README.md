@@ -52,7 +52,7 @@ Open **Unlock with iPhone** from the Start Menu to show the main window. Install
 
 Run a newer installer to **Update**, or the same version to **Reinstall**. Downgrades are rejected. Updates preserve your saved password and pairing information.
 
-For uninstall instructions, see the [main guide](../README.md#uninstall). For installation compatibility and failure recovery, see the [installer guide](ComponentsWizard/README.md).
+For uninstall instructions, see the [main guide](../README.md#uninstall). For installation compatibility and failure recovery, see the [installer guide](Setup/README.md).
 
 ## Troubleshooting
 
@@ -75,13 +75,13 @@ windows/
 ├── CredentialProvider/ Windows sign-in tile and native credential submission.
 ├── PhoneApproval/      Challenge verification and protected registration storage.
 ├── Protocol/           Signing payload, hashing and signature verification.
-├── ComponentsWizard/   Installation, updates, removal and restart continuation.
+├── Setup/              Installation, updates, removal and restart continuation.
 ├── Resources/          Win32 appearance, manifests, icons and version resources.
 ├── *Tests/             C++ regression tests registered with CTest.
 └── Diagnostics/        Read-only component and installation-state inspection.
 ```
 
-Module guides: [GattHost](GattHost/README.md), [SavedCredential](SavedCredential/README.md), [CredentialProvider](CredentialProvider/README.md) and [ComponentsWizard](ComponentsWizard/README.md). See [PROTOCOL.md](../PROTOCOL.md) for the shared protocol.
+Module guides: [GattHost](GattHost/README.md), [SavedCredential](SavedCredential/README.md), [CredentialProvider](CredentialProvider/README.md) and [Setup](Setup/README.md). See [PROTOCOL.md](../PROTOCOL.md) for the shared protocol.
 
 ## Desktop app roles
 

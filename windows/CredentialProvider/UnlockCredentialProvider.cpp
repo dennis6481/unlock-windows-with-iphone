@@ -3,7 +3,7 @@
 #include <initguid.h>
 #include "UnlockCredentialProvider.h"
 #include "SavedCredentialIpc.h"
-#include "../ComponentsWizard/SetupIdentity.h"
+#include "../Setup/SetupIdentity.h"
 #include "../Resources/resource.h"
 #include <algorithm>
 #include <array>

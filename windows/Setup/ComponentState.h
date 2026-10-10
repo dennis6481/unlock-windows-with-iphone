@@ -13,10 +13,19 @@ enum class WizardAction {
     install,
     update,
     uninstall,
-    blocked,
 };
 
-struct WizardState final {
+// Formal installation survives completed transactions and has no staging/phase fields.
+struct InstalledProduct final {
+    std::uint32_t schemaVersion = kWizardStateSchemaVersion;
+    std::wstring targetSid;
+    std::wstring installedVersion;
+    std::wstring wizardPath;
+    std::wstring lastOperationId;
+};
+
+// Only an active transaction owns staging, restart state and continuation diagnostics.
+struct SetupTransactionState final {
     std::uint32_t schemaVersion = kWizardStateSchemaVersion;
     WizardPhase phase = WizardPhase::none;
     std::wstring transactionId;
@@ -46,7 +55,7 @@ struct ComponentSnapshot final {
     bool savedCredentialServiceRunning = false;
     bool continuationTaskPresent = false;
     bool userStartupPresent = false;
-    bool toolsPresent = false;
+    bool desktopPackagePresent = false;
     bool desktopArtifactsPresent = false;
     bool applicationUninstallPresent = false;
     bool trayRunning = false;
@@ -71,6 +80,7 @@ struct MaintenancePlan final {
 };
 
 [[nodiscard]] MaintenancePlan determineMaintenancePlan(const ComponentSnapshot& snapshot,
-    const WizardState* state, const CompletionRecord* completion, bool rebootRequired);
+    const InstalledProduct* installed, const SetupTransactionState* transaction,
+    const CompletionRecord* completion, bool rebootRequired);
 
 } // namespace unlock::components

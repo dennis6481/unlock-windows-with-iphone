@@ -1,7 +1,5 @@
 // Created by Rui MA on 28 Sep 2026
 
-#define UNICODE
-#define _UNICODE
 #include "../Resources/resource.h"
 #include "SetupTransaction.h"
 #include "SetupPlatform.h"

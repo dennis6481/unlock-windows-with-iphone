@@ -6,7 +6,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot '..\WindowsArchitecture.ps1')
+. (Join-Path $PSScriptRoot '..\WindowsBuild.ps1')
 
 $definitions = @{}
 function Read-HeaderDefinitions([string]$Path) {

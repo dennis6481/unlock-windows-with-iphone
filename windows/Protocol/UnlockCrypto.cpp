@@ -1,4 +1,5 @@
 #include "UnlockCrypto.h"
+#include <ntstatus.h>
 
 #include <cstring>
 #include <limits>

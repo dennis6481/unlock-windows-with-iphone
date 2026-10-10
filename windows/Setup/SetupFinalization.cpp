@@ -1,7 +1,5 @@
 // Created by Rui MA on 04 Oct 2026
 
-#define UNICODE
-#define _UNICODE
 #include "SetupFinalization.h"
 #include "../DesktopApp/DesktopApp.h"
 #include "SetupPlatform.h"

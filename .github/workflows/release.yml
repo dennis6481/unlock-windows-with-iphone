@@ -48,15 +48,15 @@ jobs:
           if errorlevel 1 exit /b %errorlevel%
           set "TEMP=%CD%\..\.tmp"
           set "TMP=%TEMP%"
-          call Invoke-NativeVsDevCmd.cmd --prepare build
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File WindowsBuild.ps1 -Prepare -OutputDirectory build
           if errorlevel 1 exit /b %errorlevel%
-          call Invoke-NativeVsDevCmd.cmd --msbuild "UnlockWindows.sln" /restore /m /nologo "/p:Configuration=Release" "/p:UnlockBuildDirectory=%CD%\build" "/p:BuildTesting=OFF"
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File WindowsBuild.ps1 -InvokeMSBuild "UnlockWindows.sln" /restore /m /nologo "/p:Configuration=Release" "/p:UnlockBuildDirectory=%CD%\build" "/p:BuildTesting=OFF"
           if errorlevel 1 exit /b %errorlevel%
 
       - name: Verify installer version and architecture
         shell: pwsh
         run: |
-          . .\WindowsArchitecture.ps1
+          . .\WindowsBuild.ps1
           $installers = @(Get-ChildItem -LiteralPath dist -Filter '*.exe' -File -ErrorAction Stop)
           if ($installers.Count -ne 1) {
               throw "Expected one installer, found $($installers.Count)."

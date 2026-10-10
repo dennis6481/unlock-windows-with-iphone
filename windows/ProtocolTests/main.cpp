@@ -2,6 +2,7 @@
 
 #include "SigningPayload.h"
 #include "UnlockCrypto.h"
+#include <ntstatus.h>
 
 #include <array>
 #include <cstring>

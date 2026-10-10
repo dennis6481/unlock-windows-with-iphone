@@ -3,6 +3,8 @@
   <PropertyGroup>
     <UnlockBuildDirectory Condition="'$(UnlockBuildDirectory)' == ''">$(MSBuildThisFileDirectory)build</UnlockBuildDirectory>
     <UnlockGeneratedDirectory>$(UnlockBuildDirectory)\generated</UnlockGeneratedDirectory>
+    <UnlockLibraryDirectory>$(UnlockBuildDirectory)\lib\$(Platform)\$(Configuration)</UnlockLibraryDirectory>
+    <LibraryPath Condition="!Exists('$(VCToolsInstallDir)atlmfc\lib\$(Platform)')">$([System.String]::Copy('$(LibraryPath)').Replace('$(VCToolsInstallDir)atlmfc\lib\$(Platform);', ''))</LibraryPath>
     <OutDir Condition="'$(OutDir)' == ''">$(UnlockBuildDirectory)\</OutDir>
     <IntDir Condition="'$(IntDir)' == ''">$(UnlockBuildDirectory)\obj\$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
     <PlatformToolset Condition="'$(PlatformToolset)' == ''">v145</PlatformToolset>
@@ -35,6 +37,6 @@
 
   <Target Name="GenerateUnlockBuildResources" BeforeTargets="PrepareForBuild" Condition="'$(DesignTimeBuild)' != 'true' and !Exists('$(UnlockGeneratedDirectory)\UnlockBuild.props')">
     <MakeDir Directories="$(UnlockGeneratedDirectory)" />
-    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)WindowsArchitecture.ps1&quot; -WriteBuildResources -OutputDirectory &quot;$(UnlockGeneratedDirectory)&quot; -TargetArchitecture &quot;$(Platform)&quot;" />
+    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)WindowsBuild.ps1&quot; -WriteBuildResources -OutputDirectory &quot;$(UnlockGeneratedDirectory)&quot; -TargetArchitecture &quot;$(Platform)&quot;" />
   </Target>
 </Project>

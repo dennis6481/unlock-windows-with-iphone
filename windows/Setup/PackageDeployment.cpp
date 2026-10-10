@@ -1,7 +1,5 @@
 // Created by Rui MA on 09 Oct 2026
 
-#define UNICODE
-#define _UNICODE
 #include "PackageDeployment.h"
 #include "SetupPlatform.h"
 #include <cstring>

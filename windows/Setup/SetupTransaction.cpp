@@ -1,8 +1,6 @@
 // Created by Rui MA on 28 Sep 2026
 // Owns maintenance inspection, operation sequencing and continuation/result publication.
 
-#define UNICODE
-#define _UNICODE
 #include "SetupTransaction.h"
 #include "SetupPlatform.h"
 #include <Windows.h>
@@ -188,7 +186,7 @@ OperationResult SetupTransaction::install(const ProgressCallback& progress) {
         if (plan.action != MaintenanceAction::install)
             return failure(L"Installation requires empty, readable component state.");
         auto state = newState(WizardPhase::preparing, adapter_.consoleUserSid());
-        package_.validatePackage(state); store_.writeTransaction(state);
+        static_cast<void>(package_.validatePackage(state)); store_.writeTransaction(state);
         return prepare(state, progress);
     } catch (const std::exception& error) { return failure(setupErrorText(error)); }
 }

@@ -1,8 +1,6 @@
 // Created by Rui MA on 28 Sep 2026
 // Native Windows mechanisms; package/state/task ownership belongs to their dedicated modules.
 
-#define UNICODE
-#define _UNICODE
 #define SECURITY_WIN32
 
 #include "../Resources/resource.h"

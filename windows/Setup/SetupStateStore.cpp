@@ -1,8 +1,6 @@
 // Created by Rui MA on 09 Oct 2026
 // Separate installation/transaction persistence and atomic completion records.
 
-#define UNICODE
-#define _UNICODE
 #include "SetupStateStore.h"
 #include "PackageDeployment.h"
 #include "SetupPlatform.h"

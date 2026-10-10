@@ -25,7 +25,7 @@ make -C windows test
 make -C windows build-release
 ```
 
-`test` builds first and then runs the six native test programs in their existing order. `make -C windows` builds and runs tests; `build-release` builds Release targets without executing them. The helper finds Visual Studio with `vswhere`, selects native `x64` or `arm64`, initializes the MSBuild environment and validates the Windows SDK tools. It redirects compiler temporary files into the ignored root `.tmp/` directory.
+`test` builds first and then runs the six native test programs in their existing order. `make -C windows` builds and runs tests; `build-release` builds Release targets without executing them. The shared [WindowsBuild.ps1](WindowsBuild.ps1) helper finds Visual Studio with `vswhere`, selects native `x64` or `arm64`, initializes the MSBuild environment and validates the Windows SDK tools. It redirects compiler temporary files into the ignored root `.tmp/` directory.
 
 To select a target and separate build directories explicitly:
 
@@ -35,9 +35,9 @@ make -C windows build-release TARGET_ARCH=arm64 BUILD_DIR=build/arm64-release
 ```
 
 
-The installer is generated at `windows/dist/UnlockWithIPhone_<version>_<architecture>_setup.exe`, with `x64` or `arm64` matching the compiler target and the version read from [ProductVersion.h](ProductVersion.h). Distribute only the **Release** setup EXE; it embeds the desktop app and its runtime files, service and Credential Provider. Use separate build directories per architecture/configuration; the active desktop EXE remains at the build root for existing make commands.
+The installer is generated at `windows/dist/UnlockWithIPhone_<version>_<architecture>_setup.exe`, with `x64` or `arm64` matching the compiler target and the version read from [ProductVersion.h](ProductVersion.h). Distribute only the **Release** setup EXE; it embeds the desktop app and its runtime files, service and Credential Provider. Static libraries are isolated under `lib/<architecture>/<configuration>` to prevent Debug/Release runtime mixing. Use separate build directories per architecture/configuration; the active desktop EXE remains at the build root for existing make commands.
 
-The desktop build follows make → MSBuild Solution/.vcxproj. Native libraries, the service, Credential Provider, desktop WinUI app and installer are separate projects with explicit dependencies and outputs. Pinned Windows App SDK packages and Hybrid CRT remain in use; local NuGet caches and Visual Studio user settings are ignored by Git. XAML generation and `DesktopApp.files` preserve the pages' relative directories. `DesktopApp.files` comes from the WinUI project; packaging embeds one dependency manifest for paths, sizes, SHA-256 and PE machine types. Third-party files retain their versions. Release packaging and runtime, clean-machine deployment and ARM64 remain unverified until the matching toolchain and package sources are available.
+The desktop build follows make → MSBuild Solution/.vcxproj. Native libraries, the service, Credential Provider, desktop WinUI app and installer are separate projects with explicit dependencies and outputs. Pinned Windows App SDK packages and Hybrid CRT remain in use; local NuGet caches and Visual Studio user settings are ignored by Git. XAML generation and `DesktopApp.files` preserve the pages' relative directories. `DesktopApp.files` comes from the WinUI project; packaging embeds one dependency manifest for paths, sizes, SHA-256 and PE machine types. Third-party files retain their versions. The x64 Debug and Release solution builds have passed; runtime, clean-machine deployment and ARM64 remain unverified.
 
 ## Install and configure
 
@@ -102,7 +102,7 @@ Left-clicking the tray shows the current page. Its right-click menu contains **S
 
 Pairing uses a separate WinUI window with the console account, complete fingerprint, waiting progress and replacement/removal warnings. Its worker owns registration, IPC and the writer lock; cancellation and session/power invalidation are checked before committing. Post-commit reload failures report the changed registration. Manual enrollment keeps its console input and exit codes.
 
-Desktop notifications use independent WinUI windows, one at a time, including when the main window is hidden. Closing a notification leaves the tray running; Quit waits for queued notifications to be acknowledged after transport stops. Native emergency errors are used only when WinUI cannot start or continue displaying. The installer and its result scripts retain their existing UI. The x64 Debug desktop build has passed; pairing and notification runtime validation remains pending.
+Desktop notifications use independent WinUI windows, one at a time, including when the main window is hidden. Closing a notification leaves the tray running; Quit waits for queued notifications to be acknowledged after transport stops. Native emergency errors are used only when WinUI cannot start or continue displaying. The installer and its result scripts retain their existing UI. The x64 Debug and Release desktop builds have passed; pairing and notification runtime validation remains pending.
 
 Navigation contains **Status**, **Password**, **Diagnostics**, and **About** at the bottom. A Frame navigates between cached pages below the shared fixed header and action buttons in one centered container with a maximum width of 1744 effective pixels; each page owns its UI, scroll area and interactions. Diagnostics skips unchanged text snapshots and preserves selection and reading position when content updates. Dashboard coordinates navigation, the header and host callbacks; About owns update checks, which Quit cancels. Password shows the verified console account and saved-copy status, with **Save password** or **Update password** beside removal when a copy exists and **Refresh** in the header. Account queries read Windows identity properties even after the service restarts. Operations request UAC and use a separate WinUI PasswordBox/ContentDialog; InfoBar reports results and failures. Unknown status disables operations and offers Refresh. About shows the shared product version, GitHub project/MIT license links and a manual **Check for updates** against the latest formal GitHub Release. It compares numeric versions and links to a newer release without downloading or installing it; failures are shown separately from an up-to-date result.
 
@@ -118,7 +118,7 @@ Manual enrollment still requires fingerprint confirmation; replacement requires 
 
 ## Tag builds
 
-Windows installers are automatically built and published when a version tag is pushed. CI prepares build resources and invokes the MSBuild solution through `Invoke-NativeVsDevCmd.cmd`, without requiring GNU Make. See the [Release workflow](../.github/workflows/release.yml).
+Windows installers are automatically built and published when a version tag is pushed. CI prepares build resources and invokes the MSBuild solution through `WindowsBuild.ps1`, without requiring GNU Make. See the [Release workflow](../.github/workflows/release.yml).
 
 ## References
 

@@ -1,15 +1,19 @@
 # Created by Rui MA on 28 Sep 2026
 
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = 'Package')]
 param(
-    [Parameter(Position = 0)][string]$PackageVersion,
-    [Parameter(Position = 1)][string]$PackageResourcePath,
-    [Parameter(Position = 2)][string]$PackageManifestPath,
-    [Parameter(Position = 3)][string]$DesktopFileList,
-    [Parameter(Position = 4, ValueFromRemainingArguments)][string[]]$PackageFiles,
-    [switch]$WriteBuildResources,
+    [Parameter(ParameterSetName = 'Package', Position = 0)][string]$PackageVersion,
+    [Parameter(ParameterSetName = 'Package', Position = 1)][string]$PackageResourcePath,
+    [Parameter(ParameterSetName = 'Package', Position = 2)][string]$PackageManifestPath,
+    [Parameter(ParameterSetName = 'Package', Position = 3)][string]$DesktopFileList,
+    [Parameter(ParameterSetName = 'Package', Position = 4, ValueFromRemainingArguments)][string[]]$PackageFiles,
+    [Parameter(ParameterSetName = 'Resources', Mandatory)][switch]$WriteBuildResources,
+    [Parameter(ParameterSetName = 'Prepare', Mandatory)][switch]$Prepare,
+    [Parameter(ParameterSetName = 'MSBuild', Mandatory)][switch]$InvokeMSBuild,
+    [Parameter(ParameterSetName = 'MSBuild', Position = 0, Mandatory)][string]$ProjectPath,
+    [Parameter(ParameterSetName = 'MSBuild', Position = 1, ValueFromRemainingArguments)][string[]]$MSBuildArguments,
     [string]$OutputDirectory,
-    [ValidateSet('x64', 'arm64', 'X64', 'ARM64')][string]$TargetArchitecture
+    [ValidateSet('auto', 'x64', 'arm64')][string]$TargetArchitecture
 )
 
 function Get-NativeWindowsArchitecture {
@@ -371,9 +375,66 @@ function Write-EmbeddedPackage {
 }
 
 
+function Initialize-VisualStudioEnvironment {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][ValidateSet('x64', 'arm64')][string]$Architecture)
+
+    if (!$env:UNLOCK_VS_DEV_CMD) { throw 'UNLOCK_VS_DEV_CMD is required.' }
+    $devCommand = $env:UNLOCK_VS_DEV_CMD
+    if ($devCommand -ieq 'auto') {
+        $component = 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64'
+        if ($Architecture -eq 'arm64') { $component = 'Microsoft.VisualStudio.Component.VC.Tools.ARM64' }
+        $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+        $installation = $null
+        if (Test-Path -LiteralPath $vswhere -PathType Leaf) {
+            $installation = & $vswhere -all -latest -prerelease -products '*' -requires $component -property installationPath
+            if ($LASTEXITCODE -ne 0) { throw "vswhere failed with exit code $LASTEXITCODE." }
+        }
+        if ($installation) {
+            $devCommand = Join-Path $installation 'Common7\Tools\VsDevCmd.bat'
+        } elseif ($env:VSINSTALLDIR -and (Test-Path -LiteralPath (Join-Path $env:VSINSTALLDIR 'Common7\Tools\VsDevCmd.bat') -PathType Leaf)) {
+            $devCommand = Join-Path $env:VSINSTALLDIR 'Common7\Tools\VsDevCmd.bat'
+            Write-Warning "Visual Studio C++ component $component was not found by vswhere; using the active Developer Command Prompt."
+        } else {
+            throw "Could not find Visual Studio with $component. Install Desktop development with C++ and the $Architecture MSVC tools."
+        }
+    }
+    if (!(Test-Path -LiteralPath $devCommand -PathType Leaf)) { throw "VsDevCmd.bat was not found at '$devCommand'." }
+
+    $environmentLines = & $env:ComSpec /d /c "call `"$devCommand`" -arch=$Architecture -host_arch=x64 >nul && set"
+    if ($LASTEXITCODE -ne 0) { throw "VsDevCmd.bat failed with exit code $LASTEXITCODE." }
+    foreach ($line in $environmentLines) {
+        $separator = $line.IndexOf('=')
+        if ($separator -gt 0) {
+            [Environment]::SetEnvironmentVariable($line.Substring(0, $separator), $line.Substring($separator + 1), 'Process')
+        }
+    }
+    foreach ($tool in @('MSBuild.exe', 'rc.exe', 'mt.exe')) {
+        if (!(Get-Command $tool -CommandType Application -ErrorAction SilentlyContinue)) {
+            throw "Visual Studio environment is missing $tool."
+        }
+    }
+    if (!$env:WindowsSDKVersion) { throw 'Visual Studio environment did not select a Windows SDK.' }
+}
+
 if ($MyInvocation.InvocationName -ne '.') {
-    if ($WriteBuildResources) {
-        if (!$OutputDirectory -or !$TargetArchitecture) { throw 'OutputDirectory and TargetArchitecture are required with WriteBuildResources.' }
+    $ErrorActionPreference = 'Stop'
+    if ($Prepare -or $InvokeMSBuild) {
+        if (!$TargetArchitecture) { $TargetArchitecture = $env:UNLOCK_TARGET_ARCH }
+        if (!$TargetArchitecture -or $TargetArchitecture -ieq 'auto') { $TargetArchitecture = Get-NativeWindowsArchitecture }
+        if ($TargetArchitecture -notin @('x64', 'arm64')) { throw "Unsupported target architecture '$TargetArchitecture'. Use auto, x64, or arm64." }
+        Initialize-VisualStudioEnvironment -Architecture $TargetArchitecture
+        if ($Prepare) {
+            if (!$OutputDirectory) { throw 'OutputDirectory is required with Prepare.' }
+            Write-BuildResources -Directory (Join-Path $OutputDirectory 'generated') -Architecture $TargetArchitecture
+        } else {
+            $platform = 'x64'
+            if ($TargetArchitecture -ieq 'arm64') { $platform = 'ARM64' }
+            & MSBuild.exe $ProjectPath @MSBuildArguments "/p:Platform=$platform"
+            exit $LASTEXITCODE
+        }
+    } elseif ($WriteBuildResources) {
+        if (!$OutputDirectory -or !$TargetArchitecture -or $TargetArchitecture -ieq 'auto') { throw 'OutputDirectory and an explicit TargetArchitecture are required with WriteBuildResources.' }
         Write-BuildResources -Directory $OutputDirectory -Architecture $TargetArchitecture
     } elseif ($PackageVersion) {
         Write-EmbeddedPackage -Version $PackageVersion -ResourcePath $PackageResourcePath -ManifestPath $PackageManifestPath -DesktopFileList $DesktopFileList -Files $PackageFiles

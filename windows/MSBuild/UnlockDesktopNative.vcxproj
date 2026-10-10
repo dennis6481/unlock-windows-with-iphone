@@ -25,7 +25,7 @@
   <Import Project="$(MSBuildThisFileDirectory)..\UnlockNative.props" />
   <PropertyGroup>
     <TargetName>unlock_desktop_native</TargetName>
-    <OutDir>$(UnlockBuildDirectory)\</OutDir>
+    <OutDir>$(UnlockLibraryDirectory)\</OutDir>
     <IntDir>$(UnlockBuildDirectory)\obj\$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
   </PropertyGroup>
   <ItemDefinitionGroup>

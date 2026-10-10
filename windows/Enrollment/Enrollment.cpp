@@ -94,10 +94,8 @@ void reloadEnrollment() {
             unlock_windows::saved_credential::Operation::reloadPhoneEnrollment,
             unlock_windows::saved_credential::SensitiveBytes{}, response, 2000, &diagnostics) ||
         response.result != unlock_windows::saved_credential::Result::success) {
-        const std::wstring stage(unlock_windows::saved_credential::callStageName(diagnostics.stage));
-        const std::wstring check(diagnostics.serverCheck);
         throw std::runtime_error("Service enrollment reload failed: Win32=" + std::to_string(diagnostics.win32Error) +
-            ", stage=" + std::string(stage.begin(), stage.end()) + ", check=" + std::string(check.begin(), check.end()) +
+            ", stage=" + winrt::to_string(unlock_windows::saved_credential::callStageName(diagnostics.stage)) + ", check=" + winrt::to_string(diagnostics.serverCheck) +
             ", result=" + std::to_string(static_cast<DWORD>(response.result)));
     }
 }
@@ -690,7 +688,7 @@ ExitCode enroll(wchar_t* argv[], const unlock_windows::desktop_app::Launch& laun
     catch (const std::exception& error) {
         const std::string message = std::string(clear ? "Enrollment removed, service reload failed. "
             : "Enrollment saved, service reload failed. ") + error.what();
-        ui.notice(std::wstring(message.begin(), message.end()), L"Phone enrollment");
+        ui.notice(std::wstring(winrt::to_hstring(message)), L"Phone enrollment");
         return ExitCode::savedReloadFailed;
     }
     return ExitCode::saved;

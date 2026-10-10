@@ -41,7 +41,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
-      <AdditionalDependencies>advapi32.lib;bcrypt.lib;crypt32.lib;$(UnlockBuildDirectory)\unlock_protocol_crypto.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>advapi32.lib;bcrypt.lib;crypt32.lib;$(UnlockLibraryDirectory)\unlock_protocol_crypto.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>

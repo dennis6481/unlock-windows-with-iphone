@@ -1,8 +1,6 @@
 // Created by Rui MA on 09 Oct 2026
 // Parses the authoritative package format and rejects unsafe or inconsistent records.
 
-#define UNICODE
-#define _UNICODE
 #include "PackageManifest.h"
 #include "WindowsAdapter.h"
 #include <cstring>

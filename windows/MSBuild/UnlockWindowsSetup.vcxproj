@@ -36,7 +36,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <AdditionalDependencies>advapi32.lib;bcrypt.lib;comctl32.lib;gdi32.lib;ole32.lib;oleaut32.lib;secur32.lib;shell32.lib;taskschd.lib;uuid.lib;wtsapi32.lib;user32.lib;version.lib;$(UnlockBuildDirectory)\unlock_saved_credential_ipc.lib;$(UnlockBuildDirectory)\unlock_protocol_crypto.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>advapi32.lib;bcrypt.lib;comctl32.lib;gdi32.lib;ole32.lib;oleaut32.lib;secur32.lib;shell32.lib;taskschd.lib;uuid.lib;wtsapi32.lib;user32.lib;version.lib;$(UnlockLibraryDirectory)\unlock_saved_credential_ipc.lib;$(UnlockLibraryDirectory)\unlock_protocol_crypto.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/MANIFEST:NO %(AdditionalOptions)</AdditionalOptions>
     </Link>
   </ItemDefinitionGroup>
@@ -83,9 +83,9 @@
     </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
-  <Target Name="GeneratePackagePayload" BeforeTargets="ResourceCompile" DependsOnTargets="BuildOnlySettings" Inputs="$(UnlockBuildDirectory)\unlock_credential_provider.dll;$(UnlockBuildDirectory)\unlock_saved_credential_service.exe;$(UnlockBuildDirectory)\UnlockWithIPhone.exe;$(UnlockBuildDirectory)\DesktopApp.files;$(MSBuildThisFileDirectory)..\WindowsArchitecture.ps1;$(MSBuildThisFileDirectory)..\ProductVersion.h;$(MSBuildThisFileDirectory)..\ComponentFiles.h" Outputs="$(UnlockBuildDirectory)\package\$(Configuration)\PackagePayload.rc;$(UnlockBuildDirectory)\package\$(Configuration)\PackagePayload.bin">
+  <Target Name="GeneratePackagePayload" BeforeTargets="ResourceCompile" DependsOnTargets="BuildOnlySettings" Inputs="$(UnlockBuildDirectory)\unlock_credential_provider.dll;$(UnlockBuildDirectory)\unlock_saved_credential_service.exe;$(UnlockBuildDirectory)\UnlockWithIPhone.exe;$(UnlockBuildDirectory)\DesktopApp.files;$(MSBuildThisFileDirectory)..\WindowsBuild.ps1;$(MSBuildThisFileDirectory)..\ProductVersion.h;$(MSBuildThisFileDirectory)..\ComponentFiles.h" Outputs="$(UnlockBuildDirectory)\package\$(Configuration)\PackagePayload.rc;$(UnlockBuildDirectory)\package\$(Configuration)\PackagePayload.bin">
     <MakeDir Directories="$(UnlockBuildDirectory)\package\$(Configuration)" />
-    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\WindowsArchitecture.ps1&quot; &quot;$(UnlockProductVersion)&quot; &quot;$(UnlockBuildDirectory)\package\$(Configuration)\PackagePayload.rc&quot; &quot;$(UnlockBuildDirectory)\package\$(Configuration)\PackagePayload.bin&quot; &quot;$(UnlockBuildDirectory)\DesktopApp.files&quot; &quot;$(UnlockBuildDirectory)\unlock_credential_provider.dll&quot; &quot;$(UnlockBuildDirectory)\unlock_saved_credential_service.exe&quot; &quot;$(UnlockBuildDirectory)\UnlockWithIPhone.exe&quot;" />
+    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\WindowsBuild.ps1&quot; &quot;$(UnlockProductVersion)&quot; &quot;$(UnlockBuildDirectory)\package\$(Configuration)\PackagePayload.rc&quot; &quot;$(UnlockBuildDirectory)\package\$(Configuration)\PackagePayload.bin&quot; &quot;$(UnlockBuildDirectory)\DesktopApp.files&quot; &quot;$(UnlockBuildDirectory)\unlock_credential_provider.dll&quot; &quot;$(UnlockBuildDirectory)\unlock_saved_credential_service.exe&quot; &quot;$(UnlockBuildDirectory)\UnlockWithIPhone.exe&quot;" />
   </Target>
   <Target Name="CopySetupToDist" AfterTargets="Build" DependsOnTargets="GeneratePackagePayload">
     <MakeDir Directories="$(MSBuildThisFileDirectory)..\dist" />

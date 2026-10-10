@@ -80,7 +80,7 @@
     </ResourceCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <AdditionalDependencies>$(UnlockBuildDirectory)\unlock_desktop_native.lib;$(UnlockBuildDirectory)\unlock_saved_credential_ipc.lib;$(UnlockBuildDirectory)\unlock_enrollment_store.lib;$(UnlockBuildDirectory)\unlock_protocol_crypto.lib;windowsapp.lib;user32.lib;shell32.lib;wtsapi32.lib;ole32.lib;advapi32.lib;comctl32.lib;gdi32.lib;bcrypt.lib;crypt32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>$(UnlockLibraryDirectory)\unlock_desktop_native.lib;$(UnlockLibraryDirectory)\unlock_saved_credential_ipc.lib;$(UnlockLibraryDirectory)\unlock_enrollment_store.lib;$(UnlockLibraryDirectory)\unlock_protocol_crypto.lib;windowsapp.lib;user32.lib;shell32.lib;wtsapi32.lib;ole32.lib;advapi32.lib;comctl32.lib;gdi32.lib;bcrypt.lib;crypt32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)'=='Debug'">

@@ -1,8 +1,6 @@
 // Created by Rui MA on 02 Oct 2026
 // Console identity, target-user hive, Run/shortcut integration and normal application exit.
 
-#define UNICODE
-#define _UNICODE
 #include "WindowsAdapter.h"
 #include "../DesktopApp/DesktopApp.h"
 #include "SetupPlatform.h"

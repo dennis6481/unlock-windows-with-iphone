@@ -3,11 +3,15 @@
 #include "../SavedCredential/SavedCredentialIpc.h"
 #include "../DesktopApp/DesktopApp.h"
 #include "../Bluetooth/PresenceAuthorization.h"
+#include "../SavedCredential/LastUnlock.h"
+#include "../DesktopApp/Dashboard/Dashboard.h"
 
 #include <cstdlib>
 #include <algorithm>
 #include <iostream>
 #include <string>
+#include <thread>
+#include <chrono>
 
 using namespace unlock_windows::saved_credential;
 
@@ -18,6 +22,74 @@ void require(const bool condition, const char* message) {
         std::cerr << "FAILED: " << message << '\n';
         std::exit(EXIT_FAILURE);
     }
+}
+
+PipeIoContext testContext(DWORD milliseconds = kPipeTransferLifetimeMs, HANDLE stopEvent = nullptr) {
+    return {GetTickCount64() + milliseconds, stopEvent};
+}
+
+struct PipePair final {
+    winrt::handle server, client;
+    std::wstring name;
+    explicit PipePair(bool connected = true) {
+        static unsigned sequence = 0;
+        name = L"\\\\.\\pipe\\unlock-packet-test-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(++sequence);
+        server.attach(CreateNamedPipeW(name.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE | FILE_FLAG_OVERLAPPED,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, 1, 128, 128, 0, nullptr));
+        require(server.get() != INVALID_HANDLE_VALUE, "overlapped test server must open");
+        if (connected) openClient();
+    }
+    void openClient() {
+        client.attach(CreateFileW(name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
+            FILE_FLAG_OVERLAPPED, nullptr));
+        require(client.get() != INVALID_HANDLE_VALUE, "overlapped test client must open");
+        require(connectPipe(server.get(), nullptr), "test connection must complete");
+    }
+    void reconnect() {
+        client.close();
+        require(DisconnectNamedPipe(server.get()) || GetLastError() == ERROR_PIPE_NOT_CONNECTED,
+            "test connection must disconnect");
+        openClient();
+    }
+};
+
+void writeBytes(HANDLE pipe, const std::uint8_t* bytes, DWORD size) {
+    winrt::handle event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    require(static_cast<bool>(event), "raw writer event must open");
+    OVERLAPPED pending{};
+    pending.hEvent = event.get();
+    DWORD count = 0;
+    const auto started = WriteFile(pipe, bytes, size, &count, &pending);
+    require(started || GetLastError() == ERROR_IO_PENDING, "raw bytes must start writing");
+    const auto wait = WaitForSingleObject(event.get(), kPipeTransferLifetimeMs);
+    if (wait != WAIT_OBJECT_0) {
+        const auto cancelled = CancelIoEx(pipe, &pending);
+        require(cancelled || GetLastError() == ERROR_NOT_FOUND, "raw writer cancellation must finish safely");
+        require(GetOverlappedResult(pipe, &pending, &count, TRUE) || GetLastError() == ERROR_OPERATION_ABORTED,
+            "raw writer cancellation must be drained");
+    }
+    require(wait == WAIT_OBJECT_0 && GetOverlappedResult(pipe, &pending, &count, FALSE) && count == size,
+        "raw bytes must finish writing");
+}
+
+std::vector<std::uint8_t> packetBytes(const Packet& packet) {
+    PipePair pipe;
+    require(writePacket(pipe.server.get(), packet, testContext()), "fixture must use the product serializer");
+    DWORD available = 0;
+    require(PeekNamedPipe(pipe.client.get(), nullptr, 0, nullptr, &available, nullptr) && available != 0,
+        "serialized fixture must be available");
+    std::vector<std::uint8_t> bytes(available);
+    winrt::handle event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    require(static_cast<bool>(event), "fixture reader event must open");
+    OVERLAPPED pending{};
+    pending.hEvent = event.get();
+    DWORD count = 0;
+    const auto started = ReadFile(pipe.client.get(), bytes.data(), available, &count, &pending);
+    require(started || GetLastError() == ERROR_IO_PENDING, "fixture must start reading");
+    require(WaitForSingleObject(event.get(), kPipeTransferLifetimeMs) == WAIT_OBJECT_0 &&
+        GetOverlappedResult(pipe.client.get(), &pending, &count, FALSE) && count == available,
+        "fixture must finish reading");
+    return bytes;
 }
 
 void testIdentityRoundTrip() {
@@ -90,19 +162,18 @@ void testCredentialSummary() {
 void testAuthenticationOperationPackets() {
     for (const std::uint16_t operation : {std::uint16_t{12}, std::uint16_t{6},
             std::uint16_t{9}, std::uint16_t{13}, std::uint16_t{14}, std::uint16_t{15},
-            std::uint16_t{16}, std::uint16_t{17}, std::uint16_t{18}, std::uint16_t{19}, std::uint16_t{20}, std::uint16_t{26}, std::uint16_t{0}, std::uint16_t{65535}}) {
-        HANDLE reader = INVALID_HANDLE_VALUE;
-        HANDLE writer = INVALID_HANDLE_VALUE;
-        require(CreatePipe(&reader, &writer, nullptr, 0) != FALSE, "test pipe must open");
+            std::uint16_t{16}, std::uint16_t{17}, std::uint16_t{18}, std::uint16_t{19}, std::uint16_t{20}, std::uint16_t{26},
+            std::uint16_t{27}, std::uint16_t{28}, std::uint16_t{29}, std::uint16_t{0}, std::uint16_t{65535}}) {
+        PipePair pipe;
         Packet outbound;
         outbound.operation = static_cast<Operation>(operation);
         outbound.payload.value = {17, 91};
-        require(writePacket(writer, outbound), "test operation packet must write");
+        const auto context = testContext();
+        require(writePacket(pipe.client.get(), outbound, context), "test operation packet must write");
         Packet inbound;
-        const bool accepted = readPacket(reader, inbound);
+        const bool accepted = readPacket(pipe.server.get(), inbound, context);
         const DWORD error = GetLastError();
-        require(CloseHandle(writer) && CloseHandle(reader), "test pipe handles must close");
-        const bool known = operation == 9 || operation == 12 || operation == 15 || operation == 16 || (operation >= 18 && operation <= 26);
+        const bool known = operation == 9 || operation == 12 || operation == 15 || operation == 16 || (operation >= 18 && operation <= 28);
         require(isKnownOperation(operation) == known, "operation whitelist rejected new operation or accepted unknown operation");
         require(accepted == known, "packet parser must accept authentication operations and reject unknown operations");
         if (accepted) {
@@ -114,15 +185,173 @@ void testAuthenticationOperationPackets() {
     }
 }
 
+void testLastUnlockCodec() {
+    require(requiresLogonUi(Operation::reportUnlockResult) && !requiresLogonUi(Operation::lastUnlockStatus),
+        "unlock result writes must require LogonUI; history reads must not");
+    SensitiveBytes bytes;
+    UnlockResult result;
+    result.nonce[0] = 91;
+    result.status = -1;
+    result.substatus = -2;
+    require(encodeUnlockResult(result, bytes), "native unlock result must encode");
+    UnlockResult decoded;
+    require(decodeUnlockResult(bytes.value.data(), bytes.value.size(), decoded) && decoded.nonce == result.nonce &&
+        decoded.status == result.status && decoded.substatus == result.substatus, "native result round trip changed data");
+    require(!decodeUnlockResult(bytes.value.data(), bytes.value.size() - 1, decoded), "truncated native result must fail");
+    bytes.value.push_back(0);
+    require(!decodeUnlockResult(bytes.value.data(), bytes.value.size(), decoded), "native result trailing bytes must fail");
+
+    std::optional<LastUnlockSummary> summary = LastUnlockSummary{10000, -58};
+    std::optional<LastUnlockSummary> restored;
+    require(encodeLastUnlock(summary, bytes) && decodeLastUnlock(bytes.value.data(), bytes.value.size(), restored) &&
+        restored && restored->completedAt == summary->completedAt && restored->rssi == -58, "unlock summary must round trip");
+    require(!decodeLastUnlock(bytes.value.data(), bytes.value.size() - 1, restored), "truncated history must fail");
+    auto invalidTime = bytes.value;
+    std::fill_n(invalidTime.begin() + 1, sizeof(ULONGLONG), std::uint8_t{0});
+    require(!decodeLastUnlock(invalidTime.data(), invalidTime.size(), restored), "zero time on the wire must fail");
+    auto invalidSignal = bytes.value;
+    std::fill_n(invalidSignal.begin() + 1 + sizeof(ULONGLONG), sizeof(std::int32_t), std::uint8_t{0});
+    require(!decodeLastUnlock(invalidSignal.data(), invalidSignal.size(), restored), "invalid RSSI on the wire must fail");
+    bytes.value.push_back(0);
+    require(!decodeLastUnlock(bytes.value.data(), bytes.value.size(), restored), "history trailing bytes must fail");
+    summary->completedAt = 0;
+    require(!encodeLastUnlock(summary, bytes), "zero success time must fail");
+    summary = LastUnlockSummary{10000, 0};
+    require(!encodeLastUnlock(summary, bytes), "missing RSSI cannot describe a successful unlock");
+    summary->rssi = unlock_windows::system_ble::kMinimumThreshold - 1;
+    require(!encodeLastUnlock(summary, bytes), "RSSI below every supported threshold cannot describe success");
+    require(encodeLastUnlock(std::nullopt, bytes) && decodeLastUnlock(bytes.value.data(), bytes.value.size(), restored) &&
+        !restored, "no history must clear a previously populated output");
+    bytes.value[0] = 2;
+    require(!decodeLastUnlock(bytes.value.data(), bytes.value.size(), restored), "invalid history presence flag must fail");
+}
+
+void testLastUnlockHistory() {
+    UnlockContext context;
+    context.identity = {L"S-1-5-21-1-2-3-4", L"MicrosoftAccount\\user@example.com", GUID{}};
+    context.session = 1;
+    context.logonId.LowPart = 7;
+    context.binding.accountSid = context.identity.sid;
+    context.binding.bleId = L"phone-ble";
+    context.binding.classicId = L"phone-classic";
+    context.binding.containerId = winrt::guid{L"12345678-abcd-4567-8123-456789abcdef"};
+    context.historyGeneration = 1;
+    context.identityGeneration = 2;
+    UnlockResult result;
+    result.nonce[0] = 42;
+    LastUnlockHistory history;
+    require(!history.summary() && !history.report(result, 100, true, true, context.identity, 10000),
+        "BLE verification without a claim cannot record a native unlock");
+    history.beginClaim(context, result.nonce, 100, -58);
+    require(!history.summary(), "claiming a credential must not record success");
+    require(!history.report(result, 100, false, true, context.identity, 10000), "ordinary callers cannot report success");
+    require(!history.report(result, 101, true, true, context.identity, 10000), "another LogonUI process cannot report this claim");
+    auto wrong = result;
+    wrong.nonce[0]++;
+    require(!history.report(wrong, 100, true, true, context.identity, 10000), "a different nonce must fail");
+    require(history.pending() && history.report(result, 100, true, true, context.identity, 10000),
+        "only the matching native success may complete the claim");
+    require(history.summary() && history.summary()->completedAt == 10000 && history.summary()->rssi == -58,
+        "native success must retain the claimed request RSSI and result time");
+    require(!history.report(result, 100, true, true, context.identity, 20000) && history.summary()->completedAt == 10000,
+        "duplicate result cannot advance the successful unlock time");
+
+    history.beginClaim(context, result.nonce, 100, -40);
+    auto failure = result;
+    failure.status = -1;
+    require(history.report(failure, 100, true, true, context.identity, 20000) && !history.pending() &&
+        history.summary()->completedAt == 10000 && history.summary()->rssi == -58, "native failure must preserve previous success");
+    require(!history.report(result, 100, true, true, context.identity, 30000), "failure must consume the pending result");
+    history.beginClaim(context, result.nonce, 100, -40);
+    require(!history.report(result, 100, true, false, context.identity, 20000) && !history.pending(),
+        "an exited claiming process must invalidate the result");
+    history.beginClaim(context, result.nonce, 100, -40);
+    history.cancelPending();
+    require(!history.report(result, 100, true, true, context.identity, 20000) && history.summary()->completedAt == 10000,
+        "a new verification cancels pending reports but preserves last success");
+
+    auto changedThreshold = context;
+    changedThreshold.binding.threshold++;
+    history.refreshContext(changedThreshold);
+    require(history.summary().has_value(), "changing only the distance threshold must preserve history");
+    history.beginClaim(context, result.nonce, 100, -40);
+    auto lockedAgain = context;
+    lockedAgain.identityGeneration++;
+    history.refreshContext(lockedAgain);
+    require(!history.pending() && history.summary(), "a new lock must cancel pending results but preserve history");
+
+    for (unsigned change = 0; change != 8; ++change) {
+        history.beginClaim(context, result.nonce, 100, -58);
+        require(history.report(result, 100, true, true, context.identity, 10000), "success fixture must complete");
+        auto current = context;
+        switch (change) {
+        case 0: current.identity.sid += L"1"; break;
+        case 1: current.identity.qualifiedUserName += L"1"; break;
+        case 2: current.identity.providerId.Data1++; break;
+        case 3: current.session++; break;
+        case 4: current.logonId.LowPart++; break;
+        case 5: current.historyGeneration++; break;
+        case 6: current.binding.bleId += L"1"; break;
+        case 7: current.binding.containerId = winrt::guid{}; break;
+        }
+        history.beginClaim(context, result.nonce, 100, -40);
+        history.refreshContext(current);
+        require(!history.summary() && !history.pending() && !history.report(result, 100, true, true, context.identity, 20000),
+            "account/session/binding changes must clear history and reject stale results");
+    }
+    history.beginClaim(context, result.nonce, 100, -40);
+    auto otherIdentity = context.identity;
+    otherIdentity.qualifiedUserName += L"1";
+    require(!history.report(result, 100, true, true, otherIdentity, 20000) && !history.pending(),
+        "native result from a changed full identity must fail");
+    history.clear();
+    require(!history.summary() && !history.pending(), "binding/password removal must clear history");
+    auto newer = result;
+    newer.nonce[0]++;
+    history.beginClaim(context, newer.nonce, 100, -45);
+    require(!history.report(result, 100, true, true, context.identity, 20000) &&
+        history.report(newer, 100, true, true, context.identity, 21000) && history.summary()->rssi == -45,
+        "an older claim result cannot be associated with a later claim");
+    LastUnlockHistory restarted;
+    require(!restarted.summary() && !restarted.pending(), "service restart must start with no history");
+}
+
+void testLastUnlockText() {
+    using unlock_windows::desktop_app::lastUnlockText;
+    const std::optional<LastUnlockSummary> summary = LastUnlockSummary{10000, -58};
+    require(lastUnlockText(std::nullopt, 10000) == L"\u2014", "no history must display a dash");
+    require(lastUnlockText(summary, 10000) == L"0 sec ago / -58 dBm", "new success must show seconds and claimed RSSI");
+    require(lastUnlockText(summary, 69999) == L"59 sec ago / -58 dBm", "seconds must stop at a full minute");
+    require(lastUnlockText(summary, 70000) == L"1 min ago / -58 dBm", "minute boundary must display correctly");
+    require(lastUnlockText(summary, 130000) == L"2 min ago / -58 dBm", "requested display example must match");
+    require(lastUnlockText(summary, 3609999) == L"59 min ago / -58 dBm", "minutes must stop at a full hour");
+    require(lastUnlockText(summary, 3610000) == L"1 hr ago / -58 dBm", "hour boundary must display correctly");
+    require(lastUnlockText(summary, 86409999) == L"23 hr ago / -58 dBm", "hours must stop at a full day");
+    require(lastUnlockText(summary, 86410000) == L"1 day ago / -58 dBm", "day boundary must display correctly");
+    require(lastUnlockText(summary, 172810000) == L"2 days ago / -58 dBm", "multiple days must display correctly");
+}
+
 void testSetupLaunchArguments() {
     using namespace unlock_windows::desktop_app;
     wchar_t executable[] = L"UnlockWithIPhone.exe";
     std::wstring setup(kSetupRole), password(kSavedPasswordRole);
     wchar_t* trayArguments[]{executable, setup.data()};
     require(parseLaunch(2, trayArguments).role == Role::setup, "setup must enter the ordinary tray role");
-    wchar_t* passwordArguments[]{executable, password.data(), setup.data()};
-    const auto launch = parseLaunch(3, passwordArguments);
-    require(launch.role == Role::savedPassword && launch.setup, "setup must reuse the elevated password role");
+    std::wstring cancelArgument(kSetupCancelArgument);
+    std::wstring eventName = std::wstring(kSetupCancelPrefix) + L"{01234567-89ab-cdef-0123-456789abcdef}";
+    wchar_t* passwordArguments[]{executable, password.data(), setup.data(), cancelArgument.data(), eventName.data()};
+    const auto launch = parseLaunch(5, passwordArguments);
+    require(launch.role == Role::savedPassword && launch.setup && launch.setupCancelEvent == eventName,
+        "setup must pass its cancellation event to the elevated password role");
+    require(!validSetupCancelEvent(L"Global\\unrelated") &&
+        !validSetupCancelEvent(std::wstring(kSetupCancelPrefix) + L"{invalid-guid}") &&
+        !validSetupCancelEvent(std::wstring(kSetupCancelPrefix) + L"{z1234567-89ab-cdef-0123-456789abcdef}"),
+        "setup must reject malformed or unrelated cancellation events");
+    wchar_t* missingCancellation[]{executable, password.data(), setup.data()};
+    bool missingRejected = false;
+    try { static_cast<void>(parseLaunch(3, missingCancellation)); }
+    catch (const std::invalid_argument&) { missingRejected = true; }
+    require(missingRejected, "setup must not retain an uncancellable launch path");
     for (const auto operation : {Operation::setCredential, Operation::updateCredential, Operation::clearCredential}) {
         std::wstring option(passwordOperationArgument(operation));
         wchar_t* arguments[]{executable, password.data(), option.data()};
@@ -154,52 +383,106 @@ void testProvisioningIdentityTransport() {
         IsEqualGUID(decoded.providerId, identity.providerId), "provisioning must not reconstruct or discard online identity fields");
 }
 
-void testPacketTransportParity() {
-    const auto name = L"\\\\.\\pipe\\unlock-packet-test-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64());
-    const HANDLE server = CreateNamedPipeW(name.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
-        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, 1, kMaxPacket, kMaxPacket, 0, nullptr);
-    require(server != INVALID_HANDLE_VALUE, "packet test server must open");
-    const HANDLE client = CreateFileW(name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
-        FILE_FLAG_OVERLAPPED, nullptr);
-    require(client != INVALID_HANDLE_VALUE, "overlapped packet test client must open");
-    require(ConnectNamedPipe(server, nullptr) || GetLastError() == ERROR_PIPE_CONNECTED, "test pipe must connect");
-    for (auto operation : {std::uint16_t{9}, std::uint16_t{12}, std::uint16_t{17}, std::uint16_t{18}, std::uint16_t{19}, std::uint16_t{6}, std::uint16_t{65535}}) {
-        Packet outbound;
-        outbound.operation = static_cast<Operation>(operation);
-        outbound.payload.value = {17, 91};
-        require(writePacket(server, outbound), "synchronous writer must write");
-        Packet inbound;
-        const bool timedAccepted = readPacket(client, inbound, 250);
-        const DWORD timedError = GetLastError();
-        if (!timedAccepted) {
-            std::uint8_t discarded[2]{};
-            OVERLAPPED pending{};
-            pending.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-            require(pending.hEvent != nullptr, "drain event must open");
-            DWORD read = 0;
-            const BOOL started = ReadFile(client, discarded, sizeof(discarded), &read, &pending);
-            require(started || (GetLastError() == ERROR_IO_PENDING && GetOverlappedResult(client, &pending, &read, TRUE)), "reject payload must drain");
-            require(read == sizeof(discarded) && CloseHandle(pending.hEvent), "reject drain must complete");
+void testPipeDeadlinesAndRecovery() {
+    Packet outbound;
+    outbound.operation = Operation::bindingStatus;
+    outbound.payload.value = {17, 91, 42};
+    const auto wire = packetBytes(outbound);
+    const auto headerSize = wire.size() - outbound.payload.value.size();
+    PipePair pipe;
+    Packet inbound;
+    require(!readPacket(pipe.server.get(), inbound, testContext(100)) && GetLastError() == ERROR_TIMEOUT,
+        "an empty connection must time out");
+    pipe.reconnect();
+    writeBytes(pipe.client.get(), wire.data(), static_cast<DWORD>(headerSize / 2));
+    require(!readPacket(pipe.server.get(), inbound, testContext(100)) && GetLastError() == ERROR_TIMEOUT,
+        "an incomplete header must time out");
+    pipe.reconnect();
+    writeBytes(pipe.client.get(), wire.data(), static_cast<DWORD>(headerSize + 1));
+    require(!readPacket(pipe.server.get(), inbound, testContext(100)) && GetLastError() == ERROR_TIMEOUT && inbound.payload.value.empty(),
+        "an incomplete body must time out and clear partial data");
+    pipe.reconnect();
+    writeBytes(pipe.client.get(), wire.data(), static_cast<DWORD>(headerSize + 1));
+    pipe.client.close();
+    require(!readPacket(pipe.server.get(), inbound, testContext()) && GetLastError() == ERROR_BROKEN_PIPE && inbound.payload.value.empty(),
+        "a disconnected truncated request must reject and clear partial data");
+    pipe.reconnect();
+    std::thread slowWriter([&] {
+        for (auto byte : wire) {
+            writeBytes(pipe.client.get(), &byte, 1);
+            std::this_thread::sleep_for(std::chrono::milliseconds(30));
         }
-        require(writePacket(client, outbound, 250), "timed writer must write");
-        Packet synchronous;
-        const bool syncAccepted = readPacket(server, synchronous);
-        const DWORD syncError = GetLastError();
-        if (!syncAccepted) {
-            std::uint8_t discarded[2]{};
-            DWORD read = 0;
-            require(ReadFile(server, discarded, sizeof(discarded), &read, nullptr) && read == sizeof(discarded), "reject payload must drain");
-        }
-        require(timedAccepted == isKnownOperation(operation) && syncAccepted == timedAccepted,
-            "timed and synchronous packet validation disagree");
-        if (timedAccepted) {
-            require(inbound.operation == outbound.operation && synchronous.operation == outbound.operation &&
-                inbound.payload.value == outbound.payload.value && synchronous.payload.value == outbound.payload.value,
-                "packet codec round-trip mismatch");
-        } else require(timedError == ERROR_INVALID_DATA && syncError == ERROR_INVALID_DATA,
-            "both transports must report the same rejection");
-    }
-    require(CloseHandle(client) && CloseHandle(server), "packet test handles must close");
+    });
+    const auto started = GetTickCount64();
+    const bool read = readPacket(pipe.server.get(), inbound, testContext(100));
+    const auto error = GetLastError();
+    const auto elapsed = GetTickCount64() - started;
+    slowWriter.join();
+    require(!read && error == ERROR_TIMEOUT && elapsed < kPipeTransferLifetimeMs,
+        "individual bytes must not renew the packet deadline");
+    pipe.reconnect();
+    Packet large;
+    large.operation = outbound.operation;
+    large.payload.value.resize(kMaxPacket, 42);
+    require(!writePacket(pipe.server.get(), large, testContext(100)) && GetLastError() == ERROR_TIMEOUT,
+        "a client that does not read the response must time out");
+    pipe.reconnect();
+    require(!awaitReplyAcknowledgment(pipe.server.get(), outbound.operation, testContext(100)) && GetLastError() == ERROR_TIMEOUT,
+        "a client that sends no acknowledgment must time out");
+    pipe.reconnect();
+    const auto context = testContext();
+    require(writePacket(pipe.client.get(), outbound, context) && readPacket(pipe.server.get(), inbound, context) &&
+        inbound.operation == outbound.operation && inbound.payload.value == outbound.payload.value,
+        "a normal request must work on the same server after abnormal clients");
+    require(writePacket(pipe.server.get(), inbound, context) && readPacket(pipe.client.get(), outbound, context) &&
+        writeReplyAcknowledgment(pipe.client.get(), outbound.operation, context) &&
+        awaitReplyAcknowledgment(pipe.server.get(), outbound.operation, context),
+        "response and acknowledgment must complete with the same deadline");
+    const PipeIoContext expired{GetTickCount64()};
+    require(!readPacket(pipe.server.get(), inbound, expired) && GetLastError() == ERROR_TIMEOUT,
+        "an already-expired phase must not start another I/O");
+    require(!writePacket(pipe.server.get(), outbound, expired) && GetLastError() == ERROR_TIMEOUT,
+        "response writing must not renew an expired deadline");
+    require(!awaitReplyAcknowledgment(pipe.server.get(), outbound.operation, expired) && GetLastError() == ERROR_TIMEOUT,
+        "acknowledgment waiting must not renew an expired deadline");
+    pipe.reconnect();
+    require(writeReplyAcknowledgment(pipe.client.get(), Operation::status, testContext()), "invalid ACK fixture must write");
+    require(!awaitReplyAcknowledgment(pipe.server.get(), outbound.operation, testContext()) && GetLastError() == ERROR_INVALID_DATA,
+        "acknowledgment must match the request operation");
+}
+
+void testPipeStopCancellation() {
+    winrt::handle stop(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    require(static_cast<bool>(stop), "stop event must open");
+    const auto cancels = [&](auto action) {
+        require(ResetEvent(stop.get()), "stop event must reset");
+        std::thread stopper([&] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(30));
+            require(SetEvent(stop.get()), "stop event must signal");
+        });
+        const bool completed = action();
+        const DWORD error = GetLastError();
+        stopper.join();
+        require(!completed && error == ERROR_OPERATION_ABORTED, "STOP must cancel pending pipe I/O");
+    };
+    PipePair listener(false);
+    cancels([&] { return connectPipe(listener.server.get(), stop.get()); });
+    PipePair pipe;
+    Packet packet;
+    packet.operation = Operation::bindingStatus;
+    cancels([&] { return readPacket(pipe.server.get(), packet, testContext(kPipeTransferLifetimeMs, stop.get())); });
+    pipe.reconnect();
+    packet.payload.value = {1, 2, 3};
+    const auto wire = packetBytes(packet);
+    const auto headerSize = wire.size() - packet.payload.value.size();
+    writeBytes(pipe.client.get(), wire.data(), static_cast<DWORD>(headerSize + 1));
+    cancels([&] { return readPacket(pipe.server.get(), packet, testContext(kPipeTransferLifetimeMs, stop.get())); });
+    require(packet.payload.value.empty(), "cancelled body must release partial data");
+    pipe.reconnect();
+    packet.payload.value.resize(kMaxPacket, 42);
+    cancels([&] { return writePacket(pipe.server.get(), packet, testContext(kPipeTransferLifetimeMs, stop.get())); });
+    pipe.reconnect();
+    cancels([&] { return awaitReplyAcknowledgment(pipe.server.get(), packet.operation, testContext(kPipeTransferLifetimeMs, stop.get())); });
 }
 
 void testAutoSubmitOffer() {
@@ -228,7 +511,7 @@ void testAutoSubmitOffer() {
 void testPresenceContracts() {
     using namespace unlock_windows::system_ble;
     require(kProtocolVersion == 3, "only IPC v3 is supported");
-    for (const auto removed : {10, 11, 13, 14, 17}) require(!isKnownOperation(static_cast<std::uint16_t>(removed)), "old phone operation must be unknown");
+    for (const auto unknown : {10, 11, 13, 14, 17}) require(!isKnownOperation(static_cast<std::uint16_t>(unknown)), "unsupported operation must reject");
     for (auto operation : {Operation::claimCredential, Operation::beginVerification, Operation::takeAutoSubmitOffer,
             Operation::captureIdentity, Operation::captureProvisioningIdentity, Operation::verificationStatus})
         require(requiresLogonUi(operation), "desktop must not reach LogonUI operations");
@@ -248,7 +531,7 @@ void testPresenceContracts() {
     record.threshold = kMaximumThreshold + 1;
     require(!encodeBinding(record, bytes), "threshold above range must fail");
     record.threshold = kDefaultThreshold;
-    BindingChange change{{BindingState::rebindRequired, {}}, record, L"Global\\test-cancellation"};
+    BindingChange change{{BindingState::absent, {}}, record, L"Global\\test-cancellation"};
     BindingChange restored;
     require(encodeBindingChange(change, bytes) && decodeBindingChange(bytes.value.data(), bytes.value.size(), restored) &&
         restored.expected == change.expected && restored.candidate == change.candidate && restored.cancelEvent == change.cancelEvent,
@@ -260,12 +543,17 @@ void testPresenceContracts() {
     require(encodeBindingRemoval(removal, bytes) && decodeBindingRemoval(bytes.value.data(), bytes.value.size(), removed) &&
         removed.expected == removal.expected && removed.cancelEvent == removal.cancelEvent, "removal must bind its expected state and cancellation");
     require(!decodeBindingRemoval(bytes.value.data(), bytes.value.size() - 1, removed), "truncated removal must fail");
-    for (auto state : {BindingState::absent, BindingState::rebindRequired}) {
-        BindingSummary summary{state, {}};
+    for (auto state : {BindingState::absent, BindingState::bound}) {
+        BindingSummary summary{state, state == BindingState::bound ? record : BindingRecord{}};
         BindingSummary read;
         require(encodeBindingSummary(summary, bytes) && decodeBindingSummary(bytes.value.data(), bytes.value.size(), read) && read == summary,
-            "unbound and rebind-required must remain distinct");
+            "absent and bound summaries must round trip");
     }
+    require(!encodeBindingSummary({static_cast<BindingState>(2), {}}, bytes), "invalid binding state must not encode");
+    require(encodeBindingSummary({BindingState::absent, {}}, bytes), "absent summary fixture must encode");
+    bytes.value[0] = 2;
+    BindingSummary invalidSummary;
+    require(!decodeBindingSummary(bytes.value.data(), bytes.value.size(), invalidSummary), "invalid binding state must not decode");
     AuthenticationStatus status{"01234567-89ab-cdef-0123-456789abcdef", AuthenticationStage::verifying, AuthenticationFailure::none, 30'000};
     AuthenticationStatus parsed;
     require(encodeAuthenticationStatus(status, bytes) && decodeAuthenticationStatus(bytes.value.data(), bytes.value.size(), parsed) &&
@@ -295,24 +583,24 @@ void testPresenceContracts() {
     require(!expired.consume(true, fresh, 9'000, 10'001, 10'001, kDefaultThreshold), "request deadline must not extend");
     require(!freshEvidence(10'002, 9'000, 10'001), "future/late evidence must reject");
     require(!freshEvidence(0, 0, 1), "missing evidence must reject even at the clock origin");
-    HANDLE reader = INVALID_HANDLE_VALUE, writer = INVALID_HANDLE_VALUE;
-    require(CreatePipe(&reader, &writer, nullptr, 0), "version rejection pipe must open");
     Packet packet;
-    require(writePacket(writer, packet), "canonical version packet must write");
-    std::array<std::uint8_t, 16> header{};
-    DWORD count = 0;
-    require(ReadFile(reader, header.data(), static_cast<DWORD>(header.size()), &count, nullptr) && count == header.size(), "packet header must read");
-    header[4] = 2; header[5] = 0;
-    require(WriteFile(writer, header.data(), static_cast<DWORD>(header.size()), &count, nullptr) && count == header.size(), "old-version fixture must write");
-    require(!readPacket(reader, packet) && GetLastError() == ERROR_INVALID_DATA, "version 2 packet must reject without fallback");
-    require(CloseHandle(reader) && CloseHandle(writer), "version fixture handles must close");
+    auto wire = packetBytes(packet);
+    wire[4] = static_cast<std::uint8_t>(kProtocolVersion + 1); wire[5] = 0;
+    PipePair pipe;
+    writeBytes(pipe.client.get(), wire.data(), static_cast<DWORD>(wire.size()));
+    require(!readPacket(pipe.server.get(), packet, testContext()) && GetLastError() == ERROR_INVALID_DATA,
+        "unsupported packet versions must reject");
 }
 
 int main() {
+    testLastUnlockCodec();
+    testLastUnlockHistory();
+    testLastUnlockText();
     testIdentityRoundTrip();
     testStatusRoundTrip();
     testCredentialSummary();
-    testPacketTransportParity();
+    testPipeDeadlinesAndRecovery();
+    testPipeStopCancellation();
     testProvisioningIdentityTransport();
     testSetupLaunchArguments();
     testAutoSubmitOffer();

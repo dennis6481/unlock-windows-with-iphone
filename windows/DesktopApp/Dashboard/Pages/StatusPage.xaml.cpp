@@ -20,13 +20,11 @@ void StatusPage::OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEventA
     name_ = text(L"iPhone", 24);
     name_.TextAlignment(TextAlignment::Center);
     statusPanel_.Children().Append(name_);
-    auto value = text(L"N/A");
-    value.HorizontalAlignment(HorizontalAlignment::Right);
-    auto card = settingsCard(L"Last approval", value, L"\xE81C");
-    card.Margin({0,16,0,0});
-    approvalCard_ = card;
-    statusPanel_.Children().Append(card);
-
+    lastUnlockText_ = text(L"\u2014");
+    lastUnlockText_.TextWrapping(TextWrapping::NoWrap);
+    lastUnlockText_.TextAlignment(TextAlignment::Right);
+    lastUnlockCard_ = settingsCard(L"Last Unlock", lastUnlockText_, L"\xE823", false);
+    statusPanel_.Children().Append(lastUnlockCard_);
     thresholdText_ = text(L"");
     threshold_ = Slider{};
     threshold_.Minimum(unlock_windows::system_ble::kMinimumThreshold);
@@ -66,12 +64,12 @@ void StatusPage::OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEventA
 }
 
 void StatusPage::Update(unlock_windows::desktop_app::DashboardSnapshot const& snapshot) {
-    const bool known = snapshot.paired.has_value();
-    const bool paired = snapshot.paired.value_or(false);
+    const bool known = snapshot.binding.has_value();
     const bool bound = snapshot.binding && snapshot.binding->state == unlock_windows::system_ble::BindingState::bound;
+    lastUnlockCard_.Visibility(bound ? Visibility::Visible : Visibility::Collapsed);
+    lastUnlockText_.Text(unlock_windows::desktop_app::lastUnlockText(snapshot.lastUnlock, GetTickCount64()));
     name_.Text(!known ? L"Binding status unavailable" : bound ?
         (snapshot.binding->record.displayName.empty() ? L"Name unavailable" : snapshot.binding->record.displayName) : L"No iPhone bound");
-    approvalCard_.Visibility(known && paired ? Visibility::Visible : Visibility::Collapsed);
     error_.Title(L"Status needs attention");
     const bool resetView = resetBindingView_ && known && !bound && !Busy();
     if ((bound || resetView) && bindingView_ && !bindingView_->busy()) {

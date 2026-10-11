@@ -1,9 +1,9 @@
 // Created by Rui MA on 26 Sep 2026
 
 #include "BindingClient.h"
+#include "../DesktopApp/Dashboard/Pages/PageControls.h"
 #include "BindingView.h"
 #include "EnrollmentSession.h"
-#include "../DesktopApp/Dashboard/Pages/PageControls.h"
 #include "../Bluetooth/SystemBleSession.h"
 #include <winrt/Microsoft.UI.Dispatching.h>
 #include <winrt/Windows.System.h>

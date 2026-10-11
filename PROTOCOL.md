@@ -7,7 +7,7 @@ No iPhone app is used. Windows system pairing identifies the selected phone; the
 ## Shared contracts
 
 - [SystemBleContract.h](windows/Bluetooth/SystemBleContract.h): ANCS/Notification Source UUIDs, ContainerId property, RSSI range −100…−20 dBm, 1 dBm step, −60 dBm default, 30-second request deadline and 3-second evidence lifetime.
-- [SavedCredentialIpc.h](windows/SavedCredential/SavedCredentialIpc.h): IPC version **3**, operations, status/failure enums, binding and packet codecs. Version 2 and removed phone operations are rejected.
+- [SavedCredentialIpc.h](windows/SavedCredential/SavedCredentialIpc.h): IPC version **3**, operations, status/failure enums, binding and packet codecs. Unsupported versions and operations are rejected.
 - [SystemBleSession](windows/Bluetooth/SystemBleSession.cpp): reusable system relationship, protected GATT and address-associated RSSI operations, shared with the independent diagnostic.
 
 ## Setup and binding
@@ -26,7 +26,7 @@ The read-only `serviceDiagnostics` IPC operation returns the latest request's ve
 
 `%ProgramData%\UnlockWindowsWithIPhone\enrollment.dat` retains machine-bound DPAPI encryption, protected pending-file creation, flushing and atomic replacement. SYSTEM and Administrators alone can write the file and its parent directory. The service owns storage; ordinary desktop clients read non-sensitive status over IPC.
 
-The encrypted record stores target SID, Classic/BLE endpoint IDs, ContainerId, display name and threshold. The old public-key format is recognized only as **requires rebinding**. It is never decrypted, migrated or silently overwritten. Read/corruption/permission errors are distinct from an absent record. Password vault format and LocalSystem user-scope DPAPI remain unchanged.
+The encrypted version-2 record stores target SID, Classic/BLE endpoint IDs, ContainerId, display name and threshold. Unsupported formats and invalid binding states are errors; they are never migrated or silently overwritten. Read/corruption/permission errors are distinct from an absent record. Password vault format and LocalSystem user-scope DPAPI remain unchanged.
 
 ## Request and one-time approval
 
@@ -36,6 +36,7 @@ The encrypted record stores target SID, Classic/BLE endpoint IDs, ContainerId, d
 4. RSSI must be sampled after request start, match the current Bluetooth address **and address type**, be at most 3 seconds old and reach the saved threshold. Missing/old samples wait within the original deadline; fresh low samples fail immediately. Expired communication evidence is renewed when an eligible sample arrives. Address changes discard samples until a current associated sample exists.
 5. Request, binding, connection, full account identity, console session, logon identity and lock generation must still match before a one-time grant is made. Connection and invalidation listeners persist across requests; no historical request evidence is reused.
 6. CP receives one auto-submit offer and notifies LogonUI through `CredentialsChanged`. Claim rechecks communication/RSSI freshness and all contexts, **consumes authorization before decrypting the password**, then CP submits through native Negotiate.
+7. `ReportResult` sends the claim nonce and native status through `reportUnlockResult`. Only the matching pinned LogonUI process and unchanged account/session/binding can complete it. Native success records monotonic time and claimed RSSI in service memory; failures and duplicates cannot advance history or restore authorization.
 
 Disconnect, cancel, timeout, suspend/resume, unlock, logoff, account/console change, system relationship change or registration change invalidates the affected request/grant. Late callbacks cannot approve a cancelled or expired request; an unfinished native operation keeps the worker busy. No automatic retry creates another request or extends its deadline.
 
@@ -45,11 +46,16 @@ Unlock, request cancellation/expiry and credential consumption keep a valid conn
 
 | Caller | Permitted purpose |
 | --- | --- |
-| Ordinary target-console desktop | Non-sensitive account/binding summaries, binding-task status and cancellation. |
+| Ordinary target-console desktop | Non-sensitive account/binding/last-unlock summaries, binding-task status and cancellation. |
 | Elevated administrator at the target's unlocked console | Existing password management, binding/replace/remove and threshold save. Full target identity remains service-verified. |
 | Verified SYSTEM LogonUI in the locked physical console | Provisioning/capture, eligibility, verification start/status/cancel, one-time offer and credential claim. |
+| Verified SYSTEM LogonUI completing its claim | Native result reporting before or after the same session unlocks; no new credential access. |
 
 There is one saved-credential pipe. No phone pipe, signature submission, public-key reload, desktop approval operation or desktop credential claim exists. The service pins the client process and compares actual pipe/process tokens, sessions and expected LogonUI image. Client code checks SCM identity and server PID/session. Impersonation ends before LocalSystem DPAPI access.
+
+Connection, reads, writes and reply acknowledgment use cancellable Overlapped I/O. Each connected client has one absolute 2000 ms transfer deadline; fragments and ACK do not renew it. Client `call` shares one deadline across the entire call. Service STOP signals an event, cancels pending I/O and drains completion before releasing its resources. Transport errors identify the stage and Win32 error; failed replies never restore consumed authorization.
+
+`lastUnlockStatus` returns only optional success time/RSSI to the verified unlocked target user. History is not persisted or used for authentication. Service restart, account/session change, binding replacement/removal and password removal clear it; threshold changes retain it. New requests retire pending results. Reporting failure is diagnostic and never changes the native Windows result.
 
 ## Limits and acceptance
 

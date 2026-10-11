@@ -2,7 +2,7 @@
 
 # Testing and diagnostics
 
-This guide defines acceptance checks, not recorded product results. The app-free replacement has an x64 Release product build on 11 Oct 2026 (0 errors, 0 warnings; tests disabled). Test compilation/execution, ARM64, installation and the hardware matrix remain pending. Do not mark all acceptance passed or claim a usable product before the matrix completes.
+This guide defines acceptance checks, not runtime product results. On 11 Oct 2026, `make build-release` completed for x64 with 0 errors and 0 warnings, including compilation of all four test programs. Test execution, ARM64, installation and the hardware matrix remain pending. Earlier static-only notes below describe previous checks; this build does not establish runtime behavior. Do not mark all acceptance passed or claim a usable product before the matrix completes.
 
 The subsequent Windows-settings-only pairing and inline Status binding changes, including dialog roots, grouped device rows and viewport-constrained shared outer scrolling, have static inspection only; they have not been built or validated on hardware.
 
@@ -15,6 +15,10 @@ Service association watchers now use the shared paired-only selectors. This chan
 Detailed service traces have static inspection only. Verify Diagnostics shows progress before completion, paired bond properties, watcher counts/status, GATT results and timings, then success/failure. Polling must not duplicate lines, including when the IPC-bounded trace drops older lines or a new request starts.
 
 Persistent BLE connections, Windows-cached structure, preparation through protected verification and deadline-bounded RSSI waiting have static inspection only. No build, compilation tests, packaging, installation or hardware validation was run for this change. Record connection/session/service changes and distinguish Cached-mode queries from proven object reuse and new protected operations.
+
+Cancellable pipe I/O, first-setup Quit and obsolete-state cleanup are included in the x64 Release build. Added regression sources compiled but were not run; no new hardware evidence is recorded. The minimum Windows build is now 19041; confirm it on Windows 10 2004 before claiming support was exercised.
+
+On 11 Oct 2026, **Last Unlock** restoration passed targeted x64 Release compilation/linking of the desktop, service, Credential Provider and all four test programs with 0 errors and 0 warnings. The installer C++ `ClCompile` target also passed with 0 errors and 0 warnings. Tests were not executed; installer linking/packaging, installation, ARM64 and hardware validation were not performed for this addition.
 
 ## Environment and evidence
 
@@ -40,13 +44,19 @@ When explicitly authorized:
 make -C windows test
 ```
 
-This builds and runs four native programs: saved-credential IPC/state/authorization, protected binding storage, installer decisions and CP policy. Storage tests require an explicitly authorized elevated test environment because their fixtures use SYSTEM/administrator-only writes. Test source covers binding codec corruption/truncation, range checks, previous-format rejection, cancelled atomic commit, caller operation contracts, freshness, deadline and one-time consumption. It has not been compiled or run for this replacement.
+This builds and runs four native programs: saved-credential IPC/state/authorization, protected binding storage, installer decisions and CP policy. Storage tests require an explicitly authorized elevated test environment because their fixtures use SYSTEM/administrator-only writes. Test source covers binding codec corruption/truncation, invalid states, range checks, unknown formats, read/ACL failures, cancelled atomic commit, caller operation contracts, freshness, deadline and one-time consumption. It compiled in the x64 Release build; execution remains pending.
+
+Pipe source tests cover empty clients, partial headers/bodies, disconnected truncation, byte-by-byte delay, unread responses, missing ACK, STOP during connect/read/body/write/ACK and recovery on the same server. The request/response/ACK path shares an absolute deadline; an expired phase cannot start new I/O. Service-level caller checks and actual SCM STOP remain runtime acceptance cases.
+
+Last-unlock source tests cover result/summary codecs, success versus claim/approval/failure, duplicate and mismatched nonce/PID, ordinary caller rejection, changed full identity/session/binding, pending cancellation, threshold retention, service-memory reset and seconds/minutes/hours/days formatting. Actual pipe caller verification and native `ReportResult` remain runtime acceptance cases.
 
 The [Release workflow](../.github/workflows/release.yml) builds Windows installers and checks package versions/PE architectures. It has no iOS/IPA job and does not exercise installation, BLE or native unlock.
 
 ## First-install setup
 
 - **Save password → bind iPhone**: cancellation/rejection/failure in password setup never starts binding. Complete target identity must match SID, QualifiedUserName and ProviderID.
+- Tray **Quit** during idle password setup, account query, save and confirmation closes the setup window normally. Input is cleared and new submissions stop; submitted operations finish and release sensitive buffers before exit. Check the actual saved state afterwards; a lost reply must not be reported as confirmed success/failure or trigger resubmission. No binding begins after Quit.
+- During UAC, request Quit with the consent UI still pending, then separately accept/refuse it. Windows owns that prompt; a newly permitted password window closes through cancellation. Repeat with another administrator's credentials. Verify event rights: target user/SYSTEM can signal; an alternate administrator can wait but cannot signal/reset. An independently opened password window remains open.
 - Pair through Windows settings and confirm matching numbers on both devices. The app does not display a numeric ceremony or initiate pairing.
 - Added/Updated/Removed update the paired-device list without manual Refresh. Returning performs another enumeration; the user must select a device, click **Bind selected device** and confirm. No device auto-registers. Unpaired or removed devices cannot remain selected.
 - Existing Windows pairing is reused. Missing/weak/Secure Connections-unconfirmed bonds fail service validation rather than being downgraded.
@@ -56,7 +66,7 @@ The [Release workflow](../.github/workflows/release.yml) builds Windows installe
 - Initial binding chooses −100…−20 dBm in 1 dBm steps, default −60. Status dragging changes only pending state; Save requests UAC. Successful save persists across service/PC restart. Refusal/failure restores the saved value and displays its reason.
 - UI acceptance remains pending: check Mica/theme colors, sidebar Auto layout without a manual toggle, native sidebar overlay backgrounds in both themes without content showing through, card icons and vertical centering, both threshold sliders retaining their 240 effective-pixel tracks down to the 800 effective-pixel minimum window width, bottom-right binding, removal card confirmation/failure, no header Refresh or page Cancel, password-query Retry in the error InfoBar, and **Just a moment…** throughout lock-screen verification with specific failures retained.
 - Check the native upward entrance/fade when switching all four pages, including cached pages and rapid switching. Preserve each page's scroll position, Diagnostics selection and pending edits; respect Windows animation settings. Runtime motion remains unverified.
-- Old public-key registration reports **requires rebinding** without decrypting/migrating it. A read, ACL or corruption error is distinct from no binding; an error cannot silently authorize overwrite.
+- Unsupported binding formats and invalid state values are explicit errors without migration. A read, ACL or corruption error is distinct from no binding; an error cannot silently authorize overwrite.
 - Verify unlocked target-console setup after service restart, account switch and another administrator's UAC. No stale candidate or alternate account may become the target.
 
 ## Minimum end-to-end check
@@ -76,7 +86,7 @@ Service **approved** does not replace the actual native Windows session result.
 | --- | --- |
 | Initial sign-in, wrong account, signed-out or remote session | No eligible presence authorization/credential claim. Native sign-in remains available. |
 | Ordinary process imitates approve/start/claim/offer | No approval interface; privileged LogonUI operations reject the caller. |
-| IPC version 2, removed phone operations, malformed/truncated packets | Explicit rejection; no old transport or signature fallback. |
+| Unsupported IPC versions/operations, malformed/truncated packets | Explicit rejection. |
 | Cached structure, historical communication or samples before request start | Structure may be reused; old evidence never authorizes password release. |
 | Missing/stale RSSI during verification | Wait within the original deadline; renew expired communication once eligible RSSI arrives. No deadline extension. |
 | Fresh RSSI below the saved threshold | Fail immediately without password release or threshold adjustment. |
@@ -87,12 +97,15 @@ Service **approved** does not replace the actual native Windows session result.
 | Pending native operation/cleanup after cancellation | New BLE start returns busy; no extra worker or unbounded retry. |
 | Binding/credential changes during a request | Invalidate affected authorization; never adopt another device by name. |
 | Claim with communication or RSSI older than 3 seconds | Reject and require new verification. |
-| Duplicate claim, CP rebuild, packing failure or native password rejection | Consume once before decrypt; never restore authorization. |
+| Duplicate claim, failed response/ACK, CP rebuild, packing failure or native password rejection | Consume once before decrypt; never restore authorization or automatically repeat credential operations. |
 
 Use an isolated environment for forged caller/context and delay injection. Do not repeatedly submit incorrect real account passwords or install experimental LSA packages on physical machines.
 
 ## Pairing and saved-password operations
 
+- Verify **Last Unlock** appears above **Signal threshold** only when bound, with a single right-aligned `2 min ago / -58 dBm` value down to the 800-pixel minimum. No success shows `—`; query failure also shows the existing error.
+- Successful phone unlock updates time and claimed RSSI. BLE approval, PIN/password unlock and an isolated native password rejection retain the previous record. Interrupted reporting logs failure without affecting native authentication.
+- Desktop reopening retains history; service/PC restart and account/binding/password removal clear it. Threshold edits retain it.
 - Verify all four pages use the outer content scroller with its bar at the right edge: headers/actions scroll with the body, navigation stays fixed and no inner page/device-list/text scroller competes. Resize across compact/expanded navigation and beyond the shared 800 effective-pixel maximum: wide content is centered without right-edge clipping; below the maximum, its left inset stays fixed and its right edge follows the available width. Status/Password headers and body edges align, and right-side actions remain visible. Switching pages restores each position; first visits start at the top. Check the continuous title bar/sidebar/page backdrop without an outer page panel, WinUI TitleBar dragging/double-click/system buttons, theme/DPI and Windows 10/11. Preserve navigation/order, tray behavior and notifications. Status shows binding name and production RSSI settings; Diagnostics contains text history only. Resize motion remains unverified; sidebar Auto switching is unchanged.
 - Password queries remain non-sensitive. Save/update/remove retain UAC, verified target identity, PasswordBox/ContentDialog and explicit failure reasons.
 - Check repeated clicks, queued UAC, title-bar close, cancel while service verification is pending and app shutdown. Opening Windows settings must not prevent navigating Status or cancelling binding. Old binding must survive pre-commit failure; a completed commit must report its actual state.

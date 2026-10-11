@@ -35,5 +35,5 @@ struct BindingRecord final {
     bool operator==(const BindingRecord&) const = default;
 };
 
-enum class BindingState : std::uint8_t { absent, bound, rebindRequired };
+enum class BindingState : std::uint8_t { absent, bound };
 }

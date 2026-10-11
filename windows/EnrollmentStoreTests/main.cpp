@@ -5,7 +5,8 @@
 #include "../ProtectedStorage.h"
 #include <fstream>
 #include <iostream>
-#include <array>
+#include <iterator>
+#include <vector>
 
 namespace {
 void require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
@@ -50,21 +51,56 @@ int main() {
         require(store.load() == std::optional<ble::BindingRecord>{first}, "Rejected threshold changed the original");
         second.threshold = -55; store.save(second);
         require(store.load() == std::optional<ble::BindingRecord>{second}, "Successful replacement must be atomic");
+        {
+            winrt::handle locked(CreateFileW(path.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, 0, nullptr));
+            require(locked.get() != INVALID_HANDLE_VALUE, "Cannot create exclusive-read fixture");
+            rejects([&] { static_cast<void>(store.load()); }, "Read failures must be errors, not absent bindings");
+        }
+        {
+            struct Descriptor final { PSECURITY_DESCRIPTOR value = nullptr; ~Descriptor() { LocalFree(value); } } original, unsafe;
+            PACL originalAcl = nullptr;
+            require(GetNamedSecurityInfoW(const_cast<wchar_t*>(path.c_str()), SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION, nullptr, nullptr, &originalAcl, nullptr, &original.value) == ERROR_SUCCESS,
+                "Cannot read original fixture ACL");
+            winrt::check_bool(ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                L"D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FW;;;BU)", SDDL_REVISION_1, &unsafe.value, nullptr));
+            BOOL present = FALSE, defaulted = FALSE;
+            PACL unsafeAcl = nullptr;
+            winrt::check_bool(GetSecurityDescriptorDacl(unsafe.value, &present, &unsafeAcl, &defaulted));
+            require(present && unsafeAcl, "Unsafe ACL fixture must contain a DACL");
+            require(SetNamedSecurityInfoW(const_cast<wchar_t*>(path.c_str()), SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, unsafeAcl, nullptr) == ERROR_SUCCESS,
+                "Cannot apply unsafe fixture ACL");
+            rejects([&] { static_cast<void>(store.load()); }, "Unsafe ACLs must be errors, not absent bindings");
+            require(SetNamedSecurityInfoW(const_cast<wchar_t*>(path.c_str()), SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, originalAcl, nullptr) == ERROR_SUCCESS,
+                "Cannot restore original fixture ACL");
+        }
+        std::vector<unsigned char> unsupported;
+        {
+            std::ifstream file(path, std::ios::binary);
+            require(static_cast<bool>(file), "Cannot read current-format fixture");
+            unsupported.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>{});
+            require(!file.bad() && unsupported.size() > 8, "Current-format fixture must contain encrypted data");
+        }
+        unsupported[4] ^= 0x80;
         store.remove(); require(!store.load(), "Product removal must remove only the stored binding");
         {
             std::ofstream file(path, std::ios::binary);
-            const std::array<unsigned char, 8> previous{0x45,0x4e,0x4b,0x32,1,0,1,0};
-            file.write(reinterpret_cast<const char*>(previous.data()), previous.size());
-            require(static_cast<bool>(file), "Cannot write old-format fixture");
+            file.write(reinterpret_cast<const char*>(unsupported.data()), static_cast<std::streamsize>(unsupported.size()));
+            require(static_cast<bool>(file), "Cannot write unsupported-format fixture");
         }
-        bool rebind = false;
-        try { store.load(); } catch (const ble::RebindRequired&) { rebind = true; }
-        require(rebind && std::filesystem::file_size(path) == 8, "Old format must require explicit rebinding without migration or overwrite");
+        rejects([&] { static_cast<void>(store.load()); }, "Unknown formats must be errors, not absent bindings");
+        {
+            std::ifstream file(path, std::ios::binary);
+            const std::vector<unsigned char> unchanged{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>{}};
+            require(!file.bad() && unchanged == unsupported, "Rejected formats must not migrate or overwrite the file");
+        }
         {
             std::ofstream file(path, std::ios::binary | std::ios::trunc); file << "corrupted";
             require(static_cast<bool>(file), "Cannot write corrupt fixture");
         }
-        rejects([&] { store.load(); }, "Corrupt storage must be an error, not unregistered");
+        rejects([&] { static_cast<void>(store.load()); }, "Corrupt storage must be an error, not unregistered");
         store.remove();
         require(std::filesystem::remove(directory), "Test directory cleanup failed"); directory.clear();
         std::cout << "Binding storage tests passed\n";

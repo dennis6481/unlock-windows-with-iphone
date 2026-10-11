@@ -22,7 +22,9 @@ struct StatusPage : StatusPageT<StatusPage> {
 private:
     Microsoft::UI::Xaml::Controls::StackPanel statusPanel_{nullptr};
     Microsoft::UI::Xaml::Controls::TextBlock name_{nullptr};
-    Microsoft::UI::Xaml::Controls::Border approvalCard_{nullptr}, thresholdCard_{nullptr}, removalCard_{nullptr};
+    Microsoft::UI::Xaml::Controls::TextBlock lastUnlockText_{nullptr};
+    Microsoft::UI::Xaml::Controls::Border lastUnlockCard_{nullptr};
+    Microsoft::UI::Xaml::Controls::Border thresholdCard_{nullptr}, removalCard_{nullptr};
     Microsoft::UI::Xaml::Controls::InfoBar error_{nullptr};
     Microsoft::UI::Xaml::Controls::Slider threshold_{nullptr};
     Microsoft::UI::Xaml::Controls::TextBlock thresholdText_{nullptr};

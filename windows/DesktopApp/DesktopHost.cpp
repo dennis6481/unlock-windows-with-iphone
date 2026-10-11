@@ -92,7 +92,7 @@ public:
         if (!dispatcher_.TryEnqueue([weak] {
             if (const auto host = weak.lock()) {
                 if (host->stopping_) { host->poll(); return; }
-                host->controller_->start(host->instance_);
+                host->controller_->start();
             }
         })) {
             report(L"The WinUI dispatcher rejected the desktop startup task.", L"Desktop startup failed");

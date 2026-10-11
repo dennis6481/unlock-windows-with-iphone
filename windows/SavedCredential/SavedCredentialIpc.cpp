@@ -54,41 +54,60 @@ bool take(const std::uint8_t*& cursor, std::size_t& left, void* target, const st
     return true;
 }
 
-bool readExact(const HANDLE pipe, void* output, const DWORD size) {
-    auto* cursor = static_cast<std::uint8_t*>(output);
-    DWORD total = 0;
-    while (total < size) {
-        DWORD read = 0;
-        if (!ReadFile(pipe, cursor + total, size - total, &read, nullptr)) return false;
-        if (read == 0) {
-            SetLastError(ERROR_BROKEN_PIPE);
+bool ioAllowed(const PipeIoContext& context) {
+    if (context.stopEvent) {
+        const auto stopped = WaitForSingleObject(context.stopEvent, 0);
+        if (stopped != WAIT_TIMEOUT) {
+            if (stopped == WAIT_OBJECT_0) SetLastError(ERROR_OPERATION_ABORTED);
             return false;
         }
-        total += read;
+    }
+    if (GetTickCount64() >= context.deadline) {
+        SetLastError(ERROR_TIMEOUT);
+        return false;
     }
     return true;
 }
 
-bool writeExact(const HANDLE pipe, const void* input, const DWORD size) {
-    const auto* cursor = static_cast<const std::uint8_t*>(input);
-    DWORD total = 0;
-    while (total < size) {
-        DWORD written = 0;
-        if (!WriteFile(pipe, cursor + total, size - total, &written, nullptr)) return false;
-        if (written == 0) {
-            SetLastError(ERROR_BROKEN_PIPE);
+bool finishPipeIo(const HANDLE pipe, OVERLAPPED& pending, const BOOL started,
+                  const PipeIoContext& context, DWORD& transferred) {
+    if (!started) {
+        if (GetLastError() != ERROR_IO_PENDING) return false;
+        const auto now = GetTickCount64();
+        const auto remaining = now < context.deadline ? context.deadline - now : 0;
+        const DWORD timeout = context.deadline == (std::numeric_limits<std::uint64_t>::max)()
+            ? INFINITE : static_cast<DWORD>((std::min<std::uint64_t>)(remaining, INFINITE - 1));
+        HANDLE events[]{context.stopEvent, pending.hEvent};
+        const DWORD wait = context.stopEvent
+            ? WaitForMultipleObjects(2, events, FALSE, timeout)
+            : WaitForSingleObject(pending.hEvent, timeout);
+        const DWORD completed = context.stopEvent ? WAIT_OBJECT_0 + 1 : WAIT_OBJECT_0;
+        if (wait != completed) {
+            const DWORD error = wait == WAIT_TIMEOUT ? ERROR_TIMEOUT
+                : wait == WAIT_OBJECT_0 ? ERROR_OPERATION_ABORTED : GetLastError();
+            if (!CancelIoEx(pipe, &pending) && GetLastError() != ERROR_NOT_FOUND) {
+                const auto message = L"saved credential I/O cancellation failed; win32=" + std::to_wstring(GetLastError());
+                OutputDebugStringW(message.c_str());
+            }
+            DWORD ignored = 0;
+            if (!GetOverlappedResult(pipe, &pending, &ignored, TRUE) && GetLastError() != ERROR_OPERATION_ABORTED) {
+                const auto message = L"saved credential cancelled I/O completion failed; win32=" + std::to_wstring(GetLastError());
+                OutputDebugStringW(message.c_str());
+            }
+            SetLastError(error);
             return false;
         }
-        total += written;
     }
-    return true;
+    if (!GetOverlappedResult(pipe, &pending, &transferred, FALSE)) return false;
+    return ioAllowed(context);
 }
 
-bool transferExactWithTimeout(const HANDLE pipe, void* buffer, const DWORD size,
-                              const bool write, const DWORD waitMs) {
+bool transferExact(const HANDLE pipe, void* buffer, const DWORD size,
+                   const bool write, const PipeIoContext& context) {
     auto* cursor = static_cast<std::uint8_t*>(buffer);
     DWORD total = 0;
     while (total < size) {
+        if (!ioAllowed(context)) return false;
         const HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
         if (event == nullptr) return false;
         OVERLAPPED pending{};
@@ -97,62 +116,16 @@ bool transferExactWithTimeout(const HANDLE pipe, void* buffer, const DWORD size,
         const BOOL started = write
             ? WriteFile(pipe, cursor + total, size - total, &transferred, &pending)
             : ReadFile(pipe, cursor + total, size - total, &transferred, &pending);
-        if (!started && GetLastError() == ERROR_IO_PENDING) {
-            const DWORD wait = WaitForSingleObject(event, waitMs);
-            if (wait != WAIT_OBJECT_0) {
-                const DWORD error = wait == WAIT_TIMEOUT ? ERROR_TIMEOUT : GetLastError();
-                CancelIoEx(pipe, &pending);
-                DWORD ignored = 0;
-                GetOverlappedResult(pipe, &pending, &ignored, TRUE);
-                CloseHandle(event);
-                SetLastError(error);
-                return false;
-            }
-            if (!GetOverlappedResult(pipe, &pending, &transferred, FALSE)) {
-                const DWORD error = GetLastError();
-                CloseHandle(event);
-                SetLastError(error);
-                return false;
-            }
-        } else if (!started) {
-            const DWORD error = GetLastError();
-            CloseHandle(event);
-            SetLastError(error);
-            return false;
-        }
+        const bool completed = finishPipeIo(pipe, pending, started, context, transferred);
+        const DWORD error = completed ? NO_ERROR : GetLastError();
         CloseHandle(event);
+        if (!completed) { SetLastError(error); return false; }
         if (transferred == 0) {
             SetLastError(ERROR_BROKEN_PIPE);
             return false;
         }
         total += transferred;
     }
-    return true;
-}
-
-template<class Transfer>
-bool writePacketUsing(const Packet& packet, Transfer transfer) {
-    if (packet.payload.value.size() > kMaxPacket) return false;
-    Header header{kMagic, kVersion, static_cast<std::uint16_t>(packet.operation),
-        static_cast<std::uint32_t>(packet.result), static_cast<std::uint32_t>(packet.payload.value.size())};
-    return transfer(&header, sizeof(header)) && (header.size == 0 ||
-        transfer(const_cast<std::uint8_t*>(packet.payload.value.data()), header.size));
-}
-
-template<class Transfer>
-bool readPacketUsing(Packet& packet, Transfer transfer) {
-    Header header{};
-    if (!transfer(&header, sizeof(header))) return false;
-    if (header.magic != kMagic || header.version != kVersion || header.size > kMaxPacket ||
-        !isKnownOperation(header.operation) || header.result > static_cast<std::uint32_t>(Result::busy)) {
-        SetLastError(ERROR_INVALID_DATA);
-        return false;
-    }
-    packet.payload.clear();
-    packet.payload.value.resize(header.size);
-    if (header.size != 0 && !transfer(packet.payload.value.data(), header.size)) return false;
-    packet.operation = static_cast<Operation>(header.operation);
-    packet.result = static_cast<Result>(header.result);
     return true;
 }
 
@@ -325,48 +298,65 @@ bool decodeStatus(const std::uint8_t* data, const std::size_t size, StatusPayloa
     return decodeCredentialSummary(data + kNonceSize, size - kNonceSize, output);
 }
 
-bool writePacket(const HANDLE pipe, const Packet& packet) {
-    return writePacketUsing(packet, [pipe](void* data, DWORD size) { return writeExact(pipe, data, size); });
+bool connectPipe(const HANDLE pipe, const HANDLE stopEvent) {
+    const PipeIoContext context{(std::numeric_limits<std::uint64_t>::max)(), stopEvent};
+    if (!ioAllowed(context)) return false;
+    const HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!event) return false;
+    OVERLAPPED pending{};
+    pending.hEvent = event;
+    const BOOL started = ConnectNamedPipe(pipe, &pending);
+    const bool alreadyConnected = !started && GetLastError() == ERROR_PIPE_CONNECTED;
+    DWORD ignored = 0;
+    const bool completed = alreadyConnected ? ioAllowed(context)
+        : finishPipeIo(pipe, pending, started, context, ignored);
+    const DWORD error = completed ? NO_ERROR : GetLastError();
+    CloseHandle(event);
+    SetLastError(error);
+    return completed;
 }
 
-bool readPacket(const HANDLE pipe, Packet& packet) {
-    return readPacketUsing(packet, [pipe](void* data, DWORD size) { return readExact(pipe, data, size); });
+bool writePacket(const HANDLE pipe, const Packet& packet, const PipeIoContext& context) {
+    if (packet.payload.value.size() > kMaxPacket) { SetLastError(ERROR_INVALID_PARAMETER); return false; }
+    Header header{kMagic, kVersion, static_cast<std::uint16_t>(packet.operation),
+        static_cast<std::uint32_t>(packet.result), static_cast<std::uint32_t>(packet.payload.value.size())};
+    return transferExact(pipe, &header, sizeof(header), true, context) && (header.size == 0 ||
+        transferExact(pipe, const_cast<std::uint8_t*>(packet.payload.value.data()), header.size, true, context));
 }
 
-bool writePacket(const HANDLE pipe, const Packet& packet, const DWORD waitMs) {
-    return writePacketUsing(packet, [pipe, waitMs](void* data, DWORD size) {
-        return transferExactWithTimeout(pipe, data, size, true, waitMs);
-    });
-}
-
-bool readPacket(const HANDLE pipe, Packet& packet, const DWORD waitMs) {
-    return readPacketUsing(packet, [pipe, waitMs](void* data, DWORD size) {
-        return transferExactWithTimeout(pipe, data, size, false, waitMs);
-    });
-}
-
-bool awaitReplyAcknowledgment(const HANDLE pipe, const Operation operation, const DWORD waitMs) {
-    const ULONGLONG deadline = GetTickCount64() + waitMs;
-    for (;;) {
-        DWORD available = 0;
-        if (!PeekNamedPipe(pipe, nullptr, 0, nullptr, &available, nullptr)) return false;
-        if (available >= sizeof(ReplyAcknowledgment)) {
-            ReplyAcknowledgment acknowledgment{};
-            if (!readExact(pipe, &acknowledgment, sizeof(acknowledgment))) return false;
-            if (acknowledgment.magic != kAckMagic || acknowledgment.version != kVersion ||
-                acknowledgment.operation != static_cast<std::uint16_t>(operation)) {
-                SetLastError(ERROR_INVALID_DATA);
-                return false;
-            }
-            return true;
-        }
-        const ULONGLONG now = GetTickCount64();
-        if (now >= deadline) {
-            SetLastError(ERROR_TIMEOUT);
-            return false;
-        }
-        Sleep(static_cast<DWORD>(std::min<ULONGLONG>(10, deadline - now)));
+bool readPacket(const HANDLE pipe, Packet& packet, const PipeIoContext& context) {
+    packet.payload.clear();
+    Header header{};
+    if (!transferExact(pipe, &header, sizeof(header), false, context)) return false;
+    if (header.magic != kMagic || header.version != kVersion || header.size > kMaxPacket ||
+        !isKnownOperation(header.operation) || header.result > static_cast<std::uint32_t>(Result::busy)) {
+        SetLastError(ERROR_INVALID_DATA);
+        return false;
     }
+    packet.payload.value.resize(header.size);
+    if (header.size != 0 && !transferExact(pipe, packet.payload.value.data(), header.size, false, context)) {
+        packet.payload.clear();
+        return false;
+    }
+    packet.operation = static_cast<Operation>(header.operation);
+    packet.result = static_cast<Result>(header.result);
+    return true;
+}
+
+bool awaitReplyAcknowledgment(const HANDLE pipe, const Operation operation, const PipeIoContext& context) {
+    ReplyAcknowledgment acknowledgment{};
+    if (!transferExact(pipe, &acknowledgment, sizeof(acknowledgment), false, context)) return false;
+    if (acknowledgment.magic != kAckMagic || acknowledgment.version != kVersion ||
+        acknowledgment.operation != static_cast<std::uint16_t>(operation)) {
+        SetLastError(ERROR_INVALID_DATA);
+        return false;
+    }
+    return true;
+}
+
+bool writeReplyAcknowledgment(const HANDLE pipe, const Operation operation, const PipeIoContext& context) {
+    ReplyAcknowledgment acknowledgment{kAckMagic, kVersion, static_cast<std::uint16_t>(operation)};
+    return transferExact(pipe, &acknowledgment, sizeof(acknowledgment), true, context);
 }
 
 const wchar_t* callStageName(const CallStage stage) {
@@ -399,11 +389,13 @@ bool callOnPipe(const wchar_t* const pipeName, const Operation operation,
     if (request.value.size() > kMaxPacket || !isKnownOperation(static_cast<std::uint16_t>(operation))) {
         return failed(CallStage::requestValidation, ERROR_INVALID_PARAMETER);
     }
-    const ULONGLONG deadline = GetTickCount64() + waitMs;
+    const PipeIoContext context{GetTickCount64() + waitMs};
     HANDLE pipe = INVALID_HANDLE_VALUE;
     for (;;) {
+        if (!ioAllowed(context)) return failed(CallStage::waitForPipe, GetLastError());
         const ULONGLONG now = GetTickCount64();
-        const DWORD remaining = now < deadline ? static_cast<DWORD>(deadline - now) : 0;
+        if (now >= context.deadline) return failed(CallStage::waitForPipe, ERROR_TIMEOUT);
+        const DWORD remaining = static_cast<DWORD>(context.deadline - now);
         if (!WaitNamedPipeW(pipeName, remaining)) {
             return failed(CallStage::waitForPipe, GetLastError());
         }
@@ -411,7 +403,7 @@ bool callOnPipe(const wchar_t* const pipeName, const Operation operation,
             FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr);
         if (pipe != INVALID_HANDLE_VALUE) break;
         const DWORD error = GetLastError();
-        if (error != ERROR_PIPE_BUSY || GetTickCount64() >= deadline) {
+        if (error != ERROR_PIPE_BUSY || GetTickCount64() >= context.deadline) {
             return failed(CallStage::openPipe, error);
         }
     }
@@ -425,20 +417,17 @@ bool callOnPipe(const wchar_t* const pipeName, const Operation operation,
     outbound.payload = std::move(request);
     CallStage failureStage = CallStage::none;
     DWORD failureError = NO_ERROR;
-    if (!writePacket(pipe, outbound, waitMs)) {
+    if (!writePacket(pipe, outbound, context)) {
         failureStage = CallStage::requestWrite;
         failureError = GetLastError();
-    } else if (!readPacket(pipe, reply, waitMs)) {
+    } else if (!readPacket(pipe, reply, context)) {
         failureStage = CallStage::replyRead;
         failureError = GetLastError();
     } else if (reply.operation != operation) {
         failureStage = CallStage::replyValidation;
         failureError = ERROR_INVALID_DATA;
     } else {
-        ReplyAcknowledgment acknowledgment{kAckMagic, kVersion,
-            static_cast<std::uint16_t>(operation)};
-        if (!transferExactWithTimeout(pipe, &acknowledgment,
-                sizeof(acknowledgment), true, waitMs)) {
+        if (!writeReplyAcknowledgment(pipe, operation, context)) {
             const DWORD error = GetLastError();
             if (diagnostics != nullptr) {
                 *diagnostics = {CallStage::replyAcknowledgment, error};
@@ -453,6 +442,58 @@ bool callOnPipe(const wchar_t* const pipeName, const Operation operation,
         reply.payload.clear();
         return failed(failureStage, failureError);
     }
+    return true;
+}
+
+bool sameIdentity(const Identity& left, const Identity& right) noexcept {
+    return left.sid == right.sid && left.qualifiedUserName == right.qualifiedUserName &&
+        IsEqualGUID(left.providerId, right.providerId);
+}
+
+bool encodeUnlockResult(const UnlockResult& result, SensitiveBytes& output) {
+    output.clear();
+    append(output, result.nonce.data(), result.nonce.size());
+    append(output, &result.status, sizeof(result.status));
+    append(output, &result.substatus, sizeof(result.substatus));
+    return true;
+}
+
+bool decodeUnlockResult(const std::uint8_t* data, const std::size_t size, UnlockResult& output) {
+    if (!data || size != kNonceSize + 2 * sizeof(NTSTATUS)) return false;
+    UnlockResult result;
+    std::memcpy(result.nonce.data(), data, kNonceSize);
+    std::memcpy(&result.status, data + kNonceSize, sizeof(result.status));
+    std::memcpy(&result.substatus, data + kNonceSize + sizeof(result.status), sizeof(result.substatus));
+    output = result;
+    return true;
+}
+
+bool encodeLastUnlock(const std::optional<LastUnlockSummary>& summary, SensitiveBytes& output) {
+    output.clear();
+    if (summary && (!summary->completedAt || summary->rssi < system_ble::kMinimumThreshold || summary->rssi >= 0))
+        return false;
+    const std::uint8_t present = summary.has_value();
+    append(output, &present, sizeof(present));
+    if (summary) {
+        append(output, &summary->completedAt, sizeof(summary->completedAt));
+        append(output, &summary->rssi, sizeof(summary->rssi));
+    }
+    return true;
+}
+
+bool decodeLastUnlock(const std::uint8_t* data, const std::size_t size, std::optional<LastUnlockSummary>& output) {
+    if (!data || !size || data[0] > 1) return false;
+    std::optional<LastUnlockSummary> summary;
+    if (data[0]) {
+        LastUnlockSummary value;
+        if (size != 1 + sizeof(value.completedAt) + sizeof(value.rssi)) return false;
+        std::memcpy(&value.completedAt, data + 1, sizeof(value.completedAt));
+        std::memcpy(&value.rssi, data + 1 + sizeof(value.completedAt), sizeof(value.rssi));
+        summary = value;
+    } else if (size != 1) return false;
+    SensitiveBytes canonical;
+    if (!encodeLastUnlock(summary, canonical)) return false;
+    output = summary;
     return true;
 }
 
@@ -505,7 +546,7 @@ bool decodeBinding(const std::uint8_t* data, std::size_t size, system_ble::Bindi
 
 bool encodeBindingSummary(const BindingSummary& summary, SensitiveBytes& output) {
     output.clear();
-    if (summary.state > system_ble::BindingState::rebindRequired) return false;
+    if (summary.state > system_ble::BindingState::bound) return false;
     SensitiveBytes record;
     if (summary.state == system_ble::BindingState::bound && !encodeBinding(summary.record, record)) return false;
     const auto state = static_cast<std::uint8_t>(summary.state);
@@ -515,7 +556,7 @@ bool encodeBindingSummary(const BindingSummary& summary, SensitiveBytes& output)
 }
 
 bool decodeBindingSummary(const std::uint8_t* data, std::size_t size, BindingSummary& output) {
-    if (!data || !size || data[0] > static_cast<std::uint8_t>(system_ble::BindingState::rebindRequired)) return false;
+    if (!data || !size || data[0] > static_cast<std::uint8_t>(system_ble::BindingState::bound)) return false;
     BindingSummary summary;
     summary.state = static_cast<system_ble::BindingState>(data[0]);
     if (summary.state == system_ble::BindingState::bound ?

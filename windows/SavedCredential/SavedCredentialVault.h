@@ -25,6 +25,4 @@ private:
     std::filesystem::path file_;
 };
 
-[[nodiscard]] bool sameIdentity(const Identity& left, const Identity& right) noexcept;
-
 } // namespace unlock_windows::saved_credential

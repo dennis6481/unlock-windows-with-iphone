@@ -29,7 +29,7 @@ Unlock Windows session using your iPhone in proximity.
 
 ### System requirements
 
-The *Unlock with iPhone* requires Windows 10 version **1809, build 17763**, or later, including Windows 11. Both x64 and ARM64 architecture are supported (althought the app has not yet been tested on a physical ARM64 machine).
+The *Unlock with iPhone* requires Windows 10 version **2004, build 19041**, or later, including Windows 11. Both x64 and ARM64 architecture are supported (althought the app has not yet been tested on a physical ARM64 machine).
 
 Your PC must have Bluetooth enabled, with an adapter and driver that support **BLE Central, protected GATT access and advertisement scanning**.
 
@@ -40,6 +40,7 @@ Use a physical iPhone running iOS 26 or later. No iPhone app, IPA or developer s
 
 - Unlock your locked Windows session using your paired iPhone over Bluetooth. Select the phone unlock tile on the Windows lock screen; click **Unlock** to request a fresh presence check. The phone needs no action for each attempt; locking the PC alone does not request unlock.
 - Adjust **Signal threshold** on the Windows **Status** page. Dragging changes a pending value; **Save** requests UAC.
+- **Last Unlock** shows the last successful phone unlock and its signal, for example `2 min ago / -58 dBm`. It resets when the service or PC restarts.
 - Keep an encrypted copy of your Microsoft account password on your PC. Your password is never sent to your iPhone.
 - Manage system pairing, the product binding and saved password from the Windows tray app. The LocalSystem service verifies presence independently when the desktop app exits.
 - Install, update or remove the Windows app using its installer.
@@ -58,7 +59,9 @@ After native sign-in, the service keeps the bound phone's BLE connection across 
 
 In **Remove bound iPhone**, click **Remove** to confirm removal and return to device selection. Windows Bluetooth pairing and the saved password remain.
 
-No claim of product readiness is made before [acceptance](docs/Testing.md) completes. Previous public-key registrations require explicit rebinding; they are not migrated.
+No claim of product readiness is made before [acceptance](docs/Testing.md) completes. Unsupported binding files report an error; they are not migrated or silently overwritten.
+
+Tray **Quit** cancels the current password setup and waits for any submitted operation to finish. Saved data remains; setup does not continue to binding. Windows still handles any open UAC prompt.
 
 The tray app's **Diagnostics** page shows service verification steps, pairing properties, operation timings and failures with their request IDs. Update the installed service together with the desktop app to receive these details.
 

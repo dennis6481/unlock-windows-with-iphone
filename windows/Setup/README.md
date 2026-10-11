@@ -45,7 +45,7 @@ Before writing a transaction, setup validates its own version/architecture and h
 
 Preflight and preparation use the same package validator. Preparation keeps that validated resource mapping open and extracts its verified bytes without a second resource hash. Installed-package format is checked with installed versions; pending-package format is checked when reading the pending transaction. Project names remain in `ComponentFiles.h`, product version in `ProductVersion.h`, and packed little-endian manifest layout in `PackageManifest.h`. The generator reads every header/record field and the shared SHA-256 digest type; unsupported fields and missing values are errors. The manifest records relative paths, sizes, SHA-256 and each PE machine type; installation, verification, replacement and removal read it. Installed-version verification reads the resident package manifest.
 
-Setup requires Windows 10 1809 or later. Desktop runtime files stay in the app directory; authentication components retain their system paths. ARM64 builds and clean-environment deployment for this change remain unverified.
+Setup requires Windows 10 2004, build 19041, or later, using the minimum from [ComponentFiles.h](../ComponentFiles.h). Desktop runtime files stay in the app directory; authentication components retain their system paths. ARM64 builds and clean-environment deployment for this change remain unverified.
 
 ## Version and data rules
 

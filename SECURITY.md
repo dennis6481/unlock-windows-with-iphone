@@ -29,6 +29,8 @@ Original password/PIN providers remain available. Initial sign-in after boot or 
 
 IPC version 3 removes all signature/phone transport operations. Ordinary processes cannot begin unlock verification, approve it, obtain auto-submit offers or claim passwords. UAC is required for password and binding changes; the service verifies the installed target's complete identity rather than using the elevated administrator as target.
 
+Ordinary clients cannot report successful unlocks. Only the original pinned LogonUI claim with matching nonce and current identity/session/binding may report its native result. Last-unlock time/RSSI is non-sensitive service-memory history and cannot create or restore authorization.
+
 Cancellation, expiry, disconnect, suspend, unlock, logoff, account/session change, binding mutation and invalid system association invalidate related authorization. Cached communication, old/missing RSSI, late callbacks and repeated claims cannot authorize release. Missing/stale RSSI may wait within the original request deadline; claim still requires fresh communication and signal. Native password failure never restores a consumed grant.
 
 ## Reporting and acceptance

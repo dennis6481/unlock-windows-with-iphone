@@ -294,7 +294,6 @@ std::optional<BindingRecord> EnrollmentStore::load() const {
 
     FileHeader header{};
     std::memcpy(&header, bytes.data(), sizeof(header));
-    if (header.magic == kFileMagic && header.version == 1) throw RebindRequired();
     if (header.magic != kFileMagic || header.version != kFileVersion ||
         header.encryptedSize == 0 ||
         bytes.size() != sizeof(header) + header.encryptedSize) {

@@ -3,11 +3,13 @@
 #pragma once
 
 #include <Windows.h>
+#include <ntsecapi.h>
 #include "../Bluetooth/SystemBleContract.h"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -19,6 +21,7 @@ inline constexpr std::size_t kMaxPacket = 16 * 1024;
 inline constexpr std::size_t kMaxPasswordChars = 1024;
 inline constexpr std::size_t kNonceSize = 16;
 inline constexpr std::uint16_t kProtocolVersion = 3;
+inline constexpr DWORD kPipeTransferLifetimeMs = 2000;
 inline constexpr wchar_t kBindingCancelPrefix[] = L"Global\\UnlockWindowsWithIPhone-Pairing-";
 
 enum class Operation : std::uint16_t {
@@ -37,6 +40,7 @@ enum class Operation : std::uint16_t {
     credentialSummary = 19,
     bindingStatus = 20, beginBinding = 21, removeBinding = 22, saveThreshold = 23,
     cancelVerification = 24, bindingTaskStatus = 25, serviceDiagnostics = 26,
+    reportUnlockResult = 27, lastUnlockStatus = 28,
 };
 
 inline constexpr bool isKnownOperation(const std::uint16_t value) noexcept {
@@ -61,6 +65,8 @@ inline constexpr bool isKnownOperation(const std::uint16_t value) noexcept {
     case Operation::bindingTaskStatus:
     case Operation::serviceDiagnostics:
     case Operation::credentialSummary:
+    case Operation::reportUnlockResult:
+    case Operation::lastUnlockStatus:
         return true;
     default:
         return false;
@@ -83,7 +89,8 @@ inline constexpr bool requiresLogonUi(Operation operation) noexcept {
     case Operation::beginVerification:
     case Operation::verificationStatus:
     case Operation::unlockEligibility:
-    case Operation::takeAutoSubmitOffer: return true;
+    case Operation::takeAutoSubmitOffer:
+    case Operation::reportUnlockResult: return true;
     default: return false;
     }
 }
@@ -105,6 +112,8 @@ struct Identity final {
     GUID providerId{};
 };
 
+[[nodiscard]] bool sameIdentity(const Identity& left, const Identity& right) noexcept;
+
 struct CredentialSummary {
     Identity identity;
     bool credentialPresent = false;
@@ -119,6 +128,22 @@ struct AutoSubmitOffer final {
     std::array<std::uint8_t, kNonceSize> nonce{};
     ULONGLONG expiresAt = 0;
 };
+
+struct UnlockResult final {
+    std::array<std::uint8_t, kNonceSize> nonce{};
+    NTSTATUS status = 0;
+    NTSTATUS substatus = 0;
+};
+
+struct LastUnlockSummary final {
+    ULONGLONG completedAt = 0;
+    std::int32_t rssi = 0;
+};
+
+[[nodiscard]] bool encodeUnlockResult(const UnlockResult& result, SensitiveBytes& output);
+[[nodiscard]] bool decodeUnlockResult(const std::uint8_t* data, std::size_t size, UnlockResult& output);
+[[nodiscard]] bool encodeLastUnlock(const std::optional<LastUnlockSummary>& summary, SensitiveBytes& output);
+[[nodiscard]] bool decodeLastUnlock(const std::uint8_t* data, std::size_t size, std::optional<LastUnlockSummary>& output);
 
 enum class AuthenticationStage : std::uint8_t {
     idle, verifying, approved, failed, consumed, completed,
@@ -210,13 +235,17 @@ struct CallDiagnostics final {
 [[nodiscard]] bool decodeCredentialSummary(const std::uint8_t* data, std::size_t size, CredentialSummary& output);
 [[nodiscard]] bool encodeAutoSubmitOffer(const AutoSubmitOffer& offer, SensitiveBytes& output);
 [[nodiscard]] bool decodeAutoSubmitOffer(const std::uint8_t* data, std::size_t size, AutoSubmitOffer& output);
-[[nodiscard]] bool writePacket(HANDLE pipe, const Packet& packet);
-[[nodiscard]] bool readPacket(HANDLE pipe, Packet& packet);
-[[nodiscard]] bool writePacket(HANDLE pipe, const Packet& packet, DWORD waitMs);
-[[nodiscard]] bool readPacket(HANDLE pipe, Packet& packet, DWORD waitMs);
-[[nodiscard]] bool awaitReplyAcknowledgment(HANDLE pipe, Operation operation, DWORD waitMs);
+struct PipeIoContext final {
+    std::uint64_t deadline;
+    HANDLE stopEvent = nullptr;
+};
+[[nodiscard]] bool connectPipe(HANDLE pipe, HANDLE stopEvent);
+[[nodiscard]] bool writePacket(HANDLE pipe, const Packet& packet, const PipeIoContext& context);
+[[nodiscard]] bool readPacket(HANDLE pipe, Packet& packet, const PipeIoContext& context);
+[[nodiscard]] bool writeReplyAcknowledgment(HANDLE pipe, Operation operation, const PipeIoContext& context);
+[[nodiscard]] bool awaitReplyAcknowledgment(HANDLE pipe, Operation operation, const PipeIoContext& context);
 [[nodiscard]] const wchar_t* callStageName(CallStage stage);
 [[nodiscard]] bool call(Operation operation, SensitiveBytes&& request, Packet& reply,
-    DWORD waitMs = 2000, CallDiagnostics* diagnostics = nullptr);
+    DWORD waitMs = kPipeTransferLifetimeMs, CallDiagnostics* diagnostics = nullptr);
 
 } // namespace unlock_windows::saved_credential

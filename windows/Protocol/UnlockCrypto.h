@@ -8,7 +8,6 @@
 #include <bcrypt.h>
 
 #include <array>
-#include <string>
 #include <cstddef>
 #include <cstdint>
 

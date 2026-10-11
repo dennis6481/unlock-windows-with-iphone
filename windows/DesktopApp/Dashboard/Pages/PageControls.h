@@ -51,7 +51,8 @@ inline FontIcon icon(const wchar_t* glyph, double size = 20, bool accent = false
 inline GridLength star() { return {1, GridUnitType::Star}; }
 inline GridLength automatic() { return {0, GridUnitType::Auto}; }
 
-inline Border settingsCard(const wchar_t* title, const FrameworkElement& content, const wchar_t* glyph) {
+inline Border settingsCard(const wchar_t* title, const FrameworkElement& content, const wchar_t* glyph,
+                           bool stackWhenNarrow = true) {
     auto card = Markup::XamlReader::Load(LR"(<Border
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
@@ -84,12 +85,12 @@ inline Border settingsCard(const wchar_t* title, const FrameworkElement& content
     layout.Children().Append(content);
     card.Child(layout);
     card.SizeChanged([weakLayout = make_weak(layout), weakHeader = make_weak(header),
-                      weakContent = make_weak(content)](const auto&, const SizeChangedEventArgs& args) {
+                       weakContent = make_weak(content), stackWhenNarrow](const auto&, const SizeChangedEventArgs& args) {
         auto grid = weakLayout.get();
         auto header = weakHeader.get();
         auto content = weakContent.get();
         if (!grid || !header || !content) return;
-        const bool narrow = args.NewSize().Width < 640;
+        const bool narrow = stackWhenNarrow && args.NewSize().Width < 640;
         grid.ColumnDefinitions().GetAt(2).Width(narrow ? GridLength{0, GridUnitType::Pixel} : automatic());
         Grid::SetColumnSpan(header, narrow ? 2 : 1);
         header.Margin(narrow ? Thickness{0,0,0,8} : Thickness{0,0,16,0});

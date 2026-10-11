@@ -13,6 +13,8 @@
 #include <cstring>
 #include <array>
 #include <memory>
+#include <atomic>
+#include <chrono>
 
 namespace {
 using namespace winrt;
@@ -30,7 +32,7 @@ struct PasswordBuffer final {
 StatusPayload readStatus() {
     Packet response;
     CallDiagnostics diagnostics;
-    if (!call(Operation::status, SensitiveBytes{}, response, 2000, &diagnostics))
+    if (!call(Operation::status, SensitiveBytes{}, response, kPipeTransferLifetimeMs, &diagnostics))
         throw std::runtime_error("Saved credential IPC failed at " + std::string(to_string(callStageName(diagnostics.stage))) +
             " (Win32 " + std::to_string(diagnostics.win32Error) + ").");
     if (response.result == Result::rejected)
@@ -45,7 +47,8 @@ StatusPayload readStatus() {
 
 class PasswordWindow final : public std::enable_shared_from_this<PasswordWindow> {
 public:
-    PasswordWindow(bool setup, Operation operation) : setup_(setup), requested_(operation) {}
+    PasswordWindow(bool setup, Operation operation, winrt::handle cancellation)
+        : setup_(setup), requested_(operation), setupCancellation_(std::move(cancellation)) {}
     int result() const { return result_; }
 
     void show() {
@@ -106,13 +109,46 @@ public:
         scroll.Content(root_);
         window_.Content(scroll);
         closedToken_ = window_.Closed([weak](const auto&, const auto&) { if (const auto self = weak.lock()) self->stop(); });
+        if (setup_) {
+            closingToken_ = appWindow.Closing([weak](const auto&, const auto& args) {
+                if (const auto self = weak.lock(); self && self->busy_) {
+                    args.Cancel(true);
+                    self->close();
+                }
+            });
+            cancellationTimer_ = window_.DispatcherQueue().CreateTimer();
+            cancellationTimer_.Interval(std::chrono::milliseconds(100));
+            cancellationToken_ = cancellationTimer_.Tick([weak](const auto&, const auto&) {
+                if (const auto self = weak.lock(); self && !self->stopped_ && !self->closing_) {
+                    try { if (self->setupCancelled()) self->close(); }
+                    catch (...) {
+                        const auto message = currentException();
+                        OutputDebugStringW(message.c_str());
+                        self->notice(message, InfoBarSeverity::Error);
+                        self->cancellationTimer_.Stop();
+                    }
+                }
+            });
+            cancellationTimer_.Start();
+            if (setupCancelled()) { close(); return; }
+        }
         window_.Activate();
         refresh();
     }
 
     void close() {
         if (stopped_) return;
+        closing_ = true;
         password_.Password(L"");
+        if (setup_) {
+            if (cancellationTimer_) cancellationTimer_.Stop();
+            if (confirmation_) confirmation_.Hide();
+            applyState();
+            if (busy_) {
+                status_.Text(L"Finishing the current operation before closing...");
+                return;
+            }
+        }
         window_.Close();
     }
 
@@ -123,10 +159,26 @@ public:
         if (confirmation_) confirmation_.Hide();
         password_.Password(L"");
         if (window_ && closedToken_.value) window_.Closed(closedToken_);
+        if (window_ && closingToken_.value) window_.AppWindow().Closing(closingToken_);
+        if (cancellationTimer_) {
+            cancellationTimer_.Stop();
+            cancellationTimer_.Tick(cancellationToken_);
+        }
         Application::Current().Exit();
     }
 
 private:
+    bool setupCancelled() const {
+        const auto wait = WaitForSingleObject(setupCancellation_.get(), 0);
+        if (wait == WAIT_FAILED) throw hresult_error(HRESULT_FROM_WIN32(GetLastError()));
+        if (wait != WAIT_OBJECT_0 && wait != WAIT_TIMEOUT) throw hresult_error(E_UNEXPECTED);
+        return wait == WAIT_OBJECT_0;
+    }
+
+    bool setupRequestedToClose() const {
+        return setup_ && (closing_ || setupCancelled());
+    }
+
     void notice(const std::wstring& message, InfoBarSeverity severity) {
         notice_.Severity(severity);
         notice_.Message(message);
@@ -135,8 +187,14 @@ private:
 
     void uiError() {
         const auto message = currentException();
+        OutputDebugStringW(message.c_str());
         busy_ = false;
         snapshot_.reset();
+        if (setup_ && closing_) {
+            result_ = static_cast<int>(SetupResult::error);
+            window_.Close();
+            return;
+        }
         applyState();
         notice(message, InfoBarSeverity::Error);
     }
@@ -147,7 +205,7 @@ private:
     }
 
     void applyState() {
-        const bool ready = snapshot_.has_value() && !busy_ && !stopped_;
+        const bool ready = snapshot_.has_value() && !busy_ && !stopped_ && !closing_;
         const bool removal = requested_ == Operation::clearCredential;
         const bool compatible = snapshot_ && (requested_ == Operation::status || removal ||
             (requested_ == Operation::updateCredential) == snapshot_->credentialPresent);
@@ -159,7 +217,7 @@ private:
         submit_.IsEnabled(ready && compatible && (removal ? snapshot_->credentialPresent : !password_.Password().empty()));
         if (!snapshot_) {
             submit_.Content(box_value(hstring(busy_ ? L"Loading..." : L"Retry")));
-            submit_.IsEnabled(!busy_ && !stopped_);
+            submit_.IsEnabled(!busy_ && !stopped_ && !closing_);
             account_.Text(L"Windows account: not yet verified");
             status_.Text(busy_ ? L"Loading account information..." : L"Account information could not be verified. Choose Retry.");
             return;
@@ -174,7 +232,7 @@ private:
     }
 
     void refresh() {
-        if (busy_ || stopped_) return;
+        if (busy_ || stopped_ || closing_) return;
         busy_ = true;
         snapshot_.reset();
         notice_.IsOpen(false);
@@ -183,7 +241,7 @@ private:
     }
 
     void save() {
-        if (busy_ || stopped_ || !snapshot_) return;
+        if (busy_ || stopped_ || closing_ || !snapshot_) return;
         PasswordBuffer password;
         std::uint32_t bytes = 0;
         {
@@ -203,7 +261,7 @@ private:
     }
 
     void begin(Operation operation, SensitiveBytes request) {
-        if (busy_ || stopped_ || !snapshot_) return;
+        if (busy_ || stopped_ || closing_ || !snapshot_) return;
         busy_ = true;
         notice_.IsOpen(false);
         applyState();
@@ -211,7 +269,7 @@ private:
     }
 
     void confirmRemoval() {
-        if (busy_ || stopped_ || !snapshot_ || !snapshot_->credentialPresent) return;
+        if (busy_ || stopped_ || closing_ || !snapshot_ || !snapshot_->credentialPresent) return;
         busy_ = true;
         applyState();
         confirmation_ = ContentDialog{};
@@ -233,6 +291,7 @@ private:
             try {
                 self->confirmation_ = nullptr;
                 self->busy_ = false;
+                if (self->closing_) { self->close(); co_return; }
                 self->applyState();
                 if (!failure.empty()) self->notice(failure, InfoBarSeverity::Error);
                 else if (choice == ContentDialogResult::Primary) self->begin(Operation::clearCredential, SensitiveBytes{});
@@ -249,36 +308,56 @@ private:
         std::optional<StatusPayload> snapshot;
         std::wstring failure, message;
         bool ready = false;
+        bool cancelled = false;
         try {
-            auto status = readStatus();
-            if (operation != Operation::status) {
-                if (!expected || status.snapshotNonce != expected->snapshotNonce ||
-                    (operation == Operation::setCredential && status.credentialPresent) ||
-                    ((operation == Operation::updateCredential || operation == Operation::clearCredential) && !status.credentialPresent))
-                    throw std::runtime_error("The verified Windows identity or saved password state changed. Choose Retry; no change was submitted.");
-                if (cancellation()) co_return;
-                Packet response;
-                CallDiagnostics diagnostics;
-                if (!call(operation, std::move(request), response, 2000, &diagnostics) || response.result != Result::success)
-                    throw std::runtime_error("The service did not confirm the password change. Choose Retry to query its current state.");
-                message = operation == Operation::clearCredential ? L"The saved password copy has been removed."
-                    : L"Your encrypted password copy is saved. Windows has not yet verified that the password is correct.";
-                if (diagnostics.stage == CallStage::replyAcknowledgment)
-                    message += L" Reply acknowledgment failed (Win32 " + std::to_wstring(diagnostics.win32Error) + L").";
-                status = readStatus();
-            }
-            snapshot = std::move(status);
-            if (setup && snapshot->credentialMatches) {
-                if (cancellation()) co_return;
-                ready = true;
+            const auto shouldClose = [&] {
+                const auto self = weak.lock();
+                return !self || self->setupRequestedToClose();
+            };
+            cancelled = shouldClose();
+            if (!cancelled) {
+                auto status = readStatus();
+                cancelled = shouldClose();
+                if (!cancelled && operation != Operation::status) {
+                    if (!expected || status.snapshotNonce != expected->snapshotNonce ||
+                        (operation == Operation::setCredential && status.credentialPresent) ||
+                        ((operation == Operation::updateCredential || operation == Operation::clearCredential) && !status.credentialPresent))
+                        throw std::runtime_error("The verified Windows identity or saved password state changed. Choose Retry; no change was submitted.");
+                    if (cancellation()) co_return;
+                    cancelled = shouldClose();
+                    if (!cancelled) {
+                        Packet response;
+                        CallDiagnostics diagnostics;
+                        if (!call(operation, std::move(request), response, kPipeTransferLifetimeMs, &diagnostics) || response.result != Result::success)
+                            throw std::runtime_error("The service did not confirm the password change. Choose Retry to query its current state.");
+                        message = operation == Operation::clearCredential ? L"The saved password copy has been removed."
+                            : L"Your encrypted password copy is saved. Windows has not yet verified that the password is correct.";
+                        if (diagnostics.stage == CallStage::replyAcknowledgment)
+                            message += L" Reply acknowledgment failed (Win32 " + std::to_wstring(diagnostics.win32Error) + L").";
+                        status = readStatus();
+                    }
+                }
+                snapshot = std::move(status);
+                if (setup && !cancelled && !shouldClose() && snapshot->credentialMatches) {
+                    if (cancellation()) co_return;
+                    ready = true;
+                }
             }
         } catch (...) { failure = currentException(); snapshot.reset(); }
+        request.clear();
         if (cancellation()) co_return;
-        if (!dispatcher.TryEnqueue([weak, snapshot = std::move(snapshot), failure = std::move(failure), message = std::move(message), ready]() mutable {
+        if (!dispatcher.TryEnqueue([weak, snapshot = std::move(snapshot), failure = std::move(failure), message = std::move(message), ready, cancelled]() mutable {
             if (const auto self = weak.lock(); self && !self->stopped_) {
                 try {
                     self->busy_ = false;
                     self->snapshot_ = std::move(snapshot);
+                    if ((self->setup_ && cancelled) || self->setupRequestedToClose()) {
+                        if (!message.empty()) OutputDebugStringW(message.c_str());
+                        if (!failure.empty()) OutputDebugStringW(failure.c_str());
+                        if (!failure.empty()) self->result_ = static_cast<int>(SetupResult::error);
+                        self->close();
+                        return;
+                    }
                     self->applyState();
                     if (!failure.empty()) {
                         self->notice(message.empty() ? failure : message + L"\n" + failure, InfoBarSeverity::Error);
@@ -300,6 +379,7 @@ private:
     }
 
     bool setup_, busy_ = false, stopped_ = false, removalOpened_ = false;
+    std::atomic_bool closing_{false};
     Operation requested_;
     int result_ = static_cast<int>(SetupResult::cancelled);
     std::optional<StatusPayload> snapshot_;
@@ -311,18 +391,30 @@ private:
     InfoBar notice_{nullptr};
     ContentDialog confirmation_{nullptr};
     Windows::Foundation::IAsyncAction work_{nullptr};
-    event_token closedToken_{};
+    winrt::handle setupCancellation_;
+    Microsoft::UI::Dispatching::DispatcherQueueTimer cancellationTimer_{nullptr};
+    event_token closedToken_{}, closingToken_{}, cancellationToken_{};
 };
 }
 
-int unlock_windows::desktop_app::runSavedPassword(HINSTANCE, int, bool setup, saved_credential::Operation operation) {
+int unlock_windows::desktop_app::runSavedPassword(HINSTANCE, int, bool setup, saved_credential::Operation operation,
+                                                const std::wstring& setupCancelEvent) {
     bool uiStarted = false;
     try {
         if (!unlock_windows::enrollment::elevatedAdmin())
             throw std::runtime_error("Run the password manager as administrator on the physical console.");
+        winrt::handle cancellation;
+        if (setup) {
+            if (!validSetupCancelEvent(setupCancelEvent)) throw std::invalid_argument("Setup cancellation event required");
+            cancellation.attach(OpenEventW(SYNCHRONIZE, FALSE, setupCancelEvent.c_str()));
+            if (!cancellation) throw hresult_error(HRESULT_FROM_WIN32(GetLastError()));
+            const auto wait = WaitForSingleObject(cancellation.get(), 0);
+            if (wait == WAIT_OBJECT_0) return static_cast<int>(SetupResult::cancelled);
+            if (wait != WAIT_TIMEOUT) throw hresult_error(HRESULT_FROM_WIN32(GetLastError()));
+        }
         init_apartment(apartment_type::single_threaded);
         struct Apartment final { ~Apartment() { uninit_apartment(); } } apartment;
-        auto window = std::make_shared<PasswordWindow>(setup, operation);
+        auto window = std::make_shared<PasswordWindow>(setup, operation, std::move(cancellation));
         com_ptr<DesktopApplication> app;
         uiStarted = true;
         Application::Start([&](const auto&) {

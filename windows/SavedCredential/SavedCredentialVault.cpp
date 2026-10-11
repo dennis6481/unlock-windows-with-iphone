@@ -233,11 +233,6 @@ bool fileExists(const std::filesystem::path& file) {
 
 } // namespace
 
-bool sameIdentity(const Identity& left, const Identity& right) noexcept {
-    return left.sid == right.sid && left.qualifiedUserName == right.qualifiedUserName &&
-        IsEqualGUID(left.providerId, right.providerId);
-}
-
 Vault::Vault() {
     requireSystemContext();
     directory_ = programData() / kVaultDirectoryName;

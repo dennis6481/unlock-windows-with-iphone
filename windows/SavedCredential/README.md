@@ -14,13 +14,17 @@ This protection does not resist an administrator who obtains SYSTEM or a comprom
 
 `unlockEligibility` checks an existing physical-console token, SID, session and explicit locked state. An eligible LogonUI caller can create a request only when its captured identity, saved identity and registration agree. The service owns all request/grant deadlines; the [protocol](../../PROTOCOL.md#request-and-one-time-approval) specifies their lifetimes.
 
-IPC version **3** uses one pipe. Removed phone challenge, assertion and reload operations are rejected. Ordinary unlocked target-console clients read non-sensitive status; elevated clients manage passwords/bindings; only verified LogonUI can request unlock verification, receive a one-time offer or claim credentials. Process/pipe tokens, PID, session and expected LogonUI image are pinned and checked.
+IPC version **3** uses one pipe. Unsupported versions and operations are rejected. Ordinary unlocked target-console clients read non-sensitive status; elevated clients manage passwords/bindings; only verified LogonUI can request unlock verification, receive a one-time offer or claim credentials. Process/pipe tokens, PID, session and expected LogonUI image are pinned and checked.
+
+All pipe I/O is overlapped and cancellable. One absolute 2000 ms deadline covers each connected client's request, response and ACK; client calls share their `waitMs` deadline across all stages. STOP cancels pending I/O and waits for completion before releasing resources. Abnormal clients are disconnected; subsequent requests use the same single pipe instance.
 
 One MTA worker owns BLE and maintains the bound phone after native sign-in; IPC only validates, queues and reads status. Pending cleanup keeps the worker busy, but an idle retained connection does not. The shared [BLE operations](../Bluetooth/SystemBleSession.cpp) use Windows-cached service structure, verify unique system endpoints and pairing history, then perform new protected subscription/Uncached CCCD read/unsubscribe for every request. Missing/stale RSSI waits within the original deadline; fresh low signal fails. Communication and RSSI must still be within 3 seconds at claim.
 
 States distinguish idle, verifying, approved, failed, consumed and completed binding. Reasons distinguish pairing/association, protected operation, connection, RSSI, timeout, cancellation, storage and context failures. Request deadlines remain 30 seconds; no retry or callback extends them.
 
 `serviceDiagnostics` exposes the latest request's bounded verification trace to the verified unlocked target console user. Diagnostics records request IDs, watcher status/counts, pairing properties, GATT results, operation timings and failures. Cleanup failures preserve an earlier verification failure.
+
+`reportUnlockResult` accepts only the pinned claiming LogonUI process, nonce and current account/session/binding. Successful native authentication records claim-time RSSI and monotonic result time; approval/claim alone do not. `lastUnlockStatus` returns this optional non-sensitive summary to the unlocked target user. Memory-only history survives desktop reopening; service restart, account change, binding replacement/removal or password removal clears it. Threshold edits retain it; results never authorize another claim.
 
 Request completion clears evidence while retaining a valid connection. Disconnect invalidates evidence/structure and leaves Windows reconnection intent active; reconnection never approves a request. Logoff, account/binding change, suspend and service stop close the connection. Preparation errors are explicit; stable failures wait for an explicit request or changed context rather than retrying indefinitely.
 
@@ -29,7 +33,9 @@ The service consumes authorization before decrypting. CP rebuild, packing failur
 
 After the first native sign-in, choose **Start setup** on the installation result page or launch `--setup`. The elevated WinUI password window verifies the installed target account. Only a saved copy matching the complete verified identity permits skipping the password step. Saving a copy successfully enables binding on the ordinary Status page; cancellation and failure do not. For independent maintenance, open tray **Password…** and choose save, update or removal.
 
-`credentialSummary` returns the verified account and saved-copy state to the unlocked installation target's ordinary console session. It returns no password or snapshot nonce and creates no management snapshot or phone approval. The management pipe accepts local authenticated connections, but status/nonces and credential changes still require an administrator; phone-pipe operations remain unchanged.
+`credentialSummary` returns the verified account and saved-copy state to the unlocked installation target's ordinary console session. It returns no password or snapshot nonce and creates no management snapshot or authorization. The single pipe accepts local authenticated connections, but management status/nonces and credential changes still require an administrator.
+
+Tray Quit signals the current setup's random cancellation event. Its target user and SYSTEM can control the event; Administrators can only wait, including another administrator used for UAC. The password window clears input, blocks new submissions and waits for any submitted operation and sensitive buffers before closing. Saved data is retained; cancellation never continues to binding or invents a result for an unconfirmed operation. Independent password-management windows are unaffected.
 
 Before a console user token exists, `captureProvisioningIdentity` accepts only a real physical-console LogonUI caller and the installer-recorded target SID. It records system-provided identity metadata in memory and returns no password, snapshot nonce or phone grant.
 

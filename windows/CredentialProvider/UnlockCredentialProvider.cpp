@@ -713,6 +713,7 @@ public:
         *optionalStatusText = nullptr;
         *optionalStatusIcon = CPSI_WARNING;
         *response = CPGSR_NO_CREDENTIAL_NOT_FINISHED;
+        serializedClaim_.reset();
 
         const auto automaticApproval = std::exchange(automaticApproval_, std::nullopt);
 
@@ -875,22 +876,41 @@ public:
         serialization->clsidCredentialProvider = kUnlockCredentialProviderClsid;
         serialization->cbSerialization = size;
         serialization->rgbSerialization = packed;
+        serializedClaim_ = automaticApproval;
         *response = CPGSR_RETURN_CREDENTIAL_FINISHED;
         *optionalStatusIcon = CPSI_NONE;
         return S_OK;
     }
 
     HRESULT STDMETHODCALLTYPE ReportResult(
-        NTSTATUS,
-        NTSTATUS,
+        NTSTATUS status,
+        NTSTATUS substatus,
         LPWSTR* optionalStatusText,
         CREDENTIAL_PROVIDER_STATUS_ICON* optionalStatusIcon
     ) override {
-        if (optionalStatusText == nullptr || optionalStatusIcon == nullptr) {
-            return E_POINTER;
+        if (optionalStatusText) *optionalStatusText = nullptr;
+        if (optionalStatusIcon) *optionalStatusIcon = CPSI_NONE;
+        const auto claim = std::exchange(serializedClaim_, std::nullopt);
+        if (claim) {
+            try {
+                using namespace unlock_windows::saved_credential;
+                SensitiveBytes request;
+                Packet reply;
+                CallDiagnostics diagnostics;
+                if (!encodeUnlockResult({*claim, status, substatus}, request)) {
+                    logAutoSubmitError(L"native unlock result encoding", E_INVALIDARG);
+                } else if (!call(Operation::reportUnlockResult, std::move(request), reply,
+                                 kPipeTransferLifetimeMs, &diagnostics)) {
+                    logAutoSubmitError(callStageName(diagnostics.stage), HRESULT_FROM_WIN32(diagnostics.win32Error));
+                } else if (reply.result != Result::success) {
+                    logAutoSubmitError(L"native unlock result rejected", E_ACCESSDENIED);
+                }
+            } catch (const std::bad_alloc&) {
+                logAutoSubmitError(L"native unlock result allocation", E_OUTOFMEMORY);
+            } catch (...) {
+                logAutoSubmitError(L"native unlock result reporting", E_FAIL);
+            }
         }
-        *optionalStatusText = nullptr;
-        *optionalStatusIcon = CPSI_NONE;
         return S_OK;
     }
 
@@ -938,6 +958,7 @@ public:
         providerId_ = GUID{};
         consoleSessionId_ = 0xffffffff;
         automaticApproval_.reset();
+        serializedClaim_.reset();
         authenticationPending_ = false;
     }
 
@@ -959,6 +980,8 @@ private:
     DWORD consoleSessionId_ = 0xffffffff;
     std::optional<std::array<std::uint8_t,
         unlock_windows::saved_credential::kNonceSize>> automaticApproval_;
+    std::optional<std::array<std::uint8_t,
+        unlock_windows::saved_credential::kNonceSize>> serializedClaim_;
 };
 
 class UnlockCredentialProvider final : public ICredentialProvider,

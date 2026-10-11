@@ -7,7 +7,6 @@
 #include <optional>
 #include <string>
 #include <vector>
-#include <stdexcept>
 #include "../Bluetooth/SystemBleContract.h"
 
 namespace unlock_windows::system_ble {
@@ -16,10 +15,6 @@ inline constexpr wchar_t kEnrollmentDataDirectoryName[] = L"UnlockWindowsWithIPh
 inline constexpr wchar_t kEnrollmentFileName[] = L"enrollment.dat";
 inline constexpr wchar_t kEnrollmentPendingSuffix[] = L".pending-";
 inline constexpr wchar_t kEnrollmentWriterMutex[] = L"Global\\UnlockWindowsWithIPhone-EnrollmentWriter";
-
-struct RebindRequired final : std::runtime_error {
-    RebindRequired() : std::runtime_error("The previous registration requires explicit system rebinding") {}
-};
 
 class EnrollmentStore final {
 public:

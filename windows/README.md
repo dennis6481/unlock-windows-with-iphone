@@ -6,7 +6,7 @@ The Windows side contains four installed components: the desktop app, LocalSyste
 
 ## Compatibility
 
-- **Windows:** Windows 10 version 1809, build 17763, or later, including Windows 11. The minimum is based on API requirements and has not been tested on that build.
+- **Windows:** Windows 10 version 2004, build 19041, or later, including Windows 11. The minimum is defined in [ComponentFiles.h](ComponentFiles.h) and has not been tested on that build.
 - **Architecture:** Native x64 or ARM64; all components must match the OS architecture. ARM64 has not been tested on physical hardware. 32-bit x86 and ARM32 are not supported.
 - **Bluetooth:** The adapter and driver must support BLE Central, protected GATT and advertisement scanning.
 
@@ -94,16 +94,18 @@ Module guides: [SavedCredential](SavedCredential/README.md), [CredentialProvider
 | `--saved-password` | Temporary elevated password-management window. |
 | `--saved-password --save`, `--saved-password --update`, `--saved-password --remove` | Internal operation-specific elevated WinUI password window. |
 | `--setup` | Ordinary-user setup request handled by the existing single-instance tray. |
-| `--saved-password --setup` | Internal elevated password step; an explicit readiness result permits the ordinary tray to continue on Status. |
+| `--saved-password --setup --cancel-event <event>` | Internal elevated password step with a per-setup cancellation event; an explicit readiness result permits the ordinary tray to continue on Status. |
 | `--binding-helper <operation> <encoded-request>` | Internal temporary elevated service-management helper; not a public command. |
 
-The main WinUI window and tray retain the desktop STA. A desktop worker handles helpers/status; the LocalSystem service's single MTA worker owns BLE validation. Closing the main window hides it; Quit exits the desktop app without disabling lock-screen verification. Role arguments do not grant service permission.
+The main WinUI window and tray retain the desktop STA. A desktop worker handles helpers/status; the LocalSystem service's single MTA worker owns BLE validation. Closing the main window hides it; Quit cancels the current password setup, waits for its submitted operation and window to finish, then exits without disabling lock-screen verification. A window launched after a pending UAC prompt closes through cancellation. Independent password windows retain their own lifecycle. Role arguments do not grant service permission.
 
 Navigation remains **Status**, **Password**, **Diagnostics**, with **About** at the bottom. Switching pages uses the native WinUI upward entrance/fade transition. Password management, notifications and update checks retain their existing roles. All pages share an outer scroller for headers, actions and content, with per-page positions. Diagnostics preserves text selection/scrolling and no longer embeds BLE probe code.
 
 **Status** shows pairing guidance and a paired-device list when no iPhone is bound. Open Windows Bluetooth settings to pair, return, select a device and click **Bind selected device**. Binding/removal require confirmation and UAC. A bound iPhone keeps its existing status layout with removal only; remove it before binding another. The WinUI removal confirmation defaults to Cancel; successful removal returns to device selection and keeps Windows pairing and the saved password. Paired Classic/BLE entries share one row per valid ContainerId, showing only the device name. There is no separate binding window.
 
-The main window uses system Mica and theme colors across the WinUI title bar, sidebar and page background; Windows 10 uses the framework's solid backdrop. The minimum window width is 800 effective pixels. Pages have no outer panel and fill the available width up to a centered 800 effective pixels. The sidebar uses native Auto layout without a manual toggle button. **Status** uses icon cards for **Last approval**, **Signal threshold** and **Remove bound iPhone**. Devices update automatically and on activation. Dragging edits a pending value; the right-side **Save** requests UAC. Refusal/failure restores the saved value and shows the reason. **Initial signal threshold** uses the same range/default, with binding below it. Only confirmation dialogs show Cancel; app-shutdown cancellation remains. No hardware acceptance is claimed.
+The main window uses system Mica and theme colors across the WinUI title bar, sidebar and page background; Windows 10 uses the framework's solid backdrop. The minimum window width is 800 effective pixels. Pages have no outer panel and fill the available width up to a centered 800 effective pixels. The sidebar uses native Auto layout without a manual toggle button. **Status** uses icon cards for **Last Unlock**, **Signal threshold** and **Remove bound iPhone**. Devices update automatically and on activation. Dragging edits a pending value; the right-side **Save** requests UAC. Refusal/failure restores the saved value and shows the reason. **Initial signal threshold** uses the same range/default, with binding below it. Only confirmation dialogs show Cancel; app-shutdown cancellation remains. No hardware acceptance is claimed.
+
+**Last Unlock** stays right-aligned, for example `2 min ago / -58 dBm`, and updates after native Windows authentication succeeds. RSSI comes from the consumed claim, not a later scan. No history displays `—`; unbound phones hide the card and query failures remain explicit errors. Records survive desktop reopening but reset on service/PC restart, account change, binding replacement/removal or password removal. Threshold changes retain history. Compiled for x64 Release on 11 Oct 2026; runtime/hardware acceptance remains pending.
 ## Tag builds
 
 Windows installers are automatically built and published when a version tag is pushed. CI prepares build resources and invokes the MSBuild solution through `WindowsBuild.ps1`, without requiring GNU Make. See the [Release workflow](../.github/workflows/release.yml).

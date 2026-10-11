@@ -3,6 +3,7 @@
 #include <initguid.h>
 #include "SavedCredentialIpc.h"
 #include "SavedCredentialVault.h"
+#include "LastUnlock.h"
 #include "EnrollmentStore.h"
 #include "../Bluetooth/SystemBleSession.h"
 #include "../Bluetooth/PresenceAuthorization.h"
@@ -41,18 +42,18 @@ namespace {
 using namespace unlock_windows::saved_credential;
 constexpr ULONGLONG kSnapshotLifetimeMs = 5 * 60 * 1000;
 
-constexpr ACCESS_MASK kClientPipeRights = 0x0012019B;
-
 std::atomic_bool gStopping{false};
 std::atomic<ULONGLONG> gConsoleGeneration{0};
 std::atomic<ULONGLONG> gIdentityGeneration{0};
+std::atomic<ULONGLONG> gUnlockHistoryGeneration{0};
 std::atomic<ULONGLONG> gConnectionGeneration{0};
 std::atomic_bool gSuspended{false};
 std::atomic<DWORD> gObservedConsoleSession{0xffffffff};
 std::atomic_bool gPipeFailed{false};
 SERVICE_STATUS_HANDLE gStatusHandle = nullptr;
 SERVICE_STATUS gStatus{};
-void wakePipe(const wchar_t* name);
+HANDLE gPipeStopEvent = nullptr;
+void stopPipe();
 
 void fail(const char* message) { throw std::runtime_error(message); }
 
@@ -354,8 +355,11 @@ public:
         response.operation = request.operation;
         response.result = Result::rejected;
         try {
-            const auto client = inspectClient(pipe);
-            if (requiresLogonUi(request.operation) && !client.logonUi) return response;
+            auto client = inspectClient(pipe);
+            if (requiresLogonUi(request.operation) && !client.logonUi) {
+                if (request.operation == Operation::reportUnlockResult) appendDiagnostic("unlock result rejected: caller is not LogonUI");
+                return response;
+            }
             if (request.operation == Operation::captureProvisioningIdentity) {
                 const DWORD session = WTSGetActiveConsoleSessionId();
                 if (!client.logonUi || session == 0xffffffff || client.session != session || removing_)
@@ -383,9 +387,41 @@ public:
                 snapshot_.reset();
             }
             gObservedConsoleSession = console.session;
+            if (unlockHistory_.pending() || unlockHistory_.summary())
+                refreshUnlockHistory(console, bindingSummary(), vault_.storedIdentity());
             expireRequest(console);
             if (client.session != console.session) return response;
             if (removing_ && request.operation != Operation::clearForRemoval) return response;
+            if (request.operation == Operation::reportUnlockResult) {
+                UnlockResult result;
+                if (!decodeUnlockResult(request.payload.value.data(), request.payload.value.size(), result)) {
+                    appendDiagnostic("unlock result rejected: malformed payload");
+                    response.result = Result::invalidRequest;
+                    return response;
+                }
+                const auto processState = unlockProcess_.value ? WaitForSingleObject(unlockProcess_.value, 0) : WAIT_OBJECT_0;
+                if (processState == WAIT_FAILED) fail("unlock result process wait failed");
+                const bool processAlive = processState == WAIT_TIMEOUT;
+                if (!unlockHistory_.report(result, client.pid, client.logonUi, processAlive,
+                                           consoleIdentity(console), GetTickCount64())) {
+                    appendDiagnostic("unlock result rejected: no matching pending claim/process/context");
+                    if (!unlockHistory_.pending()) unlockProcess_ = Handle{};
+                    return response;
+                }
+                unlockProcess_ = Handle{};
+                appendDiagnostic("native unlock result status=" + std::to_string(result.status) +
+                    " substatus=" + std::to_string(result.substatus));
+                response.result = Result::success;
+                return response;
+            }
+            if (request.operation == Operation::lastUnlockStatus) {
+                if (client.logonUi || console.locked || client.userSid != console.sid ||
+                    !request.payload.value.empty() || !verifiedManagementIdentity(console)) return response;
+                refreshUnlockHistory(console, bindingSummary(), provisioning_->identity);
+                if (!encodeLastUnlock(unlockHistory_.summary(), response.payload)) fail("last unlock encoding failed");
+                response.result = Result::success;
+                return response;
+            }
             if (request.operation == Operation::unlockEligibility) {
                 Identity identity;
                 if (!client.logonUi || !console.locked ||
@@ -415,6 +451,7 @@ public:
                     auto cancellation = openCancellation(removal.cancelEvent);
                     if (WaitForSingleObject(cancellation.value, 0) != WAIT_TIMEOUT || !verifiedManagementIdentity(console)) return response;
                     enrollmentStore_.remove();
+                    clearUnlockHistory();
                     ++gConnectionGeneration;
                     wake_.notify_one();
                     response.result = Result::success;
@@ -560,6 +597,8 @@ public:
                 vault_.save(snapshot_->identity,
                     request.payload.value.data() + kNonceSize + sizeof(passwordBytes),
                     passwordBytes, request.operation == Operation::updateCredential);
+                unlockHistory_.cancelPending();
+                unlockProcess_ = Handle{};
                 ++gConnectionGeneration;
                 wake_.notify_one();
                 grant_.reset();
@@ -567,6 +606,7 @@ public:
             } else if (request.operation == Operation::clearCredential) {
                 if (!client.admin || console.locked || !request.payload.value.empty()) return response;
                 vault_.clear();
+                clearUnlockHistory();
                 ++gConnectionGeneration;
                 wake_.notify_one();
                 grant_.reset();
@@ -574,6 +614,7 @@ public:
             } else if (request.operation == Operation::clearForRemoval) {
                 if (!client.admin || console.locked || !request.payload.value.empty()) return response;
                 vault_.clear();
+                clearUnlockHistory();
                 grant_.reset();
                 snapshot_.reset();
                 provisioning_.reset();
@@ -619,7 +660,11 @@ public:
                     latest.logonId.LowPart == task_->logonId.LowPart && latest.logonId.HighPart == task_->logonId.HighPart &&
                     grant_->consoleGeneration == gConsoleGeneration.load() && !task_->cancelled &&
                     task_->change.expected == bindingSummary();
-                if (!grant_->authorization.consume(contextMatches, task_->connection->evidence(), task_->started,
+                const auto evidence = task_->connection->evidence();
+                const auto claimedNonce = grant_->nonce;
+                UnlockContext context{identity, console.session, console.logonId, task_->change.candidate,
+                    gUnlockHistoryGeneration.load(), task_->identityGeneration};
+                if (!grant_->authorization.consume(contextMatches, evidence, task_->started,
                     GetTickCount64(), task_->status.deadline, task_->change.candidate.threshold)) {
                     rejectTask(AuthenticationFailure::evidenceExpired);
                     return response;
@@ -632,6 +677,8 @@ public:
                 }
                 if (task_) task_->cancelled = true;
                 response.payload = vault_.release(identity);
+                unlockProcess_ = std::move(client.process);
+                unlockHistory_.beginClaim(std::move(context), claimedNonce, client.pid, evidence.rssi);
             } else {
                 response.result = Result::invalidRequest;
                 return response;
@@ -650,6 +697,29 @@ public:
     }
 
 private:
+    void clearUnlockHistory() {
+        unlockHistory_.clear();
+        unlockProcess_ = Handle{};
+    }
+
+    void refreshUnlockHistory(const Console& console, const BindingSummary& binding,
+                             const std::optional<Identity>& stored) {
+        if (!stored || stored->sid != console.sid || binding.state != unlock_windows::system_ble::BindingState::bound) {
+            clearUnlockHistory();
+            return;
+        }
+        unlockHistory_.refreshContext({*stored, console.session, console.logonId, binding.record,
+            gUnlockHistoryGeneration.load(), gIdentityGeneration.load()});
+        if (unlockHistory_.pending()) {
+            const auto processState = WaitForSingleObject(unlockProcess_.value, 0);
+            if (processState == WAIT_FAILED) fail("pending unlock process wait failed");
+            if (processState != WAIT_TIMEOUT) {
+                unlockHistory_.cancelPending();
+                unlockProcess_ = Handle{};
+            }
+        } else unlockProcess_ = Handle{};
+    }
+
     Handle openCancellation(const std::wstring& name) {
         if (!name.starts_with(kBindingCancelPrefix)) fail("Binding cancellation event required");
         Handle event(OpenEventW(SYNCHRONIZE, FALSE, name.c_str()));
@@ -669,12 +739,8 @@ private:
 
     BindingSummary bindingSummary() const {
         BindingSummary summary;
-        try {
-            auto record = enrollmentStore_.load();
-            if (record) { summary.state = unlock_windows::system_ble::BindingState::bound; summary.record = std::move(*record); }
-        } catch (const unlock_windows::system_ble::RebindRequired&) {
-            summary.state = unlock_windows::system_ble::BindingState::rebindRequired;
-        }
+        auto record = enrollmentStore_.load();
+        if (record) { summary.state = unlock_windows::system_ble::BindingState::bound; summary.record = std::move(*record); }
         return summary;
     }
 
@@ -754,6 +820,8 @@ private:
         else { authenticationIdentity_ = identity; authenticationStatus_ = task->status; }
         task_ = std::move(task);
         grant_.reset();
+        unlockHistory_.cancelPending();
+        unlockProcess_ = Handle{};
         wake_.notify_one();
     }
 
@@ -809,6 +877,7 @@ private:
                                 if (binding.state == unlock_windows::system_ble::BindingState::bound && stored) {
                                     console = currentConsole();
                                     gObservedConsoleSession = console->session;
+                                    refreshUnlockHistory(*console, binding, stored);
                                     std::wstring targetSid;
                                     winrt::check_hresult(unlock::components::readSetupTargetSid(targetSid));
                                     if (console->sid == targetSid && binding.record.accountSid == targetSid && stored->sid == targetSid) {
@@ -907,6 +976,7 @@ private:
                                     !verifiedManagementIdentity(latest) || !sameIdentity(provisioning_->identity, task->identity))
                                     fail("Binding invalidated before atomic commit");
                             });
+                            clearUnlockHistory();
                             managementStatus_.stage = AuthenticationStage::completed;
                             appendDiagnostic("binding request=" + task->status.requestId + " COMPLETED binding saved");
                             task->cancelled = true;
@@ -975,7 +1045,7 @@ private:
             OutputDebugStringW(winrt::to_message().c_str());
             gPipeFailed = true;
             gStopping = true;
-            wakePipe(kPipeName);
+            stopPipe();
         }
     }
     bool verifiedManagementIdentity(const Console& console) {
@@ -1019,6 +1089,8 @@ private:
     std::optional<Snapshot> snapshot_;
     std::optional<ProvisioningIdentity> provisioning_;
     std::optional<Grant> grant_;
+    LastUnlockHistory unlockHistory_;
+    Handle unlockProcess_;
     std::shared_ptr<BleTask> task_;
     AuthenticationStatus managementStatus_;
     std::string diagnostic_;
@@ -1042,17 +1114,19 @@ void reportServiceState(const DWORD state, const DWORD error = NO_ERROR) {
     SetServiceStatus(gStatusHandle, &gStatus);
 }
 
-void wakePipe(const wchar_t* const name) {
-    const HANDLE wake = CreateFileW(name, kClientPipeRights, 0, nullptr,
-        OPEN_EXISTING, SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr);
-    if (wake != INVALID_HANDLE_VALUE) CloseHandle(wake);
+void stopPipe() {
+    if (!SetEvent(gPipeStopEvent)) {
+        gPipeFailed = true;
+        const auto message = L"saved credential pipe stop event failed; win32=" + std::to_wstring(GetLastError());
+        OutputDebugStringW(message.c_str());
+    }
 }
 
 DWORD WINAPI serviceControl(const DWORD control, const DWORD eventType, void* eventData, void*) {
     if (control == SERVICE_CONTROL_STOP) {
         gStopping = true;
         reportServiceState(SERVICE_STOP_PENDING);
-        wakePipe(kPipeName);
+        stopPipe();
 
         return NO_ERROR;
     }
@@ -1073,7 +1147,10 @@ DWORD WINAPI serviceControl(const DWORD control, const DWORD eventType, void* ev
             eventType == WTS_CONSOLE_DISCONNECT || eventType == WTS_REMOTE_DISCONNECT)) {
             ++gConsoleGeneration;
             if (eventType != WTS_SESSION_UNLOCK) ++gIdentityGeneration;
-            if (eventType != WTS_SESSION_LOCK && eventType != WTS_SESSION_UNLOCK) ++gConnectionGeneration;
+            if (eventType != WTS_SESSION_LOCK && eventType != WTS_SESSION_UNLOCK) {
+                ++gConnectionGeneration;
+                ++gUnlockHistoryGeneration;
+            }
         }
         return NO_ERROR;
     }
@@ -1081,31 +1158,46 @@ DWORD WINAPI serviceControl(const DWORD control, const DWORD eventType, void* ev
 }
 
 void servePipe(const HANDLE pipe, Handler& handler) {
+    const auto reportIoFailure = [](const wchar_t* stage) {
+        const auto message = std::wstring(L"saved credential pipe ") + stage + L" failed; win32=" +
+            std::to_wstring(GetLastError()) + L"\n";
+        OutputDebugStringW(message.c_str());
+    };
     while (!gStopping) {
-        const bool connected = ConnectNamedPipe(pipe, nullptr) ||
-            GetLastError() == ERROR_PIPE_CONNECTED;
-        if (!connected) {
+        if (!connectPipe(pipe, gPipeStopEvent)) {
+            const DWORD error = GetLastError();
+            reportIoFailure(L"connect");
+            if (!gStopping && (error == ERROR_NO_DATA || error == ERROR_BROKEN_PIPE || error == ERROR_PIPE_NOT_CONNECTED)) {
+                if (!DisconnectNamedPipe(pipe) && GetLastError() != ERROR_PIPE_NOT_CONNECTED)
+                    fail("saved credential abandoned connection disconnect failed");
+                continue;
+            }
             if (!gStopping) gPipeFailed = true;
             gStopping = true;
-
             return;
         }
+        const PipeIoContext context{GetTickCount64() + kPipeTransferLifetimeMs, gPipeStopEvent};
         if (!gStopping) {
             Packet request;
-            if (readPacket(pipe, request) && request.result == Result::success) {
+            if (!readPacket(pipe, request, context)) {
+                reportIoFailure(L"request read");
+            } else if (request.result != Result::success) {
+                SetLastError(ERROR_INVALID_DATA);
+                reportIoFailure(L"request validation");
+            } else if (!gStopping) {
                 auto response = handler.process(pipe, request);
-                if (!writePacket(pipe, response)) {
-                    OutputDebugStringW(L"saved credential response write failed");
-                } else if (!awaitReplyAcknowledgment(pipe, request.operation, 2000)) {
-                    const std::wstring message = L"saved credential reply acknowledgment failed; win32=" +
-                        std::to_wstring(GetLastError());
-                    OutputDebugStringW(message.c_str());
+                if (!writePacket(pipe, response, context)) {
+                    reportIoFailure(L"response write");
+                } else if (!awaitReplyAcknowledgment(pipe, request.operation, context)) {
+                    reportIoFailure(L"reply acknowledgment");
                 }
-            } else {
-                OutputDebugStringW(L"saved credential request read failed");
             }
         }
-        DisconnectNamedPipe(pipe);
+        if (!DisconnectNamedPipe(pipe)) {
+            const DWORD error = GetLastError();
+            reportIoFailure(L"disconnect");
+            if (error != ERROR_PIPE_NOT_CONNECTED) fail("saved credential pipe disconnect failed");
+        }
     }
 }
 
@@ -1114,24 +1206,26 @@ void WINAPI serviceMain(DWORD, LPWSTR*) {
     if (gStatusHandle == nullptr) return;
     reportServiceState(SERVICE_START_PENDING);
     try {
-        Handler handler;
-        PSECURITY_DESCRIPTOR descriptor = nullptr;
-        if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
-                L"D:P(A;;GA;;;SY)(A;;0x0012019B;;;AU)", SDDL_REVISION_1,
-                &descriptor, nullptr)) fail("saved credential pipe ACL creation failed");
-        SECURITY_ATTRIBUTES attributes{};
-        attributes.nLength = sizeof(attributes);
-        attributes.lpSecurityDescriptor = descriptor;
-        const HANDLE rawPipe = CreateNamedPipeW(kPipeName,
-            PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
-            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
-            1, kMaxPacket + 16, kMaxPacket + 16, 0, &attributes);
-        LocalFree(descriptor);
-        Handle pipe(rawPipe);
-        if (pipe.value == INVALID_HANDLE_VALUE) fail("saved credential pipe creation failed");
-        reportServiceState(SERVICE_RUNNING);
-        servePipe(pipe.value, handler);
-        gStopping = true;
+        {
+            Handler handler;
+            PSECURITY_DESCRIPTOR descriptor = nullptr;
+            if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                    L"D:P(A;;GA;;;SY)(A;;0x0012019B;;;AU)", SDDL_REVISION_1,
+                    &descriptor, nullptr)) fail("saved credential pipe ACL creation failed");
+            SECURITY_ATTRIBUTES attributes{};
+            attributes.nLength = sizeof(attributes);
+            attributes.lpSecurityDescriptor = descriptor;
+            const HANDLE rawPipe = CreateNamedPipeW(kPipeName,
+                PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE | FILE_FLAG_OVERLAPPED,
+                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+                1, kMaxPacket + 16, kMaxPacket + 16, 0, &attributes);
+            LocalFree(descriptor);
+            Handle pipe(rawPipe);
+            if (pipe.value == INVALID_HANDLE_VALUE) fail("saved credential pipe creation failed");
+            reportServiceState(SERVICE_RUNNING);
+            servePipe(pipe.value, handler);
+            gStopping = true;
+        }
         reportServiceState(SERVICE_STOPPED,
             gPipeFailed.load() ? ERROR_SERVICE_SPECIFIC_ERROR : NO_ERROR);
     } catch (...) {
@@ -1143,6 +1237,13 @@ void WINAPI serviceMain(DWORD, LPWSTR*) {
 } // namespace
 
 int wmain() {
+    Handle stopEvent(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    if (!stopEvent.value) {
+        const auto message = L"saved credential pipe stop event creation failed; win32=" + std::to_wstring(GetLastError());
+        OutputDebugStringW(message.c_str());
+        return 1;
+    }
+    gPipeStopEvent = stopEvent.value;
     SERVICE_TABLE_ENTRYW table[] = {{const_cast<LPWSTR>(kServiceName), serviceMain}, {nullptr, nullptr}};
     return StartServiceCtrlDispatcherW(table) ? 0 : 1;
 }

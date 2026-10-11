@@ -20,7 +20,7 @@ struct ControllerState final {
     std::vector<DesktopNotice> notices;
     std::wstring diagnostics, error, serviceDiagnostic;
     std::function<bool()> notify;
-    winrt::handle cancellation;
+    winrt::handle setupCancellation;
 
     void record(const std::wstring& value, bool failure = false) {
         OutputDebugStringW((value + L"\n").c_str());
@@ -41,7 +41,7 @@ struct ControllerState final {
             std::wstring serviceMessage;
             Packet response;
             CallDiagnostics callDiagnostics;
-            if (!call(Operation::serviceDiagnostics, SensitiveBytes{}, response, 2000, &callDiagnostics)) {
+            if (!call(Operation::serviceDiagnostics, SensitiveBytes{}, response, kPipeTransferLifetimeMs, &callDiagnostics)) {
                 serviceMessage = L"Service diagnostics query failed (Win32 " + std::to_wstring(callDiagnostics.win32Error) +
                     L"). Ensure the installed service supports serviceDiagnostics.";
             } else if (response.result != Result::success) {
@@ -68,13 +68,29 @@ struct ControllerState final {
             try {
                 const auto binding = enrollment::readBinding();
                 status.binding = binding;
-                status.paired = binding.state == system_ble::BindingState::bound;
                 status.status = binding.state == system_ble::BindingState::bound ? L"iPhone bound" :
-                    binding.state == system_ble::BindingState::rebindRequired ? L"Previous registration requires rebinding" : L"Bind an iPhone";
-                status.connection = L"The service checks presence when you click Unlock.";
+                    L"Bind an iPhone";
             } catch (const enrollment::BindingStatusRejected&) {
                 if (lockedDuringQuery()) return;
                 throw;
+            }
+            if (status.binding->state == system_ble::BindingState::bound) {
+                try {
+                    Packet history;
+                    CallDiagnostics diagnostics;
+                    if (!call(Operation::lastUnlockStatus, SensitiveBytes{}, history, kPipeTransferLifetimeMs, &diagnostics))
+                        throw std::runtime_error("Last unlock query failed at " +
+                            winrt::to_string(callStageName(diagnostics.stage)) + " (Win32 " +
+                            std::to_string(diagnostics.win32Error) + ").");
+                    if (history.result != Result::success) {
+                        if (history.result == Result::rejected && lockedDuringQuery()) return;
+                        throw std::runtime_error("Last unlock query rejected (result " +
+                            std::to_string(static_cast<unsigned>(history.result)) + ").");
+                    }
+                    if (!decodeLastUnlock(history.payload.value.data(), history.payload.value.size(), status.lastUnlock) ||
+                        (status.lastUnlock && status.lastUnlock->completedAt > GetTickCount64()))
+                        throw std::runtime_error("Last unlock reply is invalid.");
+                } catch (...) { status.lastUnlock.reset(); status.error = winrt::to_message(); }
             }
         } catch (...) { status.error = winrt::to_message(); status.status = L"Binding status unavailable"; }
         {
@@ -99,7 +115,26 @@ struct ControllerState final {
         if (target.locked || target.sid != system_ble::EnrollmentStore::currentUserSid() || enrollment::elevatedAdmin())
             throw std::runtime_error("Use the ordinary target user's unlocked physical console");
         if (command == TrayCommand::continueSetup) {
-            const auto result = enrollment::launchHelper(std::wstring(kSavedPasswordRole) + L" " + kSetupRole, true);
+            std::wstring eventName;
+            auto cancellation = enrollment::createSetupCancellation(target.sid, eventName);
+            {
+                std::lock_guard lock(mutex);
+                if (stopping) return;
+                setupCancellation = std::move(cancellation);
+            }
+            DWORD result = 0;
+            try {
+                result = enrollment::launchHelper(std::wstring(kSavedPasswordRole) + L" " + kSetupRole +
+                    L" " + kSetupCancelArgument + L" \"" + eventName + L"\"");
+            } catch (const winrt::hresult_error& failure) {
+                { std::lock_guard lock(mutex); setupCancellation.close(); }
+                if (failure.code() == HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
+                    record(L"Setup elevation cancelled");
+                    return;
+                }
+                throw;
+            }
+            { std::lock_guard lock(mutex); setupCancellation.close(); }
             if (result == static_cast<DWORD>(SetupResult::cancelled) || stopRequested()) return;
             if (result != static_cast<DWORD>(SetupResult::credentialReady)) throw std::runtime_error("Saving the password did not complete");
             const auto current = enrollment::queryConsole();
@@ -116,7 +151,7 @@ struct ControllerState final {
 };
 
 DesktopController::DesktopController(std::function<bool()> wake) : state_(std::make_shared<ControllerState>()) { state_->notify = std::move(wake); }
-void DesktopController::start(HINSTANCE) {
+void DesktopController::start() {
     thread_ = std::thread([state = state_] {
         try {
             winrt::init_apartment(winrt::apartment_type::multi_threaded);
@@ -133,9 +168,13 @@ void DesktopController::start(HINSTANCE) {
                 }
                 state->publish();
                 try { state->execute(command); }
-                catch (...) { state->notice(std::wstring(winrt::to_message())); }
+                catch (...) {
+                    const auto message = std::wstring(winrt::to_message());
+                    if (state->stopRequested()) state->record(message, true);
+                    else state->notice(message);
+                }
                 { std::lock_guard lock(state->mutex); state->busy = false; }
-                state->publish();
+                if (!state->stopRequested()) state->publish();
             }
         } catch (...) {
             state->notice(std::wstring(winrt::to_message()));
@@ -154,7 +193,10 @@ bool DesktopController::command(TrayCommand command) {
 void DesktopController::requestStop() {
     std::lock_guard lock(state_->mutex);
     state_->stopping = true; state_->commands.clear();
-    if (state_->cancellation && !SetEvent(state_->cancellation.get())) OutputDebugStringW(L"Desktop binding cancellation failed\n");
+    if (state_->setupCancellation && !SetEvent(state_->setupCancellation.get())) {
+        const auto message = L"Desktop setup cancellation failed; win32=" + std::to_wstring(GetLastError()) + L"\n";
+        OutputDebugStringW(message.c_str());
+    }
     state_->wake.notify_one();
 }
 DesktopUpdate DesktopController::takeUpdate() {

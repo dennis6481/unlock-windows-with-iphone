@@ -3,10 +3,8 @@
 #include "UnlockCrypto.h"
 #include <ntstatus.h>
 
-#include <cstring>
 #include <limits>
 #include <vector>
-#include <utility>
 
 namespace unlock_windows::protocol {
 namespace {

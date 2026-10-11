@@ -137,7 +137,7 @@ Windows::Foundation::IAsyncAction PasswordPage::query(weak_ref<PasswordPage> wea
     try {
         Packet response;
         CallDiagnostics diagnostics;
-        if (!call(Operation::credentialSummary, SensitiveBytes{}, response, 2000, &diagnostics))
+        if (!call(Operation::credentialSummary, SensitiveBytes{}, response, kPipeTransferLifetimeMs, &diagnostics))
             failure = L"Saved password service is unavailable: " + std::wstring(callStageName(diagnostics.stage)) +
                 L" (Win32 " + std::to_wstring(diagnostics.win32Error) + L"). Choose Retry to check again.";
         else if (response.result != Result::success)

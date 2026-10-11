@@ -21,7 +21,7 @@ struct DesktopUpdate final {
 class DesktopController final {
 public:
     explicit DesktopController(std::function<bool()> wake);
-    void start(HINSTANCE instance);
+    void start();
     bool command(TrayCommand command);
     void requestStop();
     DesktopUpdate takeUpdate();

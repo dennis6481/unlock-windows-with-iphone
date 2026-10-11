@@ -15,12 +15,12 @@
 #include <winrt/Windows.UI.Xaml.Interop.h>
 #include <winrt/Microsoft.UI.Windowing.h>
 #include <winrt/Microsoft.UI.Xaml.h>
-#include <winrt/Microsoft.UI.Xaml.Data.h>
 #include "Pages/AboutPage.xaml.h"
 #include <winrt/Microsoft.UI.Xaml.Controls.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Microsoft.UI.Xaml.Markup.h>
 #include <winrt/Microsoft.UI.Xaml.Media.h>
+#include <winrt/Microsoft.UI.Xaml.Media.Animation.h>
 #include <winrt/UnlockDesktop.h>
 #include <utility>
 #include <array>
@@ -52,7 +52,7 @@ NavigationViewItem navigationItem(DashboardPage page, const wchar_t* label, cons
     NavigationViewItem item;
     item.Content(box_value(hstring(label)));
     item.Tag(box_value(static_cast<std::int32_t>(page)));
-    item.Icon(icon(glyph));
+    item.Icon(icon(glyph, 24));
     return item;
 }
 
@@ -88,7 +88,7 @@ private:
         if (message == WM_GETMINMAXINFO) {
             const auto dpi = GetDpiForWindow(window);
             auto* bounds = reinterpret_cast<MINMAXINFO*>(lparam);
-            bounds->ptMinTrackSize = {MulDiv(720, dpi, 96), MulDiv(520, dpi, 96)};
+            bounds->ptMinTrackSize = {MulDiv(800, dpi, 96), MulDiv(520, dpi, 96)};
             return 0;
         }
         return DefSubclassProc(window, message, wparam, lparam);
@@ -97,7 +97,7 @@ private:
     template<typename PageType>
     PageType navigateTo() {
         const auto type = xaml_typename<PageType>();
-        if (!frame_.Navigate(type))
+        if (!frame_.Navigate(type, nullptr, Media::Animation::EntranceNavigationTransitionInfo{}))
             throw hresult_error(E_FAIL, L"Failed to navigate to " + type.Name);
         return frame_.Content().as<PageType>();
     }
@@ -125,21 +125,16 @@ private:
 
         nav_ = XamlReader::Load(LR"(<NavigationView
             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+            xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
             Background="Transparent">
             <NavigationView.Resources>
-                <ResourceDictionary>
-                    <ResourceDictionary.ThemeDictionaries>
-                        <ResourceDictionary x:Key="Default" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-                            <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="Transparent"/>
-                        </ResourceDictionary>
-                        <ResourceDictionary x:Key="Light" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-                            <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="Transparent"/>
-                        </ResourceDictionary>
-                    </ResourceDictionary.ThemeDictionaries>
-                </ResourceDictionary>
+                <SolidColorBrush x:Key="NavigationViewContentBackground" Color="Transparent"/>
+                <Thickness x:Key="NavigationViewContentGridBorderThickness">0</Thickness>
+                <CornerRadius x:Key="NavigationViewContentGridCornerRadius">0</CornerRadius>
             </NavigationView.Resources>
         </NavigationView>)").as<NavigationView>();
         nav_.PaneDisplayMode(NavigationViewPaneDisplayMode::Auto);
+        nav_.IsPaneToggleButtonVisible(false);
         nav_.OpenPaneLength(210);
         nav_.IsBackButtonVisible(NavigationViewBackButtonVisible::Collapsed);
         nav_.IsSettingsVisible(false);
@@ -155,7 +150,7 @@ private:
         scroll_ = ScrollViewer{};
         scroll_.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);
         scroll_.HorizontalScrollBarVisibility(ScrollBarVisibility::Disabled);
-        scroll_.HorizontalContentAlignment(HorizontalAlignment::Left);
+        scroll_.HorizontalContentAlignment(HorizontalAlignment::Stretch);
         scroll_.VerticalContentAlignment(VerticalAlignment::Top);
         root_ = Grid{};
         root_.MaxWidth(800);
@@ -173,19 +168,16 @@ private:
         root_.Children().Append(title_);
 
         frame_ = Frame{};
+        Media::Animation::TransitionCollection transitions;
+        transitions.Append(Media::Animation::NavigationThemeTransition{});
+        frame_.ContentTransitions(transitions);
         frame_.IsNavigationStackEnabled(false);
         Grid::SetRow(frame_, 1);
         root_.Children().Append(frame_);
 
-        Border viewportHost;
-        viewportHost.HorizontalAlignment(HorizontalAlignment::Left);
-        Data::Binding viewportWidth;
-        viewportWidth.Source(scroll_);
-        viewportWidth.Path(PropertyPath(L"ViewportWidth"));
-        viewportWidth.Mode(Data::BindingMode::OneWay);
-        viewportHost.SetBinding(FrameworkElement::WidthProperty(), viewportWidth);
-        viewportHost.Child(root_);
-        scroll_.Content(viewportHost);
+        Grid contentLayout;
+        contentLayout.Children().Append(root_);
+        scroll_.Content(contentLayout);
         nav_.Content(scroll_);
         navigationToken_ = nav_.SelectionChanged([this](const auto&, const NavigationViewSelectionChangedEventArgs& args) {
             try {
@@ -227,7 +219,20 @@ private:
         });
         nav_.SelectedItem(pages_[0]);
         if (!state_->failure.empty()) return;
-        window_.Content(nav_);
+        Grid windowLayout;
+        RowDefinition titleBarRow, navigationRow;
+        titleBarRow.Height(automatic());
+        navigationRow.Height(star());
+        windowLayout.RowDefinitions().Append(titleBarRow);
+        windowLayout.RowDefinitions().Append(navigationRow);
+        TitleBar titleBar;
+        titleBar.Title(UNLOCK_PRODUCT_DISPLAY_NAME);
+        windowLayout.Children().Append(titleBar);
+        Grid::SetRow(nav_, 1);
+        windowLayout.Children().Append(nav_);
+        window_.Content(windowLayout);
+        window_.ExtendsContentIntoTitleBar(true);
+        window_.SetTitleBar(titleBar);
         root_.RequestedTheme(ElementTheme::Default);
         activatedToken_ = window_.Activated([this](const auto&, const WindowActivatedEventArgs& args) {
             if (args.WindowActivationState() == WindowActivationState::Deactivated || exiting_) return;

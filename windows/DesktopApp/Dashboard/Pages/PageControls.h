@@ -14,7 +14,6 @@
 #include <winrt/Microsoft.UI.Xaml.Markup.h>
 #include <winrt/Microsoft.UI.Xaml.Media.h>
 #include <exception>
-#include <limits>
 
 namespace unlock_windows::desktop_app::dashboard_ui {
 using namespace winrt;
@@ -91,6 +90,7 @@ inline Border settingsCard(const wchar_t* title, const FrameworkElement& content
         auto content = weakContent.get();
         if (!grid || !header || !content) return;
         const bool narrow = args.NewSize().Width < 640;
+        grid.ColumnDefinitions().GetAt(2).Width(narrow ? GridLength{0, GridUnitType::Pixel} : automatic());
         Grid::SetColumnSpan(header, narrow ? 2 : 1);
         header.Margin(narrow ? Thickness{0,0,0,8} : Thickness{0,0,16,0});
         Grid::SetRow(content, narrow ? 1 : 0);
@@ -124,12 +124,7 @@ inline Border signalThresholdCard(const wchar_t* title, const TextBlock& value,
         row.Children().Append(action);
     }
     const auto glyph = std::wstring(1, static_cast<wchar_t>(Symbol::FourBars));
-    auto card = settingsCard(title, row, glyph.c_str());
-    card.SizeChanged([weakSlider = make_weak(slider)](const auto&, const SizeChangedEventArgs& args) {
-        auto slider = weakSlider.get();
-        if (slider) slider.Width(args.NewSize().Width < 640 ? std::numeric_limits<double>::quiet_NaN() : 240);
-    });
-    return card;
+    return settingsCard(title, row, glyph.c_str());
 }
 
 inline void rethrowNonlocalUiError(const hresult_error& error) {

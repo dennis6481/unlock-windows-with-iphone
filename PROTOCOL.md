@@ -61,4 +61,4 @@ Connection, reads, writes and reply acknowledgment use cancellable Overlapped I/
 
 Presence authorization does not require a fresh phone gesture. Pairing-history metadata and protected GATT success do not independently prove current-link LESC mode/key reuse. Advertisement RSSI is unauthenticated and is not secure distance or relay resistance. ANCS availability and long-standby/recovery behavior require hardware acceptance.
 
-Existing MSA, single-user and local physical-console support is retained. Local accounts and remote sessions remain unsupported. A service **approved** status is not proof of Windows unlocking; acceptance requires the actual session to resume with no iPhone app, desktop app exited and both devices locked. See [Testing](docs/Testing.md) and [Security](SECURITY.md).
+Existing MSA, single-user and local physical-console support is retained. Local accounts and remote sessions remain unsupported. A service **approved** status is not proof of Windows unlocking; acceptance requires the actual session to resume with no iPhone app, desktop app exited and both devices locked. See [Security](SECURITY.md).

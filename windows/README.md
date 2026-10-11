@@ -6,7 +6,7 @@ The Windows side contains four installed components: the desktop app, LocalSyste
 
 ## Compatibility
 
-- **Windows:** Windows 10 version 2004, build 19041, or later, including Windows 11. The minimum is defined in [ComponentFiles.h](ComponentFiles.h) and has not been tested on that build.
+- **Windows:** Windows 10 version 2004, build 19041, or later, including Windows 11. 
 - **Architecture:** Native x64 or ARM64; all components must match the OS architecture. ARM64 has not been tested on physical hardware. 32-bit x86 and ARM32 are not supported.
 - **Bluetooth:** The adapter and driver must support BLE Central, protected GATT and advertisement scanning.
 
@@ -56,7 +56,7 @@ For uninstall instructions, see the [main guide](../README.md#uninstall). For in
 
 ## Troubleshooting
 
-Use tray **Status… → Diagnostics** and the [testing guide](../docs/Testing.md#diagnostics). From the repository root, the read-only component inspector is:
+Use tray **Status… → Diagnostics**. From the repository root, the read-only component inspector is:
 
 ```powershell
 & '.\windows\Diagnostics\Get-ComponentsStatus.ps1'
@@ -66,7 +66,7 @@ It does not start services/tasks, repair installations or mount offline user hiv
 
 ## Module index
 
-The [system BLE diagnostic](../docs/BleSystemPoc.md#localsystem--session-0-prerequisite) uses a separate `SystemBleDiagnostic` target and shared `Bluetooth` definitions. It is not installed or built with the product and cannot unlock Windows.
+The system BLE diagnostic uses a separate `SystemBleDiagnostic` target and shared `Bluetooth` definitions. It is not installed or built with the product and cannot unlock Windows.
 
 ```text
 windows/

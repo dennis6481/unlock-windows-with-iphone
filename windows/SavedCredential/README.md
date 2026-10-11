@@ -51,4 +51,4 @@ The main Password page refreshes on entry, activation and operation-window exit.
 
 Installer `clearForRemoval` must receive service confirmation that the password, grant, snapshot and BLE request were cleared before removal continues. There is no success path that skips a failed credential-clear operation.
 
-Keep identity checks, consume-before-decrypt ordering, caller separation and impersonation boundaries intact during maintenance. Logs must not include passwords, nonce bytes, credential plaintext or device identifiers in public reports. See the [testing guide](../../docs/Testing.md#authentication-and-security-boundaries) for caller, identity, replay and restart scenarios.
+Keep identity checks, consume-before-decrypt ordering, caller separation and impersonation boundaries intact during maintenance. Logs must not include passwords, nonce bytes, credential plaintext or device identifiers in public reports. Verify caller, identity, replay and restart scenarios.

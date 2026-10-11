@@ -2,8 +2,6 @@
 
 # Security
 
-This is an **experimental developer preview**. The presence-unlock implementation has not completed its acceptance matrix or an independent security audit. Diagnostic success does not establish a usable product.
-
 ## Credential protection
 
 - The saved Microsoft account password remains on the PC, protected by **LocalSystem user-scope DPAPI** and SYSTEM-only vault ACLs. Its format is unchanged.
@@ -33,8 +31,3 @@ Ordinary clients cannot report successful unlocks. Only the original pinned Logo
 
 Cancellation, expiry, disconnect, suspend, unlock, logoff, account/session change, binding mutation and invalid system association invalidate related authorization. Cached communication, old/missing RSSI, late callbacks and repeated claims cannot authorize release. Missing/stale RSSI may wait within the original request deadline; claim still requires fresh communication and signal. Native password failure never restores a consumed grant.
 
-## Reporting and acceptance
-
-Do not attach passwords, nonce bytes or credential plaintext to reports. Redact account names/SIDs and Bluetooth identifiers before sharing diagnostics.
-
-Service **approved** is only an authorization state. The final test must show Windows actually resumes the same locked session with no phone app, the desktop app exited and both devices initially locked. The remaining [test matrix](docs/Testing.md) must complete before readiness is claimed.

@@ -11,6 +11,9 @@ build/
 dist/
 .tmp/
 
+/docs/Testing.md
+/docs/BleSystemPoc.md
+
 # Local diagnostic evidence (may contain account names, SIDs and token ACLs)
 lsa-token-probe*.txt
 lsa-s4u-token-probe*.txt

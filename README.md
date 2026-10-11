@@ -2,7 +2,6 @@
 > [!WARNING]
 > **Developer technical preview**
 >
-> - **The app-free presence unlock acceptance matrix remains pending.** This revision has not been accepted on hardware.
 > - **Currently supports only Windows users who sign in with a Microsoft account (MSA).** The account must have a password. Local Windows accounts are not supported. See Microsoft's guide to [switching from a local account to a Microsoft account](https://support.microsoft.com/en-us/accounts-billing/manage/change-from-a-local-account-to-a-microsoft-account-in-windows).
 
 
@@ -33,9 +32,6 @@ The *Unlock with iPhone* requires Windows 10 version **2004, build 19041**, or l
 
 Your PC must have Bluetooth enabled, with an adapter and driver that support **BLE Central, protected GATT access and advertisement scanning**.
 
-Use a physical iPhone running iOS 26 or later. No iPhone app, IPA or developer signing is required.
-
-
 ## What it does
 
 - Unlock your locked Windows session using your paired iPhone over Bluetooth. Select the phone unlock tile on the Windows lock screen; click **Unlock** to request a fresh presence check. The phone needs no action for each attempt; locking the PC alone does not request unlock.
@@ -47,25 +43,17 @@ Use a physical iPhone running iOS 26 or later. No iPhone app, IPA or developer s
 
 After restarting your PC or signing out, sign in once with your usual Windows password or PIN before using iPhone unlock again.
 
-After native sign-in, the service keeps the bound phone's BLE connection across unlocks and lets Windows reconnect when it returns within range. Service structure uses Windows caching; each Unlock still requires fresh protected communication and signal evidence. Missing fresh signal waits within the existing request deadline.
 
 ### Installation
 
-If a version earlier than **1.0.0** is installed, uninstall it in Windows **Settings → Apps** first, then run this installer. The installer reports the old version and does not update or remove it.
+> [!WARNING]
+> If a version earlier than **1.0.0** is installed, uninstall it in Windows **Settings → Apps** first, then run this installer. 
 
 1. Get the native x64 or ARM64 [Windows installer](https://github.com/dennis6481/unlock-windows-with-iphone/releases) and follow its steps. After restarting, sign in once with your usual Windows password or PIN, then choose **Start setup**.
 2. Save your **Microsoft account password**, not your PIN. The encrypted copy stays on this PC and is never sent to the phone.
 3. On **Status**, use **Open Bluetooth settings** to pair your iPhone. Compare the Bluetooth numbers on both devices and accept only a match. Skip this step if Windows already shows the phone as paired.
 4. Return to **Status**, select your iPhone from the updated paired-device list and click **Bind selected device**. Windows records with the same device container are combined into one named entry. Devices are never bound automatically.
 5. Confirm the selected phone and **Initial signal threshold**. UAC permits the service to verify pairing, protected BLE communication and signal strength before saving the binding.
-
-In **Remove bound iPhone**, click **Remove** to confirm removal and return to device selection. Windows Bluetooth pairing and the saved password remain.
-
-No claim of product readiness is made before [acceptance](docs/Testing.md) completes. Unsupported binding files report an error; they are not migrated or silently overwritten.
-
-Tray **Quit** cancels the current password setup and waits for any submitted operation to finish. Saved data remains; setup does not continue to binding. Windows still handles any open UAC prompt.
-
-The tray app's **Diagnostics** page shows service verification steps, pairing properties, operation timings and failures with their request IDs. Update the installed service together with the desktop app to receive these details.
 
 ## Uninstall
 
@@ -80,8 +68,7 @@ Windows system Bluetooth pairing is kept. Remove it separately in Windows Blueto
 ```text
 .
 ├── windows/       Desktop app, credential service, Credential Provider, installer, shared code and C++ tests.
-├── docs/
-│   └── Testing.md Reproducible checks and release evidence requirements.
+├── docs/          README logo.
 ├── PROTOCOL.md    Service-owned presence authorization and overall architecture.
 └── SECURITY.md    Credential protection, security assumptions and limitations.
 ```
@@ -91,8 +78,6 @@ The [Windows module index](windows/README.md#module-index) explains the source d
 ## Build and set up
 
 - [Windows: prerequisites, build, installation and setup](windows/README.md)
-- [Testing and diagnostics](docs/Testing.md)
-- [Independent system BLE diagnostic and recorded evidence](docs/BleSystemPoc.md)
 
 Do not mix service, Credential Provider and desktop binaries from different builds.
 
@@ -101,18 +86,12 @@ Windows distribution is a single `windows/dist/UnlockWithIPhone_<version>_<archi
 
 ## Known limitations
 
-- **Presence authorization:** No fresh Face ID, Touch ID or phone confirmation is required for each Unlock request.
-- **RSSI:** Signal strength is an unauthenticated address-associated hint, not a secure distance or relay-resistance measurement.
-- **Bluetooth security:** Pairing records and successful protected GATT operations do not independently attest current-link LESC mode or key reuse.
 - **Windows sessions and accounts:** Currently, only Microsoft Account (MSA) accounts are supported; local Windows accounts are not supported. Account changes or an outdated saved password can cause native authentication to fail.
 - **Multi-users:** The Windows app does not currently support multi-users. I can only be configured for one MSA user on the PC.
 
-
-The testing guide describes how to report results without treating a successful normal-path trial as full acceptance.
-
 ## To Do
 
-- [ ] Modernize the Windows UI and setup guidance
+- [x] Modernize the Windows UI and setup guidance
 - [ ] Support multiple Windows users.
 - [ ] Support local Windows accounts.
 - [ ] watchOS supported.

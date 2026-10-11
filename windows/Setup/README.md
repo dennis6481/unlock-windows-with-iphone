@@ -92,7 +92,7 @@ The wizard uses themed Win32 controls, PerMonitorV2 layout, Task Dialog confirma
 
 [Get-ComponentsStatus.ps1](../Diagnostics/Get-ComponentsStatus.ps1) reads shared definitions and reports component architecture/version/hash, installation/transaction/result records and related tasks. It separates absent records from read failures. It does not run tasks, mount offline hives or repair state.
 
-Use the [installer test matrix](../../docs/Testing.md#installer-and-removal) for versions, restarts, cancellation, failure, result handoff and complete removal. Tests must check the actual final state, not just whether the app entry disappeared.
+Verify versions, restarts, cancellation, failure, result handoff and complete removal. Tests must check the actual final state, not just whether the app entry disappeared.
 
 ## References
 

@@ -76,6 +76,41 @@ int main() {
             activeTransaction ? &transaction : nullptr, completion, reboot);
     };
     expect(plan().action == MaintenanceAction::maintain, "formal installation offers maintenance without a transaction");
+    for (const auto* version : {L"0.3.1", L"0.65535.65535"}) {
+        installed.installedVersion = version;
+        const auto blocked = plan();
+        expect(blocked.action == MaintenanceAction::blocked && blocked.explanation.find(version) != std::wstring::npos &&
+            blocked.explanation.find(L"Windows Settings > Apps") != std::wstring::npos,
+            "pre-1.0.0 installations must require manual system uninstall with the actual version");
+    }
+    for (const auto* version : {L"", L"1.0", L"1.0.0junk"}) {
+        installed.installedVersion = version;
+        expect(plan().action == MaintenanceAction::blocked, "missing or malformed installed versions must block maintenance");
+    }
+    for (const auto* version : {L"1.0.0", L"1.0.1", L"2.0.0"}) {
+        installed.installedVersion = version;
+        expect(plan().action == MaintenanceAction::maintain, "maintenance floor is fixed independently of the current package version");
+    }
+    installed.installedVersion = kProductVersion.text();
+    activeTransaction = true;
+    transaction.phase = WizardPhase::updating;
+    transaction.operation = SetupOperation::update;
+    transaction.installedVersion = L"0.3.1";
+    expect(plan().action == MaintenanceAction::blocked, "a new package must not resume maintenance of a pre-1.0.0 installation");
+    transaction.installedVersion = installed.installedVersion;
+    transaction.packageVersion = L"0.3.1";
+    expect(plan().action == MaintenanceAction::blocked, "old-package transactions cannot be resumed");
+    transaction.operation = SetupOperation::install;
+    transaction.installedVersion.clear();
+    transaction.packageVersion = kProductVersion.text();
+    transaction.phase = WizardPhase::preparing;
+    expect(plan().action == MaintenanceAction::resume, "a supported fresh-install transaction needs no previous installed version");
+    transaction.operation = SetupOperation::update;
+    expect(plan().action == MaintenanceAction::blocked, "maintenance transactions require an installed version");
+    transaction.installedVersion = installed.installedVersion;
+    transaction.operation = SetupOperation::install;
+    transaction.phase = WizardPhase::none;
+    activeTransaction = false;
     snapshot.versionsMatch = false;
     snapshot.versionError = L"Installed component version mismatch";
     expect(plan().action == MaintenanceAction::blocked, "mixed installed versions block new maintenance");

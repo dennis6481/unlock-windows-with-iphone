@@ -31,7 +31,7 @@ private:
     Microsoft::UI::Xaml::Controls::Button save_{nullptr}, remove_{nullptr};
     std::optional<unlock_windows::desktop_app::BindingView> bindingView_;
     std::optional<unlock_windows::saved_credential::BindingSummary> binding_;
-    bool saving_ = false, dirty_ = false, updating_ = false, stopped_ = false;
+    bool saving_ = false, dirty_ = false, updating_ = false, stopped_ = false, hostBusy_ = false;
     bool resetBindingView_ = false;
     std::function<void(bool)> refreshSnapshot_;
     std::wstring saveError_;

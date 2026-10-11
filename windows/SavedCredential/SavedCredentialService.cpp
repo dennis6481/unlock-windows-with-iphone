@@ -7,6 +7,7 @@
 #include "EnrollmentStore.h"
 #include "../Bluetooth/SystemBleSession.h"
 #include "../Bluetooth/PresenceAuthorization.h"
+#include "../ConsoleSession.h"
 #include "../Setup/SetupIdentity.h"
 
 #include <WtsApi32.h>
@@ -210,24 +211,14 @@ Console currentConsole() {
     if (tokenSession(userToken.value) != result.session) fail("console user token session differs");
     result.sid = tokenSid(userToken.value);
     result.logonId = tokenLogonId(userToken.value);
-    LPWSTR raw = nullptr;
+    struct SessionMemory final {
+        LPWSTR value = nullptr;
+        ~SessionMemory() { if (value) WTSFreeMemory(value); }
+    } memory;
     DWORD bytes = 0;
     if (!WTSQuerySessionInformationW(WTS_CURRENT_SERVER_HANDLE, result.session,
-            WTSSessionInfoEx, &raw, &bytes)) fail("saved credential console lock-state query failed");
-    if (raw == nullptr || bytes < sizeof(WTSINFOEXW)) {
-        if (raw != nullptr) WTSFreeMemory(raw);
-        fail("saved credential console lock-state malformed");
-    }
-    const auto* info = reinterpret_cast<const WTSINFOEXW*>(raw);
-    if (info->Level != 1 || info->Data.WTSInfoExLevel1.SessionId != result.session ||
-        info->Data.WTSInfoExLevel1.SessionState != WTSActive ||
-        (info->Data.WTSInfoExLevel1.SessionFlags != WTS_SESSIONSTATE_LOCK &&
-         info->Data.WTSInfoExLevel1.SessionFlags != WTS_SESSIONSTATE_UNLOCK)) {
-        WTSFreeMemory(raw);
-        fail("saved credential console state is not an active known lock state");
-    }
-    result.locked = info->Data.WTSInfoExLevel1.SessionFlags == WTS_SESSIONSTATE_LOCK;
-    WTSFreeMemory(raw);
+            WTSSessionInfoEx, &memory.value, &bytes)) fail("saved credential console lock-state query failed");
+    result.locked = unlock_windows::consoleLocked(memory.value, bytes, result.session);
     if (WTSGetActiveConsoleSessionId() != result.session) fail("physical console changed during token validation");
     return result;
 }
@@ -330,7 +321,8 @@ struct BleTask final {
     ULONGLONG identityGeneration = 0;
     LUID logonId{};
     ULONGLONG started = 0;
-    AuthenticationStatus status;
+    std::string requestId;
+    ULONGLONG deadline = 0;
     BindingChange change;
     bool binding = false;
     std::atomic<bool> cancelled{false};
@@ -497,8 +489,8 @@ public:
                 return response;
             }
             if (request.operation == Operation::cancelVerification) {
-                if (!task_ || request.payload.value.size() != task_->status.requestId.size() ||
-                    std::string(request.payload.value.begin(), request.payload.value.end()) != task_->status.requestId ||
+                if (!task_ || request.payload.value.size() != task_->requestId.size() ||
+                    std::string(request.payload.value.begin(), request.payload.value.end()) != task_->requestId ||
                     (task_->binding ? client.logonUi || client.userSid != task_->identity.sid || console.locked :
                         !client.logonUi || !console.locked)) return response;
                 rejectTask(AuthenticationFailure::cancelled);
@@ -665,7 +657,7 @@ public:
                 UnlockContext context{identity, console.session, console.logonId, task_->change.candidate,
                     gUnlockHistoryGeneration.load(), task_->identityGeneration};
                 if (!grant_->authorization.consume(contextMatches, evidence, task_->started,
-                    GetTickCount64(), task_->status.deadline, task_->change.candidate.threshold)) {
+                    GetTickCount64(), task_->deadline, task_->change.candidate.threshold)) {
                     rejectTask(AuthenticationFailure::evidenceExpired);
                     return response;
                 }
@@ -780,7 +772,7 @@ private:
             rejectTask(AuthenticationFailure::cancelled);
             return;
         }
-        auto reason = authenticationExpiry(GetTickCount64(), task_->status.deadline,
+        auto reason = authenticationExpiry(GetTickCount64(), task_->deadline,
             console.session == task_->session && console.sid == task_->identity.sid &&
             console.logonId.LowPart == task_->logonId.LowPart && console.logonId.HighPart == task_->logonId.HighPart &&
             gConsoleGeneration.load() == task_->consoleGeneration && gIdentityGeneration.load() == task_->identityGeneration,
@@ -808,16 +800,17 @@ private:
         auto text = winrt::to_string(winrt::to_hstring(winrt::guid{id}));
         if (text.size() == 38) text = text.substr(1, 36);
         std::transform(text.begin(), text.end(), text.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-        task->status = {text, AuthenticationStage::verifying, AuthenticationFailure::none,
-            task->started + unlock_windows::system_ble::kOperationLifetimeMs};
+        task->requestId = std::move(text);
+        task->deadline = task->started + unlock_windows::system_ble::kOperationLifetimeMs;
         task->change = std::move(change);
         task->binding = binding;
         diagnosticSid_ = identity.sid;
         diagnostic_.clear();
-        appendDiagnostic(std::string(binding ? "binding" : "authentication") + " request=" + task->status.requestId +
-            " BEGIN deadlineMs=" + std::to_string(task->status.deadline));
-        if (binding) managementStatus_ = task->status;
-        else { authenticationIdentity_ = identity; authenticationStatus_ = task->status; }
+        appendDiagnostic(std::string(binding ? "binding" : "authentication") + " request=" + task->requestId +
+            " BEGIN deadlineMs=" + std::to_string(task->deadline));
+        auto& status = binding ? managementStatus_ : authenticationStatus_;
+        status = {task->requestId, AuthenticationStage::verifying, AuthenticationFailure::none, task->deadline};
+        if (!binding) authenticationIdentity_ = identity;
         task_ = std::move(task);
         grant_.reset();
         unlockHistory_.cancelPending();
@@ -833,22 +826,18 @@ private:
             std::optional<unlock_windows::system_ble::BindingRecord> retainedBinding;
             std::optional<Console> retainedConsole;
             ULONGLONG retainedGeneration = 0;
-            bool preparationFailed = false;
-            std::uint64_t preparationRevision = 0;
+            unlock_windows::system_ble::PreparationState preparation;
             std::string backgroundError;
-            const auto closeRetained = [&] {
+            const auto closeConnection = [&] {
                 if (retained) {
                     retained->close();
                     retained.reset();
                 }
-                retainedBinding.reset();
-                retainedConsole.reset();
-                preparationFailed = false;
             };
             const auto report = [this](const std::string& message) {
                 std::lock_guard lock(mutex_);
                 appendDiagnostic(task_ ? std::string(task_->binding ? "binding" : "authentication") +
-                    " request=" + task_->status.requestId + " " + message : "BLE connection " + message);
+                    " request=" + task_->requestId + " " + message : "BLE connection " + message);
             };
             for (;;) {
                 std::shared_ptr<BleTask> task;
@@ -859,11 +848,10 @@ private:
                     stopping = stopping_;
                 }
                 if (gStopping || stopping) {
-                    closeRetained();
+                    closeConnection();
                     return;
                 }
-                if (preparationFailed && retained && retained->healthy() && retained->revision() != preparationRevision)
-                    preparationFailed = false;
+
                 if (!task) {
                     std::optional<unlock_windows::system_ble::BindingRecord> desired;
                     std::optional<Console> console;
@@ -892,18 +880,19 @@ private:
                             retainedConsole->sid == console->sid && retainedConsole->logonId.LowPart == console->logonId.LowPart &&
                             retainedConsole->logonId.HighPart == console->logonId.HighPart;
                         if (!sameContext) {
-                            closeRetained();
-                            if (desired) {
-                                retainedBinding = desired;
-                                retainedConsole = console;
-                                retainedGeneration = generation;
-                                retained = std::make_shared<unlock_windows::system_ble::Session>(*desired, report);
-                                { std::lock_guard lock(mutex_); diagnosticSid_ = desired->accountSid; }
-                                report("Maintain selected phone after native sign-in; no authorization created");
-                            }
+                            closeConnection();
+                            retainedBinding = desired;
+                            retainedConsole = console;
+                            retainedGeneration = generation;
+                            preparation.reset();
+                            backgroundError.clear();
                         }
-                        backgroundError.clear();
-                        if (retained && !preparationFailed) {
+                        if (desired && !retained && !preparation.failed()) {
+                            retained = std::make_shared<unlock_windows::system_ble::Session>(*desired, report);
+                            { std::lock_guard lock(mutex_); diagnosticSid_ = desired->accountSid; }
+                            report("Maintain selected phone after native sign-in; no authorization created");
+                        }
+                        if (retained && preparation.ready(retained->healthy(), retained->revision())) {
                             try {
                                 retained->prepare(GetTickCount64(), [this, generation] {
                                     std::lock_guard lock(mutex_);
@@ -912,24 +901,22 @@ private:
                                 });
                             } catch (const unlock_windows::system_ble::VerificationError& error) {
                                 if (error.reason != AuthenticationFailure::cancelled) {
-                                    preparationFailed = true;
-                                    preparationRevision = retained->revision();
+                                    preparation.fail(retained->revision());
                                     report(std::string("Preparation failed; next explicit request may prepare again: ") + error.what());
                                 }
                             } catch (...) {
-                                preparationFailed = true;
-                                preparationRevision = retained->revision();
+                                preparation.fail(retained->revision());
                                 report("Preparation failed: " + winrt::to_string(winrt::to_message()));
                             }
-                            if (!retained->healthy()) {
-                                retained->close();
-                                retained.reset();
-                                preparationFailed = true;
-                            }
+                        }
+                        if (retained && !retained->healthy()) {
+                            closeConnection();
+                            preparation.fail();
                         }
                     } catch (...) {
                         const auto error = winrt::to_string(winrt::to_message());
-                        closeRetained();
+                        closeConnection();
+                        preparation.fail();
                         if (error != backgroundError) { report("Preparation unavailable: " + error); backgroundError = error; }
                     }
                     std::unique_lock lock(mutex_);
@@ -938,11 +925,13 @@ private:
                 }
                 std::shared_ptr<unlock_windows::system_ble::Session> connection;
                 try {
-                    if (preparationFailed || !retainedBinding || *retainedBinding != task->change.candidate ||
+                    if (preparation.failed() || !retainedBinding || *retainedBinding != task->change.candidate ||
                         !retainedConsole || retainedConsole->session != task->session ||
                         retainedConsole->sid != task->identity.sid || retainedConsole->logonId.LowPart != task->logonId.LowPart ||
                         retainedConsole->logonId.HighPart != task->logonId.HighPart ||
-                        retainedGeneration != gConnectionGeneration.load()) closeRetained();
+                        retainedGeneration != gConnectionGeneration.load()) closeConnection();
+                    preparation.reset();
+                    backgroundError.clear();
                     if (!retained) {
                         retainedBinding = task->change.candidate;
                         retainedConsole = Console{task->session, task->identity.sid, !task->binding, task->logonId};
@@ -978,7 +967,7 @@ private:
                             });
                             clearUnlockHistory();
                             managementStatus_.stage = AuthenticationStage::completed;
-                            appendDiagnostic("binding request=" + task->status.requestId + " COMPLETED binding saved");
+                            appendDiagnostic("binding request=" + task->requestId + " COMPLETED binding saved");
                             task->cancelled = true;
                         } else {
                             const auto proof = connection->evidence();
@@ -987,7 +976,7 @@ private:
                             std::array<std::uint8_t, kNonceSize> nonce{};
                             if (BCryptGenRandom(nullptr, nonce.data(), kNonceSize, BCRYPT_USE_SYSTEM_PREFERRED_RNG) < 0)
                                 fail("BLE grant nonce RNG failed");
-                            const auto expires = (std::min)(task->status.deadline, proof.communicationAt + unlock_windows::system_ble::kEvidenceLifetimeMs);
+                            const auto expires = (std::min)(task->deadline, proof.communicationAt + unlock_windows::system_ble::kEvidenceLifetimeMs);
                             grant_ = Grant{task->identity, task->session, expires, nonce, task->consoleGeneration};
                             authenticationStatus_.stage = AuthenticationStage::approved;
                             logAuthentication();
@@ -1006,13 +995,13 @@ private:
                 } catch (const unlock_windows::system_ble::VerificationError& error) {
                     OutputDebugStringA(error.what());
                     if (error.reason == AuthenticationFailure::associationInvalid || error.reason == AuthenticationFailure::bondRejected ||
-                        error.reason == AuthenticationFailure::internalError) preparationFailed = true;
+                        error.reason == AuthenticationFailure::internalError) preparation.fail();
                     std::lock_guard lock(mutex_);
                     if (!task->cancelled) rejectTask(error.reason, error.what());
                 } catch (...) {
                     const auto error = winrt::to_message();
                     OutputDebugStringW(error.c_str());
-                    preparationFailed = true;
+                    preparation.fail();
                     std::lock_guard lock(mutex_);
                     if (!task->cancelled) rejectTask(task->binding ? AuthenticationFailure::storageFailed : AuthenticationFailure::internalError, winrt::to_string(error));
                 }
@@ -1027,12 +1016,12 @@ private:
                                 (task->binding ? managementStatus_ : authenticationStatus_).stage != AuthenticationStage::failed)
                                 rejectTask(AuthenticationFailure::protectedOperationFailed, error);
                         }
-                        closeRetained();
+                        closeConnection();
                     }
-                    if (retained && (preparationFailed || !retained->healthy())) {
+                    if (retained && (preparation.failed() || !retained->healthy())) {
                         retained->close();
                         retained.reset();
-                        preparationFailed = true;
+                        preparation.fail();
                     }
                 }
                 {

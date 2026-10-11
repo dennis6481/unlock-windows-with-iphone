@@ -29,6 +29,8 @@ MaintenancePlan determineMaintenancePlan(const ComponentSnapshot& snapshot,
         return snapshot.hasAnyArtifacts()
             ? MaintenancePlan{MaintenanceAction::blocked, L"Unregistered component artifacts exist. No changes were made."}
             : MaintenancePlan{MaintenanceAction::install};
+    const auto versionError = transaction ? maintenanceVersionError(*transaction) : maintenanceVersionError(installed->installedVersion);
+    if (!versionError.empty()) return {MaintenanceAction::blocked, versionError};
     const auto schema = transaction ? transaction->schemaVersion : installed->schemaVersion;
     const auto& sid = transaction ? transaction->targetSid : installed->targetSid;
     if (schema != kWizardStateSchemaVersion || sid.empty() ||

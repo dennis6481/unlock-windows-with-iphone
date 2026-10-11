@@ -45,6 +45,7 @@
     <ClCompile Include="..\DesktopApp\DesktopController.cpp" />
     <ClInclude Include="..\DesktopApp\TrayManager.h" />
     <ClInclude Include="..\DesktopApp\DesktopController.h" />
+    <ClInclude Include="..\ConsoleSession.h" />
 
     <ProjectReference Include="UnlockSavedCredentialIpc.vcxproj"><LinkLibraryDependencies>false</LinkLibraryDependencies></ProjectReference>
     <ProjectReference Include="UnlockEnrollmentStore.vcxproj"><LinkLibraryDependencies>false</LinkLibraryDependencies></ProjectReference>

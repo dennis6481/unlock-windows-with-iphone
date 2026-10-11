@@ -3,6 +3,7 @@
 #pragma once
 
 #include "EnrollmentStore.h"
+#include "../ConsoleSession.h"
 #include <Windows.h>
 #include <sddl.h>
 #include <wtsapi32.h>
@@ -102,13 +103,7 @@ inline Console queryConsole() {
     DWORD bytes = 0;
     require(WTSQuerySessionInformationW(WTS_CURRENT_SERVER_HANDLE, result.session, WTSSessionInfoEx,
         &memory.value, &bytes), "WTSQuerySessionInformationW(lock state)");
-    if (!memory.value || bytes < sizeof(WTSINFOEXW)) throw std::runtime_error("Malformed console lock state");
-    const auto& info = *reinterpret_cast<const WTSINFOEXW*>(memory.value);
-    const auto& level = info.Data.WTSInfoExLevel1;
-    if (info.Level != 1 || level.SessionId != result.session || level.SessionState != WTSActive ||
-        (level.SessionFlags != WTS_SESSIONSTATE_LOCK && level.SessionFlags != WTS_SESSIONSTATE_UNLOCK))
-        throw std::runtime_error("Physical console lock state cannot be confirmed");
-    result.locked = level.SessionFlags == WTS_SESSIONSTATE_LOCK;
+    result.locked = consoleLocked(memory.value, bytes, result.session);
     if (WTSGetActiveConsoleSessionId() != result.session)
         throw std::runtime_error("Physical console changed during query");
     return result;

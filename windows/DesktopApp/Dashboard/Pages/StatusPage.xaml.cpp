@@ -36,7 +36,7 @@ void StatusPage::OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEventA
         if (auto page = weak.get(); page && !page->updating_) {
             page->dirty_ = page->binding_ && static_cast<int>(page->threshold_.Value()) != page->binding_->record.threshold;
             page->thresholdText_.Text(to_hstring(static_cast<int>(page->threshold_.Value())) + L" dBm");
-            page->save_.IsEnabled(page->dirty_ && !page->saving_ && !page->stopped_);
+            page->save_.IsEnabled(page->dirty_ && !page->hostBusy_ && !page->Busy() && !page->stopped_);
         }
     });
     save_ = Button{};
@@ -64,6 +64,7 @@ void StatusPage::OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEventA
 }
 
 void StatusPage::Update(unlock_windows::desktop_app::DashboardSnapshot const& snapshot) {
+    hostBusy_ = snapshot.busy;
     const bool known = snapshot.binding.has_value();
     const bool bound = snapshot.binding && snapshot.binding->state == unlock_windows::system_ble::BindingState::bound;
     lastUnlockCard_.Visibility(bound ? Visibility::Visible : Visibility::Collapsed);
@@ -102,8 +103,8 @@ void StatusPage::Update(unlock_windows::desktop_app::DashboardSnapshot const& sn
     }
     thresholdText_.Text(to_hstring(static_cast<int>(threshold_.Value())) + L" dBm");
     thresholdCard_.Visibility(bound ? Visibility::Visible : Visibility::Collapsed);
-    threshold_.IsEnabled(bound && !Busy() && !stopped_);
-    save_.IsEnabled(bound && dirty_ && !Busy() && !stopped_);
+    threshold_.IsEnabled(bound && !hostBusy_ && !Busy() && !stopped_);
+    save_.IsEnabled(bound && dirty_ && !hostBusy_ && !Busy() && !stopped_);
     removalCard_.Visibility(bound ? Visibility::Visible : Visibility::Collapsed);
     remove_.IsEnabled(bound && !snapshot.busy && !Busy() && !stopped_);
     error_.Message(saveError_.empty() ? snapshot.error : saveError_);
@@ -113,7 +114,8 @@ void StatusPage::Update(unlock_windows::desktop_app::DashboardSnapshot const& sn
 fire_and_forget StatusPage::save(weak_ref<StatusPage> weak) {
     using namespace unlock_windows::saved_credential;
     auto page = weak.get();
-    if (!page || page->stopped_ || page->Busy() || !page->binding_ || !page->dirty_) co_return;
+    if (!page || page->stopped_ || page->hostBusy_ || page->Busy() || !page->binding_ ||
+        page->binding_->state != unlock_windows::system_ble::BindingState::bound || !page->dirty_) co_return;
     page->saving_ = true; page->threshold_.IsEnabled(false); page->save_.IsEnabled(false);
     page->remove_.IsEnabled(false);
     BindingChange change{*page->binding_, page->binding_->record, {}};
@@ -121,8 +123,12 @@ fire_and_forget StatusPage::save(weak_ref<StatusPage> weak) {
     try { page->cancellation_ = unlock_windows::enrollment::createCancellation(change.candidate.accountSid, change.cancelEvent); }
     catch (...) {
         page->saving_ = false; page->saveError_ = currentException();
+        page->updating_ = true;
         page->threshold_.Value(page->binding_->record.threshold); page->dirty_ = false;
-        page->threshold_.IsEnabled(true);
+        page->updating_ = false;
+        page->thresholdText_.Text(to_hstring(page->binding_->record.threshold) + L" dBm");
+        page->threshold_.IsEnabled(!page->hostBusy_);
+        page->remove_.IsEnabled(!page->hostBusy_);
         page->error_.Message(page->saveError_); page->error_.IsOpen(true); co_return;
     }
     apartment_context foreground;
@@ -134,7 +140,6 @@ fire_and_forget StatusPage::save(weak_ref<StatusPage> weak) {
         SensitiveBytes bytes;
         if (!encodeBindingChange(change, bytes)) throw std::invalid_argument("Invalid threshold request");
         unlock_windows::enrollment::manageBinding(Operation::saveThreshold, bytes);
-        saved = BindingSummary{unlock_windows::system_ble::BindingState::bound, change.candidate};
         saved = unlock_windows::enrollment::readBinding();
     } catch (...) {
         failure = currentException();
@@ -146,10 +151,13 @@ fire_and_forget StatusPage::save(weak_ref<StatusPage> weak) {
         page->saving_ = false; page->dirty_ = false; page->saveError_ = failure;
         if (saved) page->binding_ = saved;
         page->updating_ = true;
-        page->threshold_.Value(page->binding_ ? page->binding_->record.threshold : unlock_windows::system_ble::kDefaultThreshold);
+        const bool bound = page->binding_ && page->binding_->state == unlock_windows::system_ble::BindingState::bound;
+        page->threshold_.Value(bound ? page->binding_->record.threshold : unlock_windows::system_ble::kDefaultThreshold);
         page->updating_ = false;
         page->thresholdText_.Text(to_hstring(static_cast<int>(page->threshold_.Value())) + L" dBm");
-        page->threshold_.IsEnabled(true);
+        page->threshold_.IsEnabled(bound && !page->hostBusy_ && !page->Busy());
+        page->remove_.IsEnabled(bound && !page->hostBusy_ && !page->Busy());
+        page->save_.IsEnabled(false);
         page->error_.Message(failure); page->error_.IsOpen(!failure.empty());
     }
 }

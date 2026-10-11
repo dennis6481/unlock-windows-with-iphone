@@ -51,6 +51,8 @@ After native sign-in, the service keeps the bound phone's BLE connection across 
 
 ### Installation
 
+If a version earlier than **1.0.0** is installed, uninstall it in Windows **Settings → Apps** first, then run this installer. The installer reports the old version and does not update or remove it.
+
 1. Get the native x64 or ARM64 [Windows installer](https://github.com/dennis6481/unlock-windows-with-iphone/releases) and follow its steps. After restarting, sign in once with your usual Windows password or PIN, then choose **Start setup**.
 2. Save your **Microsoft account password**, not your PIN. The encrypted copy stays on this PC and is never sent to the phone.
 3. On **Status**, use **Open Bluetooth settings** to pair your iPhone. Compare the Bluetooth numbers on both devices and accept only a match. Skip this step if Windows already shows the phone as paired.

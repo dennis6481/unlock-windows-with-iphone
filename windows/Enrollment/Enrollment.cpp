@@ -202,15 +202,9 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
                     const auto classicItems = co_await system_ble::pairedEndpoints(false);
                     const auto bleItems = co_await system_ble::pairedEndpoints(true);
                     check(ticket);
-                    unsigned classicCount = 0, bleCount = 0;
-                    for (const auto& item : classicItems) if (system_ble::containerId(item) == container) ++classicCount;
-                    for (const auto& item : bleItems) if (system_ble::containerId(item) == container) ++bleCount;
-                    if (classicCount > 1 || bleCount > 1) throw hresult_error(E_FAIL, L"Ambiguous system ContainerId association");
-                    if (classicCount == 1 && bleCount == 1) {
-                        classicItem = system_ble::uniqueEndpoint(classicItems, *container);
-                        bleItem = system_ble::uniqueEndpoint(bleItems, *container);
-                        break;
-                    }
+                    classicItem = system_ble::findUniqueEndpoint(classicItems, *container);
+                    bleItem = system_ble::findUniqueEndpoint(bleItems, *container);
+                    if (classicItem && bleItem) break;
                     if (GetTickCount64() >= associationDeadline) throw hresult_error(E_FAIL, L"Windows did not expose a unique paired Classic/BLE relationship");
                     message(L"Waiting for Windows system pairing records to update...");
                     co_await resume_after(std::chrono::milliseconds(200)); co_await foreground;

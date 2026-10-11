@@ -166,7 +166,7 @@ void DesktopController::start() {
                     if (!state->commands.empty()) { command = state->commands.front(); state->commands.pop_front(); }
                     state->busy = command != TrayCommand::status;
                 }
-                state->publish();
+                if (command != TrayCommand::status) state->publish();
                 try { state->execute(command); }
                 catch (...) {
                     const auto message = std::wstring(winrt::to_message());

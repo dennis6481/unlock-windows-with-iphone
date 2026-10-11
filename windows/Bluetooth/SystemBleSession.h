@@ -19,6 +19,8 @@ std::optional<winrt::guid> containerId(const winrt::Windows::Devices::Enumeratio
 winrt::hstring deviceSelector(bool ble);
 winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Devices::Enumeration::DeviceInformationCollection>
     pairedEndpoints(bool ble);
+winrt::Windows::Devices::Enumeration::DeviceInformation findUniqueEndpoint(
+    const winrt::Windows::Devices::Enumeration::DeviceInformationCollection& items, const winrt::guid& container);
 winrt::Windows::Devices::Enumeration::DeviceInformation uniqueEndpoint(
     const winrt::Windows::Devices::Enumeration::DeviceInformationCollection& items, const winrt::guid& container);
 
@@ -32,6 +34,20 @@ struct Evidence final {
     std::uint64_t communicationAt = 0;
     std::uint64_t rssiAt = 0;
     int rssi = -127;
+};
+
+class PreparationState final {
+public:
+    void reset() noexcept { failed_ = false; }
+    void fail(std::uint64_t revision = 0) noexcept { failed_ = true; revision_ = revision; }
+    bool failed() const noexcept { return failed_; }
+    bool ready(bool healthy, std::uint64_t revision) noexcept {
+        if (healthy && revision != revision_) reset();
+        return !failed_;
+    }
+private:
+    bool failed_ = false;
+    std::uint64_t revision_ = 0;
 };
 
 class Session final {

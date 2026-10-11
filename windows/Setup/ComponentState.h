@@ -41,6 +41,14 @@ struct SetupTransactionState final {
     bool payloadReady = false;
 };
 
+[[nodiscard]] inline std::wstring maintenanceVersionError(const SetupTransactionState& state) {
+    auto error = maintenanceVersionError(state.packageVersion);
+    if (!error.empty()) return error;
+    if (!state.installedVersion.empty() || state.operation != SetupOperation::install || state.phase == WizardPhase::installed)
+        return maintenanceVersionError(state.installedVersion);
+    return {};
+}
+
 struct ComponentSnapshot final {
     bool statePresent = false;
     bool stateValid = false;

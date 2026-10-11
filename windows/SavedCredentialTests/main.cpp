@@ -5,6 +5,8 @@
 #include "../Bluetooth/PresenceAuthorization.h"
 #include "../SavedCredential/LastUnlock.h"
 #include "../DesktopApp/Dashboard/Dashboard.h"
+#include "../ConsoleSession.h"
+#include <winrt/Windows.Foundation.Collections.h>
 
 #include <cstdlib>
 #include <algorithm>
@@ -592,7 +594,118 @@ void testPresenceContracts() {
         "unsupported packet versions must reject");
 }
 
+struct EndpointFixture final : winrt::implements<EndpointFixture, winrt::Windows::Devices::Enumeration::IDeviceInformation> {
+    winrt::guid container;
+    explicit EndpointFixture(winrt::guid value) : container(value) {}
+    winrt::hstring Id() { return L"fixture"; }
+    winrt::hstring Name() { return L"fixture"; }
+    bool IsEnabled() { return true; }
+    bool IsDefault() { return false; }
+    winrt::Windows::Devices::Enumeration::EnclosureLocation EnclosureLocation() { return nullptr; }
+    winrt::Windows::Foundation::Collections::IMapView<winrt::hstring, winrt::Windows::Foundation::IInspectable> Properties() {
+        return winrt::single_threaded_map<winrt::hstring, winrt::Windows::Foundation::IInspectable>(
+            {{unlock_windows::system_ble::kContainerProperty, winrt::box_value(container)}}).GetView();
+    }
+    void Update(winrt::Windows::Devices::Enumeration::DeviceInformationUpdate const&) { throw winrt::hresult_not_implemented(); }
+    winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Devices::Enumeration::DeviceThumbnail> GetThumbnailAsync() {
+        throw winrt::hresult_not_implemented();
+    }
+    winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Devices::Enumeration::DeviceThumbnail> GetGlyphThumbnailAsync() {
+        throw winrt::hresult_not_implemented();
+    }
+};
+
+void testEndpointAssociation() {
+    using namespace winrt::Windows::Devices::Enumeration;
+    using namespace unlock_windows::system_ble;
+    winrt::init_apartment();
+    {
+        const winrt::guid target{L"12345678-1234-1234-1234-123456789abc"};
+        const auto selected = winrt::make<EndpointFixture>(target).as<DeviceInformation>();
+        const auto unrelated = winrt::make<EndpointFixture>(winrt::guid{}).as<DeviceInformation>();
+        auto entries = winrt::single_threaded_vector<DeviceInformation>();
+        const auto collection = entries.GetView().as<DeviceInformationCollection>();
+        require(!findUniqueEndpoint(collection, target), "missing association returns no endpoint for UI waiting");
+        try { (void)uniqueEndpoint(collection, target); require(false, "service must reject a missing association"); }
+        catch (const VerificationError& error) { require(error.reason == Failure::associationInvalid, "missing association has the correct failure"); }
+        entries.Append(unrelated);
+        entries.Append(selected);
+        require(findUniqueEndpoint(collection, target) == selected && uniqueEndpoint(collection, target) == selected,
+            "one matching container returns its endpoint despite unrelated devices");
+        entries.Append(winrt::make<EndpointFixture>(target).as<DeviceInformation>());
+        try { (void)findUniqueEndpoint(collection, target); require(false, "duplicate association must reject immediately"); }
+        catch (const VerificationError& error) { require(error.reason == Failure::associationInvalid, "ambiguous association has the correct failure"); }
+    }
+    winrt::uninit_apartment();
+}
+
+void testBindingSummaryReadback() {
+    using namespace unlock_windows::system_ble;
+    BindingSummary confirmed{BindingState::bound, {L"S-1-5-21-1-2-3-1001", L"classic", L"ble",
+        winrt::guid{L"12345678-1234-1234-1234-123456789abc"}, L"iPhone", kDefaultThreshold}};
+    const auto original = confirmed;
+    const std::uint8_t truncated[] = {static_cast<std::uint8_t>(BindingState::bound)};
+    for (unsigned query = 0; query < 2; ++query) {
+        require(!decodeBindingSummary(truncated, sizeof(truncated), confirmed), "failed binding readback must reject a partial record");
+        require(confirmed == original, "consecutive malformed readbacks must preserve the previously confirmed threshold");
+    }
+    auto updated = original;
+    updated.record.threshold++;
+    SensitiveBytes reply;
+    require(encodeBindingSummary(updated, reply) && decodeBindingSummary(reply.value.data(), reply.value.size(), confirmed) &&
+        confirmed == updated, "a valid service reply supplies the new confirmed threshold");
+    require(encodeBindingSummary({}, reply) && decodeBindingSummary(reply.value.data(), reply.value.size(), confirmed) &&
+        confirmed.state == BindingState::absent, "readback can confirm removal instead of inventing a bound candidate");
+}
+
+void testPreparationState() {
+    unlock_windows::system_ble::PreparationState preparation;
+    require(preparation.ready(false, 0), "initial context permits preparation");
+    preparation.fail(4);
+    for (unsigned poll = 0; poll < 5; ++poll) {
+        require(!preparation.ready(false, 0), "closing a failed connection cannot permit background reconstruction");
+        require(!preparation.ready(true, 4), "same healthy structure cannot retry a stable preparation failure");
+    }
+    require(!preparation.ready(false, 5), "an unhealthy connection cannot reset failure through a revision change");
+    require(preparation.ready(true, 5), "changed healthy structure permits new preparation");
+    preparation.fail(5);
+    preparation.reset();
+    require(preparation.ready(false, 0), "an explicit request or changed context permits preparation without a retained object");
+}
+
+void testConsoleLockState() {
+    WTSINFOEXW info{};
+    info.Level = 1;
+    auto& level = info.Data.WTSInfoExLevel1;
+    level.SessionId = 7;
+    level.SessionState = WTSActive;
+    level.SessionFlags = WTS_SESSIONSTATE_LOCK;
+    require(unlock_windows::consoleLocked(&info, sizeof(info), 7), "known active locked console is accepted");
+    level.SessionFlags = WTS_SESSIONSTATE_UNLOCK;
+    require(!unlock_windows::consoleLocked(&info, sizeof(info), 7), "known active unlocked console is accepted");
+    const auto rejects = [](const void* data, DWORD bytes, DWORD session) {
+        try { (void)unlock_windows::consoleLocked(data, bytes, session); }
+        catch (const std::runtime_error&) { return true; }
+        return false;
+    };
+    require(rejects(nullptr, sizeof(info), 7), "missing WTS response rejects");
+    require(rejects(&info, sizeof(info) - 1, 7), "truncated WTS response rejects");
+    require(rejects(&info, sizeof(info), 8), "different console session rejects");
+    info.Level = 2;
+    require(rejects(&info, sizeof(info), 7), "unknown WTS response level rejects");
+    info.Level = 1;
+    level.SessionState = WTSDisconnected;
+    require(rejects(&info, sizeof(info), 7), "inactive physical console rejects");
+    level.SessionState = WTSActive;
+    level.SessionFlags = static_cast<LONG>(-1);
+    require(rejects(&info, sizeof(info), 7), "unknown console lock state rejects");
+}
+
 int main() {
+    testBindingSummaryReadback();
+    testEndpointAssociation();
+    testPreparationState();
+    testConsoleLockState();
     testLastUnlockCodec();
     testLastUnlockHistory();
     testLastUnlockText();

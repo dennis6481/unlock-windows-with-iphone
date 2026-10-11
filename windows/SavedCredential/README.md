@@ -12,6 +12,8 @@ This protection does not resist an administrator who obtains SYSTEM or a comprom
 
 ## Authentication and IPC
 
+Stable BLE preparation failures remain associated with the target context after connection cleanup. Background polling does not rebuild that failed connection; explicit requests, context changes or changed healthy structure may prepare again. Request ID and deadline are immutable task information; live authentication and binding statuses each have one owner.
+
 `unlockEligibility` checks an existing physical-console token, SID, session and explicit locked state. An eligible LogonUI caller can create a request only when its captured identity, saved identity and registration agree. The service owns all request/grant deadlines; the [protocol](../../PROTOCOL.md#request-and-one-time-approval) specifies their lifetimes.
 
 IPC version **3** uses one pipe. Unsupported versions and operations are rejected. Ordinary unlocked target-console clients read non-sensitive status; elevated clients manage passwords/bindings; only verified LogonUI can request unlock verification, receive a one-time offer or claim credentials. Process/pipe tokens, PID, session and expected LogonUI image are pinned and checked.

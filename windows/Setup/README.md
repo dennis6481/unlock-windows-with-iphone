@@ -49,6 +49,8 @@ Setup requires Windows 10 2004, build 19041, or later, using the minimum from [C
 
 ## Version and data rules
 
+Versions earlier than **1.0.0** must be uninstalled in Windows **Settings → Apps** before running this installer. The fixed maintenance floor is defined in `ProductVersion.h`; old installations and transactions are rejected before changes. Version read failures are errors, not an empty installation.
+
 | Operation | Behavior |
 |---|---|
 | Install | Confirm and deploy a new complete installation. |

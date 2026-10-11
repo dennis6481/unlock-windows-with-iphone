@@ -40,7 +40,7 @@ The encrypted version-2 record stores target SID, Classic/BLE endpoint IDs, Cont
 
 Disconnect, cancel, timeout, suspend/resume, unlock, logoff, account/console change, system relationship change or registration change invalidates the affected request/grant. Late callbacks cannot approve a cancelled or expired request; an unfinished native operation keeps the worker busy. No automatic retry creates another request or extends its deadline.
 
-Unlock, request cancellation/expiry and credential consumption keep a valid connection. Disconnect clears old structure/evidence while Windows retains reconnection intent; reconnection creates no authorization. Logoff, account/binding change, suspend and service stop release the connection; native login/resume re-evaluates eligibility. Stable preparation errors are reported without a generic retry loop; an explicit request or changed context may prepare again. The independent diagnostic closes its one-shot session.
+Unlock, request cancellation/expiry and credential consumption keep a valid connection. Disconnect clears old structure/evidence while Windows retains reconnection intent; reconnection creates no authorization. Logoff, account/binding change, suspend and service stop release the connection; native login/resume re-evaluates eligibility. Stable preparation errors remain attached to their target context after connection cleanup, without periodic reconstruction; an explicit request, changed context or changed healthy structure may prepare again. The independent diagnostic closes its one-shot session.
 
 ## IPC boundaries
 

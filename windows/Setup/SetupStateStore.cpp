@@ -10,14 +10,24 @@
 
 namespace unlock::components {
 std::optional<InstalledProduct> SetupStateStore::readInstalledProduct() const {
-    if (!registryKeyExists(kInstalledProductRegistryPath.c_str())) return std::nullopt;
+    if (!registryKeyExists(kInstalledProductRegistryPath.c_str())) {
+        if (registryKeyExists(kApplicationUninstallRegistryPath)) {
+            const auto version = readRegistryString(HKEY_LOCAL_MACHINE, kApplicationUninstallRegistryPath,
+                kDisplayVersionValueName).value_or(L"");
+            const auto error = maintenanceVersionError(version);
+            if (!error.empty()) fail(error);
+        }
+        return std::nullopt;
+    }
     InstalledProduct installed;
     installed.schemaVersion = readRegistryDword(HKEY_LOCAL_MACHINE, kInstalledProductRegistryPath.c_str(), kSchemaVersionValueName).value_or(0);
     installed.targetSid = readRegistryString(HKEY_LOCAL_MACHINE, kInstalledProductRegistryPath.c_str(), kTargetSidValueName).value_or(L"");
     installed.installedVersion = readRegistryString(HKEY_LOCAL_MACHINE, kInstalledProductRegistryPath.c_str(), kInstalledVersionValueName).value_or(L"");
     installed.wizardPath = readRegistryString(HKEY_LOCAL_MACHINE, kInstalledProductRegistryPath.c_str(), kStateWizardPathValueName).value_or(L"");
     installed.lastOperationId = readRegistryString(HKEY_LOCAL_MACHINE, kInstalledProductRegistryPath.c_str(), kLastOperationIdValueName).value_or(L"");
-    if (installed.schemaVersion != kWizardStateSchemaVersion || !parseProductVersion(installed.installedVersion) ||
+    const auto versionError = maintenanceVersionError(installed.installedVersion);
+    if (!versionError.empty()) fail(versionError);
+    if (installed.schemaVersion != kWizardStateSchemaVersion ||
         installed.targetSid.empty() || installed.wizardPath != (desktopDirectory() / kInstallerFile).wstring())
         fail(L"Installed product record is incomplete or unsupported. For an older installation, uninstall with its original installer before installing this version. No migration will run.");
     validateTargetSid(installed.targetSid);
@@ -46,11 +56,12 @@ std::optional<SetupTransactionState> SetupStateStore::readTransaction() const {
     state.installedVersion = readRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath.c_str(), kInstalledVersionValueName).value_or(L"");
     state.packageVersion = readRegistryString(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath.c_str(), kPackageVersionValueName).value_or(L"");
     state.payloadReady = readRegistryDword(HKEY_LOCAL_MACHINE, kWizardStateRegistryPath.c_str(), kPayloadReadyValueName).value_or(0) == 1;
+    const auto versionError = maintenanceVersionError(state);
+    if (!versionError.empty()) fail(versionError);
     if (state.schemaVersion != kWizardStateSchemaVersion || !isKnownPhase(*phase) || state.targetSid.empty())
         fail(L"Unsupported or incomplete installation record. Complete or uninstall an older installation with its original installer before installing this version. No migration will run.");
     validateTargetSid(state.targetSid);
-    if (state.operation > SetupOperation::uninstall || !parseProductVersion(state.packageVersion) ||
-        (state.phase == WizardPhase::installed && !parseProductVersion(state.installedVersion)))
+    if (state.operation > SetupOperation::uninstall)
         fail(L"Unsupported product version or operation record. No migration will run.");
     const auto packagePath = state.payloadReady ? state.wizardPath : state.sourcePath;
     if (state.phase != WizardPhase::installed && !packagePath.empty() && fileExists(packagePath))

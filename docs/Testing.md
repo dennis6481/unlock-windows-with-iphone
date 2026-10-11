@@ -36,6 +36,8 @@ Use the existing supported Windows/iOS versions, native x64/ARM64, a BLE Central
 
 ## Automated checks
 
+The maintenance-floor, preparation-failure, endpoint-association, binding-readback and shared console-state changes have static inspection only. Added regression sources have not been compiled or run. Verify two failed threshold readbacks retain the previously confirmed value and display errors without resubmitting; a successful readback supplies the actual saved state.
+
 Builds, test compilation/execution, packaging, installation, hardware checks and publishing require explicit authorization for the current task. Static inspection does not substitute for them.
 
 When explicitly authorized:
@@ -122,6 +124,7 @@ All remaining cases are **not tested** for this product revision. Repeat each wi
 | Phone leaves and returns | Old grant invalidates; next user click uses fresh communication/RSSI. |
 | Native login, repeated lock/unlock and desktop Quit | Service prepares independently, retains connection after each request and remains usable without the desktop. Compare connection, discovery and protected-operation latency. |
 | Idle connection and cancellation during background preparation | Idle connection does not return busy; accepted request cancels preparation, waits for pending native operations, then verifies without concurrent BLE work. |
+| Stable background preparation failure | Closing the connection must not trigger periodic reconstruction for the same context. An explicit request, changed target context or changed healthy structure may prepare again; cancellation for an incoming request must not block it. |
 | Cold connection with populated Windows service cache | Wait for Connected/Active before stable structure discovery; log connection readiness separately. Cached structure alone cannot skip live verification. |
 | Connected phone with sparse/no advertisements | Only post-request address/type-associated RSSI qualifies; missing samples wait then time out. Never substitute historical RSSI. |
 | Bluetooth off/on, repeatedly on both devices | Off rejects; restored pairing/association is re-resolved on a new click. |
@@ -136,6 +139,8 @@ Pairing metadata/protected requests do not independently attest current-link LES
 ## Installer and removal
 
 Exercise clean install, Reinstall, Update, downgrade rejection, restart continuation and Uninstall using the existing [installer guide](../windows/Setup/README.md). Verify self-contained Release imports and clean-machine installation separately on each architecture.
+
+An installed version below 1.0.0 must show its actual version and require uninstall in Windows Settings → Apps. Install/update/reinstall/uninstall and old transaction continuation must leave it untouched. Check 0.3.1, 0.65535.65535, an old Apps registration without a formal installation record, the 1.0.0 boundary, newer versions, malformed/missing versions and a supported fresh-install transaction with no previous version.
 
 Reject mixed/corrupt payloads, unsafe ACL/reparse paths and incomplete transactions. Hold a product/helper window open during maintenance: it must wait or report the real blockage, not forcibly terminate it. Existing installer schemas/continuation remain unchanged.
 

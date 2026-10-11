@@ -38,13 +38,18 @@ IAsyncOperation<DeviceInformationCollection> pairedEndpoints(bool ble) {
         DeviceInformationKind::AssociationEndpoint);
 }
 
-DeviceInformation uniqueEndpoint(const DeviceInformationCollection& items, const guid& target) {
+DeviceInformation findUniqueEndpoint(const DeviceInformationCollection& items, const guid& target) {
     DeviceInformation selected{nullptr};
     for (const auto& item : items) {
         if (containerId(item) != std::optional<guid>{target}) continue;
         if (selected) throw VerificationError(Failure::associationInvalid, "Ambiguous system container");
         selected = item;
     }
+    return selected;
+}
+
+DeviceInformation uniqueEndpoint(const DeviceInformationCollection& items, const guid& target) {
+    auto selected = findUniqueEndpoint(items, target);
     if (!selected) throw VerificationError(Failure::associationInvalid, "Missing paired system endpoint");
     return selected;
 }

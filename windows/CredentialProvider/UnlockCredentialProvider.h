@@ -7,7 +7,7 @@
 
 namespace unlock_windows::credential_provider {
 
-// The Components Wizard registers this Credential Provider CLSID.
+// The Setup registers this Credential Provider CLSID.
 inline constexpr GUID kUnlockCredentialProviderClsid{
     0x2f7a2df4,
     0x75b4,

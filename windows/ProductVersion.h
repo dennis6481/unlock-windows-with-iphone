@@ -17,7 +17,8 @@ struct ProductVersion final {
         return std::to_wstring(major) + L"." + std::to_wstring(minor) + L"." + std::to_wstring(patch);
     }
 };
-inline constexpr ProductVersion kProductVersion{0, 1, 0};
+inline constexpr ProductVersion kProductVersion{1, 0, 0};
+inline constexpr ProductVersion kMinimumMaintenanceVersion{1, 0, 0};
 
 [[nodiscard]] inline std::optional<ProductVersion> parseProductVersion(std::wstring_view text) {
     std::array<std::uint16_t, 3> parts{};
@@ -36,6 +37,15 @@ inline constexpr ProductVersion kProductVersion{0, 1, 0};
     if (offset != text.size()) return std::nullopt;
     return ProductVersion{parts[0], parts[1], parts[2]};
 }
+[[nodiscard]] inline std::wstring maintenanceVersionError(std::wstring_view text) {
+    const auto version = parseProductVersion(text);
+    if (!version) return L"Installed or transaction product version is missing or invalid. No changes were made.";
+    if (*version < kMinimumMaintenanceVersion)
+        return L"Version " + std::wstring(text) + L" is installed. Uninstall the old version in Windows Settings > Apps, then run this installer again. Versions earlier than " +
+            kMinimumMaintenanceVersion.text() + L" cannot be updated with this installer.";
+    return {};
+}
+
 enum class PackageAction { update, reinstall, rejectDowngrade };
 [[nodiscard]] constexpr PackageAction packageAction(ProductVersion incoming, ProductVersion installed) {
     return incoming > installed ? PackageAction::update : incoming == installed

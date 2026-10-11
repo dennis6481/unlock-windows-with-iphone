@@ -6,7 +6,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot '..\WindowsArchitecture.ps1')
+. (Join-Path $PSScriptRoot '..\WindowsBuild.ps1')
 
 $definitions = @{}
 function Read-HeaderDefinitions([string]$Path) {
@@ -38,20 +38,17 @@ function Read-RegistryRecord([Microsoft.Win32.RegistryKey]$Root, [string]$Path) 
 }
 
 $manifest = Read-HeaderDefinitions (Join-Path $PSScriptRoot '..\ComponentFiles.h')
-$contract = Read-HeaderDefinitions (Join-Path $PSScriptRoot '..\ComponentsWizard\SetupContract.h')
+$contract = Read-HeaderDefinitions (Join-Path $PSScriptRoot '..\Setup\SetupContract.h')
 Read-HeaderDefinitions (Join-Path $PSScriptRoot '..\SavedCredential\SavedCredentialIpc.h') | Out-Null
-Read-HeaderDefinitions (Join-Path $PSScriptRoot '..\PhoneApproval\EnrollmentStore.h') | Out-Null
+Read-HeaderDefinitions (Join-Path $PSScriptRoot '..\Enrollment\EnrollmentStore.h') | Out-Null
 $versionSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\ProductVersion.h') -Raw -ErrorAction Stop
 $version = [regex]::Matches($versionSource, 'kProductVersion\{(\d+), (\d+), (\d+)\}')
 if ($version.Count -ne 1) { throw 'Could not parse the authoritative product version.' }
 $packageVersion = $version[0].Groups[1..3].Value -join '.'
-$buildSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\CMakeLists.txt') -Raw -ErrorAction Stop
-$setupOutput = [regex]::Matches($buildSource, 'set\(UNLOCK_SETUP_OUTPUT_NAME "([^"]+)"\)')
-if ($setupOutput.Count -ne 1) { throw 'Could not parse the authoritative setup output name.' }
-$setupBuildName = $setupOutput[0].Groups[1].Value.Replace('${UNLOCK_VERSION_TEXT}', $packageVersion) + '.exe'
-$distOutput = [regex]::Matches($buildSource, 'set\(UNLOCK_DIST_DIRECTORY "([^"]+)"\)')
-if ($distOutput.Count -ne 1) { throw 'Could not parse the authoritative setup output directory.' }
-$distDirectory = $distOutput[0].Groups[1].Value.Replace('${CMAKE_CURRENT_SOURCE_DIR}', [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..')))
+$buildMetadata = Get-ProductBuildMetadata -Architecture (Get-NativeWindowsArchitecture)
+if ($buildMetadata.Version -cne $packageVersion) { throw 'Build metadata version does not match the authoritative product version.' }
+$setupBuildName = $buildMetadata.SetupFile
+$distDirectory = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\dist'))
 
 $entries = [regex]::Matches($manifest, '\{(k\w+), (true|false)\}')
 $count = [regex]::Match($manifest, 'std::array<ComponentFile, (\d+)>')

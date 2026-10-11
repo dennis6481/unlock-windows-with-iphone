@@ -1,0 +1,20 @@
+// Created by Rui MA on 11 Oct 2026
+
+#pragma once
+
+#include "../SavedCredential/SavedCredentialIpc.h"
+#include <string_view>
+#include <stdexcept>
+
+namespace unlock_windows::enrollment {
+struct BindingStatusRejected final : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
+saved_credential::BindingSummary readBinding();
+winrt::handle createCancellation(const std::wstring& sid, std::wstring& name);
+winrt::handle createSetupCancellation(const std::wstring& sid, std::wstring& name);
+DWORD launchHelper(const std::wstring& arguments);
+void manageBinding(saved_credential::Operation operation, const saved_credential::SensitiveBytes& payload);
+int runBindingHelper(std::wstring_view operation, std::wstring_view hex);
+}

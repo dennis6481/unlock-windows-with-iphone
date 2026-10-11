@@ -10,25 +10,27 @@ CP captures SID, PrimarySid, original QualifiedUserName and ProviderID from the 
 
 For phone unlocking, CP checks console identity and asks the service for `unlockEligibility`, without inventing account names or falling back to a lone candidate.
 
-The tile contains the app logo, title and **Unlock** action; it does not accept typed passwords or test approvals. Enter / Unlock starts `beginPhoneAuthentication`. Selection and locking alone do not create requests. Initial enumeration has `autoLogon=FALSE`; default tile selection remains controlled by LogonUI.
+The tile contains the app logo, title and **Unlock** action; it does not accept typed passwords or test approvals. Enter / Unlock starts `beginVerification`. Selection and locking alone do not create requests. Initial enumeration has `autoLogon=FALSE`; default tile selection remains controlled by LogonUI.
 
-Manual initiation returns a no-credential waiting state rather than blocking on BLE. A worker queries structured service status by requestID and marshals UI changes onto the COM/Advise thread. The service owns the deadline.
+Manual initiation returns a no-credential waiting state rather than blocking on BLE. The tile shows **Just a moment…** during verification; failure messages remain specific. A worker queries structured service status by requestID and marshals UI changes onto the COM/Advise thread. The service owns the 30-second deadline. Deselection requests cancellation; late operations cannot create a grant.
 
 ## Automatic submission
 
 When approval becomes available, the worker obtains one `takeAutoSubmitOffer`. The message window calls `CredentialsChanged` on the Advise thread; the next eligible enumeration exposes automatic submission once. `GetSerialization` validates the current captured identity/nonce and offer before claiming the password.
 
-The service consumes approval before releasing plaintext. CP packs credentials in LogonUI using protected/ID-provider flags and submits to native Negotiate. It does not construct a token or call `LsaLogonUser`. Only native authentication confirms actual unlock.
+The service rechecks 3-second communication/RSSI evidence and consumes authorization before decrypting the password. CP packs credentials in LogonUI using protected/ID-provider flags and submits to native Negotiate. It does not construct a token or call `LsaLogonUser`. Only native authentication confirms actual unlock.
 
-Matching identity/session re-enumeration can retain an unsubmitted offer. Identity changes and UnAdvise retire worker state. Missing notifications, serialization failure or native password rejection cannot restore a consumed approval or reissue its offer; another attempt requires a fresh phone request.
+After successful serialization, `ReportResult` reports its claim nonce and native status to the service once. A matching native success updates **Last Unlock**; rejection, packing failure and missing reports do not. Reporting uses the existing bounded pipe call, logs failures and leaves Windows authentication unchanged.
+
+Matching identity/session re-enumeration can retain an unsubmitted offer. Identity changes and UnAdvise retire worker state. Missing notifications, serialization failure or native password rejection cannot restore a consumed approval or reissue its offer; another attempt requires a fresh presence request.
 
 ## Presentation and deployment
 
-Status text distinguishes phone waiting, signal failure, disconnected transport, automatic response off, timeout, verification failure, service failure and genuine session changes. Approval is shown as an unlock attempt, not completed success.
+Status text distinguishes presence verification, signal failure, disconnection, timeout, verification failure, service failure and genuine session changes. Approval is shown as an unlock attempt, not completed success.
 
-`AppTile.bmp` is derived from the standard iOS icon and is a provider logo, not a replacement user avatar. LogonUI controls tile typography; desktop DPI settings are not injected into CP.
+`AppTile.bmp` is the existing product icon and is a provider logo, not a replacement user avatar. LogonUI controls tile typography; desktop DPI settings are not injected into CP.
 
-Install/update through the [installer](../ComponentsWizard/README.md) and honor its restart boundary. Do not overwrite a DLL already loaded by LogonUI. Service, CP and app must be from the same build. Use the [testing guide](../../docs/Testing.md#authentication-and-security-boundaries) for repeated enumeration, single consumption and native-login recovery.
+Install/update through the [installer](../Setup/README.md) and honor its restart boundary. Do not overwrite a DLL already loaded by LogonUI. Service, CP and app must be from the same build. Verify repeated enumeration, single consumption and native-login recovery.
 
 ## References
 

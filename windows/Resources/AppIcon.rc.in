@@ -1,7 +1,0 @@
-// Created by Rui MA on 02 Oct 2026
-// Derived from @UNLOCK_APP_ICON_SOURCE@ (standard appearance only).
-
-#include "@CMAKE_CURRENT_SOURCE_DIR@/Resources/resource.h"
-
-IDI_UNLOCK_APP ICON "@CMAKE_CURRENT_SOURCE_DIR@/Resources/AppIcon.ico"
-IDB_UNLOCK_TILE BITMAP "@CMAKE_CURRENT_SOURCE_DIR@/Resources/AppTile.bmp"

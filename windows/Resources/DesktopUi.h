@@ -16,11 +16,6 @@ inline void require(BOOL value, const char* operation) {
     if (!value) throw std::runtime_error(std::string(operation) + ": Win32=" + std::to_string(GetLastError()));
 }
 
-inline void initialize() {
-    INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_STANDARD_CLASSES | ICC_PROGRESS_CLASS};
-    require(InitCommonControlsEx(&controls), "InitCommonControlsEx(desktop UI)");
-}
-
 inline void scheduleDpiAppearance(HWND window, UINT dpi) {
     require(PostMessageW(window, kApplyDpiAppearance, dpi, 0), "PostMessageW(dialog DPI appearance)");
 }
@@ -56,11 +51,11 @@ public:
         const auto instance = reinterpret_cast<HINSTANCE>(GetWindowLongPtrW(window, GWLP_HINSTANCE));
         const auto big = LoadImageW(instance, MAKEINTRESOURCEW(IDI_UNLOCK_APP), IMAGE_ICON,
             GetSystemMetricsForDpi(SM_CXICON, dpi), GetSystemMetricsForDpi(SM_CYICON, dpi), LR_SHARED);
-        const auto small = LoadImageW(instance, MAKEINTRESOURCEW(IDI_UNLOCK_APP), IMAGE_ICON,
+        const auto smallIcon = LoadImageW(instance, MAKEINTRESOURCEW(IDI_UNLOCK_APP), IMAGE_ICON,
             GetSystemMetricsForDpi(SM_CXSMICON, dpi), GetSystemMetricsForDpi(SM_CYSMICON, dpi), LR_SHARED);
-        require(big != nullptr && small != nullptr, "LoadImageW(dialog icons)");
+        require(big != nullptr && smallIcon != nullptr, "LoadImageW(dialog icons)");
         SendMessageW(window, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(big));
-        SendMessageW(window, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(small));
+        SendMessageW(window, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(smallIcon));
     }
 private:
     HFONT titleFont_ = nullptr;

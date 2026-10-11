@@ -1,36 +1,33 @@
-<!-- Created by Rui MA on 05 Oct 2026 -->
+<!-- Created by Rui MA on 26 Sep 2026 -->
 
-# Security model and limitations
+# Security
 
-This is an **experimental developer preview**. It has not undergone an independent security audit and does not guarantee absolute security. Use particular caution on machines containing important confidential information. A working unlock demonstration is not evidence that all attack or failure scenarios have been covered.
+## Credential protection
 
-## Credentials and encryption
+- The saved Microsoft account password remains on the PC, protected by **LocalSystem user-scope DPAPI** and SYSTEM-only vault ACLs. Its format is unchanged.
+- Product binding uses separate machine-bound DPAPI storage, with SYSTEM/administrator-only write permissions and atomic commit. Ordinary desktop clients read only non-sensitive service summaries.
+- Neither the phone nor the desktop app receives the password. Only verified LogonUI can claim it after current presence validation. The service consumes authorization before decrypting; CP uses native Negotiate.
+- SYSTEM, administrator or kernel compromise is outside this protection boundary. Controlled plaintext is cleared where practical; removal does not guarantee erasure from backups or SSD history.
 
-- The iPhone holds a non-exportable Secure Enclave P-256 signing key. Its keychain representation uses `AfterFirstUnlockThisDeviceOnly`, is not synchronized and has no software-key fallback.
-- Windows keeps an encrypted **copy of the account password** so its native authentication can still validate the account. This is a password-backed unlock design, not passwordless Windows authentication.
-- The dedicated LocalSystem service encrypts that copy using **LocalSystem user-scope DPAPI**, rather than machine-scope DPAPI. Password storage is restricted by SYSTEM-only ACLs. Phone public-key registration is separate protected storage using machine-scope DPAPI.
-- The tray and BLE link never receive the password. An eligible LogonUI Credential Provider can obtain it only after valid phone approval. The service consumes that approval before decrypting; plaintext is cleared where controlled and CP submits through native Negotiate.
+## Presence authorization
 
-DPAPI, ACLs and caller checks do not protect against an attacker who controls SYSTEM, the kernel or the relevant running processes. Plaintext exists transiently during native credential submission. Deleting files does not guarantee physical erasure from SSDs, backups or snapshots.
+The user explicitly clicks **Unlock** on the PC. The phone needs no fresh Face ID, Touch ID, tap or app interaction. Locking the PC alone does not initiate unlock.
 
-## Authentication boundaries
+The service checks a unique Windows ContainerId relationship, authenticated Secure Connections pairing records, fresh protected ANCS/CCCD operations and current address/type-associated RSSI. Full account identity, request, binding, connection, session, logon and lock generation remain bound to one short-lived, single-use authorization.
 
-Requests use a random nonce, canonical ECDSA P-256/SHA-256 payload and the locally registered phone key. Approval is short-lived, bound to identity/session/lock generation and consumed once. IPC separates ordinary-user transport, elevated management and eligible LogonUI operations. Pairing requires an unlocked desktop and full-fingerprint confirmation; alternate administrator elevation does not select a different target account.
+Connections and Windows-cached service structure may persist across unlocks. They are not authorization: every request resets its evidence and performs new protected operations. Background connection/reconnection never releases credentials.
 
-The application does **not remove, disable or replace the original Windows password/PIN sign-in providers**. Initial sign-in after boot or sign-out still uses a native Windows method. Phone approval permits a native password attempt; Windows remains the authentication authority. Keep a working native sign-in method available during experiments.
+**Pairing records are not independent proof of current-link LESC mode or key reuse.** Successful authenticated/encrypted GATT requests prove the requested protected operation succeeded, within the Windows API boundary.
 
-## Proximity, device access and trust
+**RSSI is not secure distance.** Advertisements are unauthenticated, can be spoofed or relayed, and may be missing during standby or address rotation. A nearby signal is a presence hint, not proof of the phone user's intent or resistance to a relay attack.
 
-RSSI is only a configurable signal-strength heuristic. It does not prove a fixed distance and is not a cryptographic distance bound or a defense against relay attacks. ComputerId identifies the configured target for routing; it does not authenticate the Windows server cryptographically.
+## Windows boundaries
 
-Automatic response does not require fresh Face ID/Touch ID or a confirmation tap for each signature. The key can be usable after the first phone unlock following restart, even while the phone is subsequently locked. Physical possession and phone settings therefore matter.
+Original password/PIN providers remain available. Initial sign-in after boot or sign-out still requires a native method. Only the existing password-backed MSA, single-user physical-console scope is supported; no local-account, multi-user or remote-session support is added.
 
-`unlock_approved` reports a service grant, not proof that the desktop unlocked. Expired requests, consumed grants, stale callbacks or native password failure cannot authorize a second attempt without a fresh request/signature. The [protocol](PROTOCOL.md) specifies the exact boundaries.
+IPC version 3 removes all signature/phone transport operations. Ordinary processes cannot begin unlock verification, approve it, obtain auto-submit offers or claim passwords. UAC is required for password and binding changes; the service verifies the installed target's complete identity rather than using the elevated administrator as target.
 
-## Diagnostics and reporting
+Ordinary clients cannot report successful unlocks. Only the original pinned LogonUI claim with matching nonce and current identity/session/binding may report its native result. Last-unlock time/RSSI is non-sensitive service-memory history and cannot create or restore authorization.
 
-Do not publish passwords, private keys, provisioning/signing material or raw credential data. Diagnostic code retains account/SID/session and device/request identifiers when needed to establish identity and timing; redact personal identifiers in shared reports while keeping restricted original evidence.
+Cancellation, expiry, disconnect, suspend, unlock, logoff, account/session change, binding mutation and invalid system association invalidate related authorization. Cached communication, old/missing RSSI, late callbacks and repeated claims cannot authorize release. Missing/stale RSSI may wait within the original request deadline; claim still requires fresh communication and signal. Native password failure never restores a consumed grant.
 
-When reporting a suspected issue, include the affected revision, platform versions and a sanitized reproduction. Avoid putting credentials or exploit-sensitive details in public issues. Use GitHub's private vulnerability-reporting entry if it is available for the repository; this document does not promise that a private channel or response SLA is configured.
-
-There is no separate security-maintenance commitment for historical experimental revisions. The [testing guide](docs/Testing.md) lists identity, caller, replay and failure checks; passing those checks does not constitute a security audit.

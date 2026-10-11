@@ -56,12 +56,13 @@
 - Once a new path is established and `main` no longer needs the old path, remove
   the superseded implementation. Do not use glue code to maintain historical
   paths.
-- In documentation and status reports, clearly distinguish observed results,
-  inferences, and unverified assumptions. A successful partial experiment MUST
-  NOT be presented as completion of a product feature.
-- If a reference link is provided and used in an approved implementation, add it at the end of README.md.
-- If a reference link is provided but is not used, do not add it in README.md
-- After each turn, check all the documents to see if the information needs to be updated.
+- After each turn, without subagent, verify if there's overengineering or unneccesary code, or old compatibility code.
+
+## Documentations
+
+- Review all documents after a turn.
+- Make the least modification possible to update the documentation
+- Do not add long paragraphy
 - Keep the existing document writing style
 
 ## Build and validation

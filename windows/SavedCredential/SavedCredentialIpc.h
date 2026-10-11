@@ -3,22 +3,26 @@
 #pragma once
 
 #include <Windows.h>
-#include "../Protocol/SigningPayload.h"
+#include <ntsecapi.h>
+#include "../Bluetooth/SystemBleContract.h"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace unlock_windows::saved_credential {
 
 inline constexpr wchar_t kPipeName[] = L"\\\\.\\pipe\\unlock-windows-saved-credential-v1";
-inline constexpr wchar_t kPhonePipeName[] = L"\\\\.\\pipe\\unlock-windows-phone-approval-v1";
 inline constexpr wchar_t kServiceName[] = L"UnlockWindowsSavedCredentialService";
 inline constexpr std::size_t kMaxPacket = 16 * 1024;
+inline constexpr std::size_t kMaxPasswordChars = 1024;
 inline constexpr std::size_t kNonceSize = 16;
-inline constexpr ULONGLONG kPhoneAuthenticationLifetimeMs = protocol::kChallengeLifetimeMilliseconds;
+inline constexpr std::uint16_t kProtocolVersion = 3;
+inline constexpr DWORD kPipeTransferLifetimeMs = 2000;
+inline constexpr wchar_t kBindingCancelPrefix[] = L"Global\\UnlockWindowsWithIPhone-Pairing-";
 
 enum class Operation : std::uint16_t {
     captureIdentity = 1,
@@ -28,16 +32,15 @@ enum class Operation : std::uint16_t {
     clearCredential = 5,
     claimCredential = 7,
     clearForRemoval = 8,
-    beginPhoneAuthentication = 9,
-    submitPhoneAssertion = 10,
-    reloadPhoneEnrollment = 11,
+    beginVerification = 9,
     takeAutoSubmitOffer = 12,
-    takePhoneChallenge = 13,
-    reportPhoneFailure = 14,
-    phoneAuthenticationStatus = 15,
+    verificationStatus = 15,
     unlockEligibility = 16,
-    peekPhoneAuthentication = 17,
     captureProvisioningIdentity = 18,
+    credentialSummary = 19,
+    bindingStatus = 20, beginBinding = 21, removeBinding = 22, saveThreshold = 23,
+    cancelVerification = 24, bindingTaskStatus = 25, serviceDiagnostics = 26,
+    reportUnlockResult = 27, lastUnlockStatus = 28,
 };
 
 inline constexpr bool isKnownOperation(const std::uint16_t value) noexcept {
@@ -49,45 +52,48 @@ inline constexpr bool isKnownOperation(const std::uint16_t value) noexcept {
     case Operation::clearCredential:
     case Operation::claimCredential:
     case Operation::clearForRemoval:
-    case Operation::beginPhoneAuthentication:
-    case Operation::submitPhoneAssertion:
-    case Operation::reloadPhoneEnrollment:
+    case Operation::beginVerification:
     case Operation::takeAutoSubmitOffer:
-    case Operation::takePhoneChallenge:
-    case Operation::reportPhoneFailure:
-    case Operation::phoneAuthenticationStatus:
+    case Operation::verificationStatus:
     case Operation::unlockEligibility:
-    case Operation::peekPhoneAuthentication:
     case Operation::captureProvisioningIdentity:
+    case Operation::bindingStatus:
+    case Operation::beginBinding:
+    case Operation::removeBinding:
+    case Operation::saveThreshold:
+    case Operation::cancelVerification:
+    case Operation::bindingTaskStatus:
+    case Operation::serviceDiagnostics:
+    case Operation::credentialSummary:
+    case Operation::reportUnlockResult:
+    case Operation::lastUnlockStatus:
         return true;
     default:
         return false;
     }
 }
 
-inline constexpr bool isPhoneOperation(Operation operation) noexcept {
-    return operation == Operation::takePhoneChallenge || operation == Operation::reportPhoneFailure ||
-        operation == Operation::submitPhoneAssertion || operation == Operation::peekPhoneAuthentication;
-}
-
-class PhoneChallengeDeliveryState final {
-public:
-    bool beginDelivery(Operation operation) noexcept {
-        if (operation != Operation::takePhoneChallenge || delivered_) return false;
-        delivered_ = true;
-        return true;
-    }
-    bool delivered() const noexcept { return delivered_; }
-private:
-    bool delivered_ = false;
-};
-
 enum class Result : std::uint32_t {
     success = 0,
     rejected = 1,
     invalidRequest = 2,
     internalError = 3,
+    busy = 4,
 };
+
+inline constexpr bool requiresLogonUi(Operation operation) noexcept {
+    switch (operation) {
+    case Operation::captureIdentity:
+    case Operation::captureProvisioningIdentity:
+    case Operation::claimCredential:
+    case Operation::beginVerification:
+    case Operation::verificationStatus:
+    case Operation::unlockEligibility:
+    case Operation::takeAutoSubmitOffer:
+    case Operation::reportUnlockResult: return true;
+    default: return false;
+    }
+}
 
 struct SensitiveBytes final {
     std::vector<std::uint8_t> value;
@@ -106,11 +112,16 @@ struct Identity final {
     GUID providerId{};
 };
 
-struct StatusPayload final {
+[[nodiscard]] bool sameIdentity(const Identity& left, const Identity& right) noexcept;
+
+struct CredentialSummary {
     Identity identity;
-    std::array<std::uint8_t, kNonceSize> snapshotNonce{};
     bool credentialPresent = false;
     bool credentialMatches = false;
+};
+
+struct StatusPayload final : CredentialSummary {
+    std::array<std::uint8_t, kNonceSize> snapshotNonce{};
 };
 
 struct AutoSubmitOffer final {
@@ -118,13 +129,30 @@ struct AutoSubmitOffer final {
     ULONGLONG expiresAt = 0;
 };
 
+struct UnlockResult final {
+    std::array<std::uint8_t, kNonceSize> nonce{};
+    NTSTATUS status = 0;
+    NTSTATUS substatus = 0;
+};
+
+struct LastUnlockSummary final {
+    ULONGLONG completedAt = 0;
+    std::int32_t rssi = 0;
+};
+
+[[nodiscard]] bool encodeUnlockResult(const UnlockResult& result, SensitiveBytes& output);
+[[nodiscard]] bool decodeUnlockResult(const std::uint8_t* data, std::size_t size, UnlockResult& output);
+[[nodiscard]] bool encodeLastUnlock(const std::optional<LastUnlockSummary>& summary, SensitiveBytes& output);
+[[nodiscard]] bool decodeLastUnlock(const std::uint8_t* data, std::size_t size, std::optional<LastUnlockSummary>& output);
+
 enum class AuthenticationStage : std::uint8_t {
-    idle, waitingPhone, awaitingAssertion, approved, failed, consumed,
+    idle, verifying, approved, failed, consumed, completed,
 };
 
 enum class AuthenticationFailure : std::uint8_t {
-    none, rssiTooLow, automaticDisabled, rssiUnavailable, subscriptionLost,
-    deliveryFailed, signingFailed, expired, sessionChanged, invalidAssertion,
+    none, rssiTooLow, rssiUnavailable, connectionLost, protectedOperationFailed,
+    expired, sessionChanged, associationInvalid, bondRejected, cancelled, bindingChanged,
+    storageFailed, evidenceExpired, internalError,
 };
 
 struct AuthenticationStatus final {
@@ -134,10 +162,32 @@ struct AuthenticationStatus final {
     ULONGLONG deadline = 0;
 };
 
-struct PhoneChallengePayload final {
-    AuthenticationStatus status;
-    std::string json;
+struct BindingSummary final {
+    system_ble::BindingState state = system_ble::BindingState::absent;
+    system_ble::BindingRecord record;
+    bool operator==(const BindingSummary&) const = default;
 };
+
+struct BindingChange final {
+    BindingSummary expected;
+    system_ble::BindingRecord candidate;
+    std::wstring cancelEvent;
+};
+
+struct BindingRemoval final {
+    BindingSummary expected;
+    std::wstring cancelEvent;
+};
+
+[[nodiscard]] bool encodeBinding(const system_ble::BindingRecord& record, SensitiveBytes& output);
+[[nodiscard]] bool decodeBinding(const std::uint8_t* data, std::size_t size, system_ble::BindingRecord& output);
+[[nodiscard]] bool encodeBindingSummary(const BindingSummary& summary, SensitiveBytes& output);
+[[nodiscard]] bool decodeBindingSummary(const std::uint8_t* data, std::size_t size, BindingSummary& output);
+[[nodiscard]] bool encodeBindingChange(const BindingChange& change, SensitiveBytes& output);
+[[nodiscard]] bool decodeBindingChange(const std::uint8_t* data, std::size_t size, BindingChange& output);
+[[nodiscard]] bool encodeBindingRemoval(const BindingRemoval& removal, SensitiveBytes& output);
+[[nodiscard]] bool decodeBindingRemoval(const std::uint8_t* data, std::size_t size, BindingRemoval& output);
+
 
 inline constexpr AuthenticationFailure authenticationExpiry(
     ULONGLONG now, ULONGLONG deadline, bool sameConsole, bool locked) noexcept {
@@ -152,8 +202,6 @@ inline constexpr bool isObservedConsoleEvent(DWORD eventSession, DWORD observedS
 [[nodiscard]] const wchar_t* authenticationStatusText(const AuthenticationStatus& status) noexcept;
 [[nodiscard]] bool encodeAuthenticationStatus(const AuthenticationStatus& status, SensitiveBytes& output);
 [[nodiscard]] bool decodeAuthenticationStatus(const std::uint8_t* data, std::size_t size, AuthenticationStatus& output);
-[[nodiscard]] bool encodePhoneChallenge(const PhoneChallengePayload& challenge, SensitiveBytes& output);
-[[nodiscard]] bool decodePhoneChallenge(const std::uint8_t* data, std::size_t size, PhoneChallengePayload& output);
 
 struct Packet final {
     Operation operation = Operation::status;
@@ -183,17 +231,21 @@ struct CallDiagnostics final {
 [[nodiscard]] bool decodeIdentity(const std::uint8_t* data, std::size_t size, Identity& output);
 [[nodiscard]] bool encodeStatus(const StatusPayload& status, SensitiveBytes& output);
 [[nodiscard]] bool decodeStatus(const std::uint8_t* data, std::size_t size, StatusPayload& output);
+[[nodiscard]] bool encodeCredentialSummary(const CredentialSummary& summary, SensitiveBytes& output);
+[[nodiscard]] bool decodeCredentialSummary(const std::uint8_t* data, std::size_t size, CredentialSummary& output);
 [[nodiscard]] bool encodeAutoSubmitOffer(const AutoSubmitOffer& offer, SensitiveBytes& output);
 [[nodiscard]] bool decodeAutoSubmitOffer(const std::uint8_t* data, std::size_t size, AutoSubmitOffer& output);
-[[nodiscard]] bool writePacket(HANDLE pipe, const Packet& packet);
-[[nodiscard]] bool readPacket(HANDLE pipe, Packet& packet);
-[[nodiscard]] bool writePacket(HANDLE pipe, const Packet& packet, DWORD waitMs);
-[[nodiscard]] bool readPacket(HANDLE pipe, Packet& packet, DWORD waitMs);
-[[nodiscard]] bool awaitReplyAcknowledgment(HANDLE pipe, Operation operation, DWORD waitMs);
+struct PipeIoContext final {
+    std::uint64_t deadline;
+    HANDLE stopEvent = nullptr;
+};
+[[nodiscard]] bool connectPipe(HANDLE pipe, HANDLE stopEvent);
+[[nodiscard]] bool writePacket(HANDLE pipe, const Packet& packet, const PipeIoContext& context);
+[[nodiscard]] bool readPacket(HANDLE pipe, Packet& packet, const PipeIoContext& context);
+[[nodiscard]] bool writeReplyAcknowledgment(HANDLE pipe, Operation operation, const PipeIoContext& context);
+[[nodiscard]] bool awaitReplyAcknowledgment(HANDLE pipe, Operation operation, const PipeIoContext& context);
 [[nodiscard]] const wchar_t* callStageName(CallStage stage);
 [[nodiscard]] bool call(Operation operation, SensitiveBytes&& request, Packet& reply,
-    DWORD waitMs = 2000, CallDiagnostics* diagnostics = nullptr);
-[[nodiscard]] bool callPhone(Operation operation, SensitiveBytes&& request, Packet& reply,
-    DWORD waitMs = 2000, CallDiagnostics* diagnostics = nullptr);
+    DWORD waitMs = kPipeTransferLifetimeMs, CallDiagnostics* diagnostics = nullptr);
 
 } // namespace unlock_windows::saved_credential

@@ -1,178 +1,64 @@
-<!-- Created by Rui MA on 03 Oct 2026 -->
+<!-- Created by Rui MA on 26 Sep 2026 -->
 
 # Protocol and architecture
 
-This document defines the current iPhone–Windows protocol, signing version **v1**, and the overall trust boundaries. Implementations are [iOS UnlockProtocol.swift](ios/Core/UnlockProtocol.swift) and the [Windows Protocol module](windows/Protocol). 
+No iPhone app is used. Windows system pairing identifies the selected phone; the LocalSystem service owns its product binding and every presence authorization decision. Windows native authentication remains the final authority.
 
-The scope is an existing locked physical-console session. Initial sign-in after boot or sign-out uses native Windows credentials. This specification describes behavior and contracts; [device testing](docs/Testing.md) is required to establish runtime results.
+## Shared contracts
 
-## Architecture
+- [SystemBleContract.h](windows/Bluetooth/SystemBleContract.h): ANCS/Notification Source UUIDs, ContainerId property, RSSI range −100…−20 dBm, 1 dBm step, −60 dBm default, 30-second request deadline and 3-second evidence lifetime.
+- [SavedCredentialIpc.h](windows/SavedCredential/SavedCredentialIpc.h): IPC version **3**, operations, status/failure enums, binding and packet codecs. Unsupported versions and operations are rejected.
+- [SystemBleSession](windows/Bluetooth/SystemBleSession.cpp): reusable system relationship, protected GATT and address-associated RSSI operations, shared with the independent diagnostic.
 
-### Pairing and password setup
+## Setup and binding
 
-```mermaid
-flowchart TB
-    Pair["Elevated pairing<br/>Unlocked console + full fingerprint"]
-    Registration["Protected registration<br/>Phone public key + account SID"]
-    Manager["Elevated password<br/>setup"]
-    Vault["Encrypted password<br/>LocalSystem user-scope DPAPI"]
-    Pair --> Registration
-    Manager --> Vault
-```
+1. Save the password for the complete Windows-verified target identity: SID, QualifiedUserName and ProviderID.
+2. Windows Bluetooth settings owns pairing and numeric confirmation. Existing Windows pairing is reused; the app does not initiate a pairing ceremony.
+3. The ordinary unlocked console user's Status page watches paired Classic and BLE endpoints when no iPhone is bound. Added, Updated and Removed events update the list; returning from Windows settings performs another enumeration. Entries share one named row per valid ContainerId; missing containers remain separate, with no name-based identity matching. The user selects the device and clicks **Bind selected device**.
+4. Only a unique Windows ContainerId relationship links one paired Classic endpoint to one paired BLE endpoint. Display names and guessed MAC addresses do not select identity.
+5. Explicit confirmation and UAC submit an expected-record/candidate change. The service independently verifies the system relationship, authenticated Secure Connections pairing record, protected communication and RSSI before atomic commit. Cancellation or failure retains the old binding.
 
-### Phone communication
+Newly paired devices are never registered automatically. The UI offers removal only for an existing binding; remove it before binding another device. Removal deletes the product binding, not Windows pairing. Threshold dragging changes only the pending UI value; Save requires UAC and restores the saved value on refusal or failure.
 
-```mermaid
-sequenceDiagram
-    participant Phone as iPhone
-    participant Tray as Windows app (user session)
-    participant Service as LocalSystem service
-    Tray->>Phone: ComputerId + challenge/result subscriptions
-    Tray->>Phone: Readiness probe
-    Phone->>Tray: Readiness receipt
-    Tray->>Service: Peek and take challenge only after readiness
-    Service->>Tray: Current challenge
-    Tray->>Phone: Challenge notification
-    Phone->>Phone: Fresh RSSI + Secure Enclave signature
-    Phone->>Tray: Signed assertion
-    Tray->>Service: Unmodified assertion over restricted IPC
-    Service->>Service: Match challenge + registration and verify signature
-    Service-->>Tray: Approval result
-    Tray-->>Phone: Result notification
-    Note over Service,Phone: Approval is not proof of Windows unlock. The tray has no password or approval authority.
-```
+The read-only `serviceDiagnostics` IPC operation returns the latest request's verification trace as UTF-8 text, restricted to the verified unlocked target console user and bounded by the IPC payload limit. The desktop pauses binding-status/diagnostics polling while the console is locked and resumes on its next unlocked poll. A rejected query is discarded only when the same console account is confirmed to have locked during that query; other failures remain errors. Diagnostics appends new lines to the desktop session history. Existing status payloads and persisted formats are unchanged; unsupported queries report an error.
 
-### Windows unlock
+## Registration storage
 
-```mermaid
-flowchart TB
-    Tile["Windows phone tile<br/>Enter / Unlock"]
-    Request["LocalSystem service<br/>Check identity + session<br/>30-second request"]
-    Verify["Service verifies signature<br/>See phone flow above"]
-    Grant["One-time grant<br/>Identity + session<br/>+ lock generation<br/>120 seconds"]
-    Offer["LogonUI auto-submit offer<br/>CredentialsChanged<br/>No password"]
-    Claim["Service checks CP claim<br/>Consume grant<br/>Then decrypt password"]
-    Pack["Credential Provider<br/>Check captured identity<br/>Pack credentials"]
-    Native["Native Negotiate<br/>Check password"]
-    Session["Windows restores<br/>the existing session"]
-    Tile -->|"Restricted IPC"| Request
-    Request --> Verify --> Grant --> Offer
-    Offer -->|"CP checks identity<br/>and claims"| Claim
-    Claim -->|"Password to<br/>eligible CP only"| Pack
-    Pack --> Native --> Session
-```
+`%ProgramData%\UnlockWindowsWithIPhone\enrollment.dat` retains machine-bound DPAPI encryption, protected pending-file creation, flushing and atomic replacement. SYSTEM and Administrators alone can write the file and its parent directory. The service owns storage; ordinary desktop clients read non-sensitive status over IPC.
 
-The installer deploys the four components and manages startup, maintenance and removal. It does not verify phone signatures or perform Windows authentication. See the [Windows guide](windows/README.md).
-
-## Identity and trust
-
-- Windows registers one valid P-256 public key and target account SID. Enrollment requires an unlocked console, explicit pairing and elevated full-fingerprint confirmation. Replacement is explicit; cancellation does not silently overwrite registration.
-- The phone private key uses Secure Enclave and `AfterFirstUnlockThisDeviceOnly` keychain accessibility. A signature demonstrates key use, not fresh biometric approval or that the phone is currently unlocked. The key may be unavailable before the first phone unlock after restart.
-- ComputerId is a persistent target locator, not an authenticated cryptographic server identity. Peripheral UUIDs route connections and names are display text. None substitutes for the service's registered-key verification.
-- Saved credentials bind SID, the system-provided QualifiedUserName and ProviderID. CP captures and checks PrimarySid against SID on enumeration. The elevated operator can differ from the target console user.
-- The service owns requests, deadlines and approval. The tray transports messages and has no password-claim operation; an arbitrary `approved` string cannot authorize credentials.
-- Restricted IPC checks the real client token, process, account and session. LogonUI operations additionally verify the SYSTEM caller and image while retaining its process handle. DPAPI runs after impersonation ends and LocalSystem is restored. This does not defend against an attacker controlling SYSTEM; see [SECURITY.md](SECURITY.md).
+The encrypted version-2 record stores target SID, Classic/BLE endpoint IDs, ContainerId, display name and threshold. Unsupported formats and invalid binding states are errors; they are never migrated or silently overwritten. Read/corruption/permission errors are distinct from an absent record. Password vault format and LocalSystem user-scope DPAPI remain unchanged.
 
 ## Request and one-time approval
 
-1. **Enter / Unlock** on the eligible phone tile calls `beginPhoneAuthentication`. Selecting the tile or locking the desktop alone does not start a request.
-2. The service verifies the current console, saved identity and registered SID, then creates a random requestID, 32-byte cryptographic nonce and timestamp. Its monotonic **30-second** deadline governs the entire request.
-3. The tray peeks at status, selects the unique connection subscribing to both challenge and result, and sends a readiness probe. Only a current connection/request receipt with valid subscriptions allows the tray to take and deliver the challenge once. Peeking does not consume it.
-4. The phone checks target identity and challenge data, then obtains fresh RSSI and signs within a **three-second** RSSI/signing window. The adjustable default is **−60 dBm**. Result waiting after sending is separate.
-5. Windows reconstructs the payload from its outstanding challenge, matches the registered key/fingerprint and request/version/expiry, and verifies the signature. It does not trust assertion-supplied nonce or audience.
-6. A valid assertion creates an in-memory grant lasting at most **120 seconds**, bound to saved identity, console session and lock generation. Restarting the service, expiry, actual unlock or relevant session/identity changes invalidate outstanding state.
-7. The service offers automatic submission once to eligible LogonUI. CP re-enumerates and makes a qualified `claimCredential`: the service **irreversibly consumes the grant before decrypting and returning the password**. Packing failure or native password rejection does not restore it.
-8. CP packs credentials inside LogonUI with `CRED_PACK_PROTECTED_CREDENTIALS | CRED_PACK_ID_PROVIDER_CREDENTIALS`, then submits to native Negotiate. Only Windows' successful password verification actually unlocks the session.
+1. Clicking **Unlock** lets an eligible LogonUI caller create a unique request for the locked physical console, with a fixed 30-second deadline. Selection and lock events alone do not start verification.
+2. One MTA BLE worker maintains the bound phone's connection after native sign-in, rechecks system endpoints and authenticated Secure Connections bond metadata for each request, and clears request evidence at request end. IPC only validates, queues and reads state; it never waits for GATT. An active or still-finishing BLE task returns **busy**; an idle retained connection does not.
+3. ANCS, Notification Source and CCCD structure queries use Windows Cached mode (which may query the device on a miss); valid objects are reused on the current connection. Each request performs authenticated/encrypted subscription, Uncached CCCD read and unsubscribe without reading notification contents. Service-list changes before the first complete protected subscribe/read/unsubscribe discard provisional structure and evidence within the original deadline; changes after that stability point invalidate the request.
+4. RSSI must be sampled after request start, match the current Bluetooth address **and address type**, be at most 3 seconds old and reach the saved threshold. Missing/old samples wait within the original deadline; fresh low samples fail immediately. Expired communication evidence is renewed when an eligible sample arrives. Address changes discard samples until a current associated sample exists.
+5. Request, binding, connection, full account identity, console session, logon identity and lock generation must still match before a one-time grant is made. Connection and invalidation listeners persist across requests; no historical request evidence is reused.
+6. CP receives one auto-submit offer and notifies LogonUI through `CredentialsChanged`. Claim rechecks communication/RSSI freshness and all contexts, **consumes authorization before decrypting the password**, then CP submits through native Negotiate.
+7. `ReportResult` sends the claim nonce and native status through `reportUnlockResult`. Only the matching pinned LogonUI process and unchanged account/session/binding can complete it. Native success records monotonic time and claimed RSSI in service memory; failures and duplicates cannot advance history or restore authorization.
 
-Each new lock/request requires a fresh signature, with no fixed cooldown. Password management uses a separate five-minute identity snapshot, issued only after the service verifies the signed-in console user and renewable within that logon. Initial provisioning records identity metadata only and grants no phone approval. Windows PIN/password sign-in remains available.
+Disconnect, cancel, timeout, suspend/resume, unlock, logoff, account/console change, system relationship change or registration change invalidates the affected request/grant. Late callbacks cannot approve a cancelled or expired request; an unfinished native operation keeps the worker busy. No automatic retry creates another request or extends its deadline.
 
-## Challenge and signing bytes
+Unlock, request cancellation/expiry and credential consumption keep a valid connection. Disconnect clears old structure/evidence while Windows retains reconnection intent; reconnection creates no authorization. Logoff, account/binding change, suspend and service stop release the connection; native login/resume re-evaluates eligibility. Stable preparation errors remain attached to their target context after connection cleanup, without periodic reconstruction; an explicit request, changed context or changed healthy structure may prepare again. The independent diagnostic closes its one-shot session.
 
-```json
-{
-  "audience": "windows-unlock",
-  "issuedAtMilliseconds": 0,
-  "nonce": "<base64: 32 bytes>",
-  "requestID": "<UUID>",
-  "version": 1
-}
-```
+## IPC boundaries
 
-The signature input is the following fixed binary sequence, independent of JSON ordering, spacing and escaping:
+| Caller | Permitted purpose |
+| --- | --- |
+| Ordinary target-console desktop | Non-sensitive account/binding/last-unlock summaries, binding-task status and cancellation. |
+| Elevated administrator at the target's unlocked console | Existing password management, binding/replace/remove and threshold save. Full target identity remains service-verified. |
+| Verified SYSTEM LogonUI in the locked physical console | Provisioning/capture, eligibility, verification start/status/cancel, one-time offer and credential claim. |
+| Verified SYSTEM LogonUI completing its claim | Native result reporting before or after the same session unlocks; no new credential access. |
 
-```text
-ASCII("unlock-windows-with-iphone/v1") || 0x00 ||
-UInt32BE(version) ||
-requestID[16 bytes, RFC 4122 order] ||
-nonce[32 bytes] ||
-Int64BE(issuedAtMilliseconds) ||
-UInt16BE(audienceUTF8ByteLength) || audienceUTF8
-```
+There is one saved-credential pipe. No phone pipe, signature submission, public-key reload, desktop approval operation or desktop credential claim exists. The service pins the client process and compares actual pipe/process tokens, sessions and expected LogonUI image. Client code checks SCM identity and server PID/session. Impersonation ends before LocalSystem DPAPI access.
 
-`BE` means big-endian. CryptoKit signs with ECDSA P-256/SHA-256; Windows CNG hashes and verifies the same payload. The context prefix separates this use from other signature protocols.
+Connection, reads, writes and reply acknowledgment use cancellable Overlapped I/O. Each connected client has one absolute 2000 ms transfer deadline; fragments and ACK do not renew it. Client `call` shares one deadline across the entire call. Service STOP signals an event, cancels pending I/O and drains completion before releasing its resources. Transport errors identify the stage and Win32 error; failed replies never restore consumed authorization.
 
-## Assertion
+`lastUnlockStatus` returns only optional success time/RSSI to the verified unlocked target user. History is not persisted or used for authentication. Service restart, account/session change, binding replacement/removal and password removal clear it; threshold changes retain it. New requests retire pending results. Reporting failure is diagnostic and never changes the native Windows result.
 
-```json
-{
-  "keyID": "<lowercase hex SHA-256 of publicKeyRawRepresentation>",
-  "publicKeyRawRepresentation": "<base64: 65-byte uncompressed P-256 X9.63 key>",
-  "requestID": "<same UUID as challenge>",
-  "signatureRawRepresentation": "<base64: 64-byte r || s ECDSA signature>",
-  "version": 1
-}
-```
+## Limits and acceptance
 
-The public key is `0x04 || X[32] || Y[32]`. The signature is fixed-size raw `r[32] || s[32]`, not DER. Windows validates hexadecimal fingerprints and normalizes case for comparison. A self-consistent key/signature pair is insufficient: the key must match local registration.
+Presence authorization does not require a fresh phone gesture. Pairing-history metadata and protected GATT success do not independently prove current-link LESC mode/key reuse. Advertisement RSSI is unauthenticated and is not secure distance or relay resistance. ANCS availability and long-standby/recovery behavior require hardware acceptance.
 
-## BLE messages
-
-Windows is the GATT server and the iPhone is the central. Service UUID: `F1E2D3C4-B5A6-4789-8012-3456789ABCDE`.
-
-| Characteristic | UUID suffix | Direction / properties | Purpose |
-|---|---|---|---|
-| request | `3456789ABCD1` | Phone → Windows; Write With Response | Enrollment, readiness receipt or failure report; cannot create authentication requests. |
-| challenge | `3456789ABCD2` | Windows → phone; Notify / Read | Complete challenge JSON. |
-| assertion | `3456789ABCD3` | Phone → Windows; Write With Response | Complete assertion JSON. |
-| result | `3456789ABCD4` | Windows → phone; Notify / Read | Request-related authentication or enrollment result. |
-| ComputerId | `3456789ABCD5` | Windows → phone; Read | Exactly 36 UTF-8 characters representing a nonzero UUID. |
-
-Full characteristic UUIDs use prefix `F1E2D3C4-B5A6-4789-8012-` plus the suffix above. Frames are:
-
-- Enrollment: `0x02 || publicKey[65]`, exactly 66 bytes; accepted only during explicit pairing.
-- Readiness: `0x04 || requestID[36 lowercase ASCII bytes]`, exactly 37 bytes; current selected connection and unexpired request only.
-- Phone failure: `0x03 || requestID[36 ASCII bytes] || reason[1]`, exactly 38 bytes; bound to the current authentication connection/request.
-
-Accepted phone failure reasons are `1` insufficient RSSI, `2` phone not eligible to approve (unpaired or pairing in progress), `3` fresh RSSI unavailable, `4` connection/subscription lost, and `6` signing failed. Reason `5` is an internal Windows delivery failure, not an accepted phone frame. Opcode `0x01` does not initiate authentication. Pairing excludes authentication request/assertion handling.
-
-ComputerId persists in the target user's `HKCU\Software\UnlockWindowsWithIPhone\GattHost`. An invalid existing value is an error, not silently replaced. Service discovery and transport recovery do not change the signing contract or registration. Messages must be complete; truncation/parsing failures are rejected. No application-level fragmentation support is promised.
-
-## Readiness and transport lifecycle
-
-The selected result subscriber receives a probe at most once a second:
-
-```json
-{"authenticated":false,"status":"transport_ready_required","requestID":"<current UUID>"}
-```
-
-The phone can cache one probe during initialization, then send `0x04` only after ComputerId verification and both native subscriptions. A challenge requires its matching acknowledgment in the current generation; unsolicited/early challenges are ignored and logged. Repeated probes or receipts do not extend deadlines or create another approval.
-
-Phone-only IPC `peekPhoneAuthentication = 17` has an empty payload and returns status without a challenge or delivery-state mutation. `takePhoneChallenge` consumes delivery once after readiness. Other IPC endpoints reject the peek operation. All preparation uses the original service deadline.
-
-The tray advertises only for an explicitly locked physical console or active desktop pairing. Stopping advertising does not proactively disconnect BLE, but remote service/subscriptions can become unusable. Actual Windows unlock controls stopping; receiving phone approval alone does not.
-
-Windows keeps publication target, raw WinRT status and API call results separate. Startup observation is bounded to five seconds, with at most three retries at 1/2/4 seconds after failure/abort. Successful StopAdvertising is recorded independently of a stale Started property, so the next lock can start again. Unlock, sleep and exit cancel retries; a new lock starts a new budget. An API call result is not radio-level verification.
-
-iOS native connection waiting is distinct from connected GATT initialization. Initialization has a ten-second monotonic limit and one active retry per route; expired callbacks cannot make it Ready. Confirmed service absence releases the connection and waits for new advertising. See [iOS recovery](ios/README.md#connection-and-recovery) for routing/cancellation responsibilities.
-
-## Results and rejection
-
-```json
-{"authenticated":true,"status":"unlock_approved","requestID":"<current UUID>"}
-```
-
-`unlock_approved` means service approval, **not confirmed Windows unlock**. Enrollment uses `authenticated: false` and `enrollment_*` status codes; a `detail: "saved_reload_failed"` result must not appear as complete enrollment success.
-
-Expired/replayed/mismatched requests, wrong keys/signatures, malformed messages, wrong account/session, initial sign-in, unlocked consoles and ineligible callers must be rejected. Signal, connection, timeout, service and genuine identity-change failures remain distinguishable. Failure cannot switch identities, revive consumed grants or fall back to software private keys.
-
-Diagnostics may record phases, errors, timing, generation and request IDs, but not passwords, private keys, nonce bytes or signature bodies. The [service](windows/SavedCredential/README.md), [GATT](windows/GattHost/README.md) and [CP](windows/CredentialProvider/README.md) guides explain local implementation boundaries.
+Existing MSA, single-user and local physical-console support is retained. Local accounts and remote sessions remain unsupported. A service **approved** status is not proof of Windows unlocking; acceptance requires the actual session to resume with no iPhone app, desktop app exited and both devices locked. See [Security](SECURITY.md).

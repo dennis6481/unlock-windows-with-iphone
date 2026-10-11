@@ -108,7 +108,9 @@ The main window uses system Mica and theme colors across the WinUI title bar, si
 **Last Unlock** stays right-aligned, for example `2 min ago / -58 dBm`, and updates after native Windows authentication succeeds. RSSI comes from the consumed claim, not a later scan. No history displays `—`; unbound phones hide the card and query failures remain explicit errors. Records survive desktop reopening but reset on service/PC restart, account change, binding replacement/removal or password removal. Threshold changes retain history. Compiled for x64 Release on 11 Oct 2026; runtime/hardware acceptance remains pending.
 ## Tag builds
 
-Windows installers are automatically built and published when a version tag is pushed. CI prepares build resources and invokes the MSBuild solution through `WindowsBuild.ps1`, without requiring GNU Make. See the [Release workflow](../.github/workflows/release.yml).
+Pushing `v1.0.0` publishes a Release; `v1.0.0-rc` publishes a Pre-release without marking it Latest. The numeric tag version must match [ProductVersion.h](ProductVersion.h); `-rc` is GitHub release metadata only, so RC and final installers with the same numeric version use Reinstall.
+
+CI runs all four native Release test programs through `UnlockWindowsTests.proj` on both x64 and ARM64 before building their installers. Any test, build or package verification failure blocks publication. CI uses `WindowsBuild.ps1` without GNU Make. See the [Release workflow](../.github/workflows/release.yml).
 
 ## References
 

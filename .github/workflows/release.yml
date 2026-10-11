@@ -11,8 +11,26 @@ permissions:
   contents: read
 
 jobs:
+  validate:
+    name: Validate release tag
+    runs-on: windows-2022
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+      prerelease: ${{ steps.tag.outputs.prerelease }}
+    steps:
+      - name: Validate version tag
+        id: tag
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_NAME -cnotmatch '^v(?<version>(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))(?<prerelease>-rc)?$') {
+              throw 'Expected a version tag such as v1.0.0 or v1.0.0-rc.'
+          }
+          "version=$($Matches.version)" >> $env:GITHUB_OUTPUT
+          "prerelease=$($Matches.prerelease -ceq '-rc')".ToLowerInvariant() >> $env:GITHUB_OUTPUT
+
   build:
     name: Release ${{ matrix.architecture }}
+    needs: [validate]
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -28,20 +46,14 @@ jobs:
     env:
       UNLOCK_TARGET_ARCH: ${{ matrix.architecture }}
       UNLOCK_VS_DEV_CMD: auto
+      RELEASE_VERSION: ${{ needs.validate.outputs.version }}
     steps:
       - name: Check out tagged revision
         uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - name: Validate version tag
-        shell: pwsh
-        run: |
-          if ($env:GITHUB_REF_NAME -cnotmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
-              throw 'Expected a version tag such as v0.1.0.'
-          }
-
-      - name: Build Release installer
+      - name: Run all Release tests
         shell: cmd
         run: |
           if not exist "..\.tmp" mkdir "..\.tmp"
@@ -50,6 +62,14 @@ jobs:
           set "TMP=%TEMP%"
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File WindowsBuild.ps1 -Prepare -OutputDirectory build
           if errorlevel 1 exit /b %errorlevel%
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File WindowsBuild.ps1 -InvokeMSBuild "UnlockWindowsTests.proj" /t:Test /m:1 /nologo "/p:Configuration=Release" "/p:UnlockBuildDirectory=%CD%\build" "/p:BuildTesting=ON"
+          if errorlevel 1 exit /b %errorlevel%
+
+      - name: Build Release installer
+        shell: cmd
+        run: |
+          set "TEMP=%CD%\..\.tmp"
+          set "TMP=%TEMP%"
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File WindowsBuild.ps1 -InvokeMSBuild "UnlockWindows.sln" /restore /m /nologo "/p:Configuration=Release" "/p:UnlockBuildDirectory=%CD%\build" "/p:BuildTesting=OFF"
           if errorlevel 1 exit /b %errorlevel%
 
@@ -63,7 +83,7 @@ jobs:
           }
           $installer = $installers[0]
           $version = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($installer.FullName)
-          if ("v$($version.ProductVersion)" -cne $env:GITHUB_REF_NAME -or $version.FileVersion -cne $version.ProductVersion) {
+          if ($version.ProductVersion -cne $env:RELEASE_VERSION -or $version.FileVersion -cne $version.ProductVersion) {
               throw "Installer version does not match tag $env:GITHUB_REF_NAME."
           }
           if ((Get-PortableExecutableArchitecture -Path $installer.FullName) -cne $env:UNLOCK_TARGET_ARCH) {
@@ -79,7 +99,7 @@ jobs:
 
   publish:
     name: Publish GitHub Release
-    needs: [build]
+    needs: [validate, build]
     runs-on: windows-2022
     permissions:
       contents: write
@@ -96,6 +116,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          RELEASE_PRERELEASE: ${{ needs.validate.outputs.prerelease }}
         run: |
           $installers = @(Get-ChildItem -LiteralPath installers -Filter '*.exe' -File -ErrorAction Stop)
           if ($installers.Count -ne 2) {
@@ -109,9 +130,13 @@ jobs:
           Build: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID
 
 
-          CI checks Windows package versions and PE architectures. Tests, installation, BLE and native unlock are not exercised by this workflow. The presence-unlock acceptance matrix remains pending; this is a developer technical preview.
+          CI requires all four native Release test programs to pass on both x64 and ARM64 and checks Windows package versions and PE architectures. Installation, BLE and native unlock are not exercised by this workflow. The presence-unlock hardware acceptance matrix remains pending.
           "@ | Set-Content -LiteralPath release-notes.md -Encoding utf8
-          gh release create $env:GITHUB_REF_NAME @assets --verify-tag --draft --title $env:GITHUB_REF_NAME --notes-file release-notes.md
+          $releaseOptions = @()
+          if ($env:RELEASE_PRERELEASE -ceq 'true') {
+              $releaseOptions = @('--prerelease', '--latest=false')
+          }
+          gh release create $env:GITHUB_REF_NAME @assets --verify-tag --draft --title $env:GITHUB_REF_NAME --notes-file release-notes.md @releaseOptions
           if ($LASTEXITCODE -ne 0) { throw 'Release creation or asset upload failed.' }
           gh release edit $env:GITHUB_REF_NAME --draft=false
           if ($LASTEXITCODE -ne 0) { throw 'Release publication failed.' }

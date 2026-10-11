@@ -52,7 +52,7 @@ Pipe source tests cover empty clients, partial headers/bodies, disconnected trun
 
 Last-unlock source tests cover result/summary codecs, success versus claim/approval/failure, duplicate and mismatched nonce/PID, ordinary caller rejection, changed full identity/session/binding, pending cancellation, threshold retention, service-memory reset and seconds/minutes/hours/days formatting. Actual pipe caller verification and native `ReportResult` remain runtime acceptance cases.
 
-The [Release workflow](../.github/workflows/release.yml) builds Windows installers and checks package versions/PE architectures. It has no iOS/IPA job and does not exercise installation, BLE or native unlock.
+The [Release workflow](../.github/workflows/release.yml) requires all four native Release test programs to pass on both x64 and ARM64 before publication, then checks installer versions/PE architectures. `v1.0.0` publishes a Release; `v1.0.0-rc` publishes a Pre-release. It has no iOS/IPA job and does not exercise installation, BLE or native unlock. This workflow change has static inspection only; no CI run is recorded here.
 
 ## First-install setup
 

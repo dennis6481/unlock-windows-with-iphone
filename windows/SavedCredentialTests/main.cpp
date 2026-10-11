@@ -7,6 +7,7 @@
 #include "../DesktopApp/Dashboard/Dashboard.h"
 #include "../ConsoleSession.h"
 #include <winrt/Windows.Foundation.Collections.h>
+#include <sddl.h>
 
 #include <cstdlib>
 #include <algorithm>
@@ -36,22 +37,38 @@ struct PipePair final {
     explicit PipePair(bool connected = true) {
         static unsigned sequence = 0;
         name = L"\\\\.\\pipe\\unlock-packet-test-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(++sequence);
+        PSECURITY_DESCRIPTOR descriptor = nullptr;
+        require(ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(A;;GA;;;OW)",
+            SDDL_REVISION_1, &descriptor, nullptr), "test pipe owner ACL must be created");
+        SECURITY_ATTRIBUTES attributes{sizeof(SECURITY_ATTRIBUTES), descriptor, FALSE};
         server.attach(CreateNamedPipeW(name.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE | FILE_FLAG_OVERLAPPED,
-            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, 1, 128, 128, 0, nullptr));
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, 1, 128, 128, 0, &attributes));
+        LocalFree(descriptor);
         require(server.get() != INVALID_HANDLE_VALUE, "overlapped test server must open");
-        if (connected) openClient();
+        if (connected) {
+            openClient();
+            require(connectPipe(server.get(), nullptr), "test connection must complete");
+        }
     }
     void openClient() {
         client.attach(CreateFileW(name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
             FILE_FLAG_OVERLAPPED, nullptr));
-        require(client.get() != INVALID_HANDLE_VALUE, "overlapped test client must open");
-        require(connectPipe(server.get(), nullptr), "test connection must complete");
+        if (client.get() == INVALID_HANDLE_VALUE) {
+            const auto error = GetLastError();
+            std::wcerr << L"FAILED: overlapped test client must open: " << name << L"; Win32=" << error << L'\n';
+            std::exit(EXIT_FAILURE);
+        }
     }
     void reconnect() {
         client.close();
         require(DisconnectNamedPipe(server.get()) || GetLastError() == ERROR_PIPE_NOT_CONNECTED,
             "test connection must disconnect");
+        std::thread listener([&] {
+            require(connectPipe(server.get(), nullptr), "test reconnection must complete");
+        });
+        require(WaitNamedPipeW(name.c_str(), kPipeTransferLifetimeMs), "test server must listen before reopening the client");
         openClient();
+        listener.join();
     }
 };
 
@@ -594,7 +611,7 @@ void testPresenceContracts() {
         "unsupported packet versions must reject");
 }
 
-struct EndpointFixture final : winrt::implements<EndpointFixture, winrt::Windows::Devices::Enumeration::IDeviceInformation> {
+struct EndpointFixture : winrt::implements<EndpointFixture, winrt::Windows::Devices::Enumeration::IDeviceInformation> {
     winrt::guid container;
     explicit EndpointFixture(winrt::guid value) : container(value) {}
     winrt::hstring Id() { return L"fixture"; }
@@ -603,8 +620,9 @@ struct EndpointFixture final : winrt::implements<EndpointFixture, winrt::Windows
     bool IsDefault() { return false; }
     winrt::Windows::Devices::Enumeration::EnclosureLocation EnclosureLocation() { return nullptr; }
     winrt::Windows::Foundation::Collections::IMapView<winrt::hstring, winrt::Windows::Foundation::IInspectable> Properties() {
-        return winrt::single_threaded_map<winrt::hstring, winrt::Windows::Foundation::IInspectable>(
-            {{unlock_windows::system_ble::kContainerProperty, winrt::box_value(container)}}).GetView();
+        auto properties = winrt::single_threaded_map<winrt::hstring, winrt::Windows::Foundation::IInspectable>();
+        properties.Insert(unlock_windows::system_ble::kContainerProperty, winrt::box_value(container));
+        return properties.GetView();
     }
     void Update(winrt::Windows::Devices::Enumeration::DeviceInformationUpdate const&) { throw winrt::hresult_not_implemented(); }
     winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Devices::Enumeration::DeviceThumbnail> GetThumbnailAsync() {

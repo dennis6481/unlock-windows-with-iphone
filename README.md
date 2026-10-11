@@ -107,9 +107,9 @@ Please refer to [SECURITY.md](SECURITY.md) for more details.
 
 A contribution is welcome. Feel free to open an issue if you would like to continue where I've left off, or simply if you found some bugs, or some improvements.
 
-## License and acknowledgements
+## License
 
-The project uses the [MIT License](LICENSE.md). This is an independent project; product names identify the platforms it works with.
+The project uses the [MIT License](LICENSE.md).
 
 ## References
 

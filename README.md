@@ -46,6 +46,8 @@ Use a physical iPhone running iOS 26 or later. No iPhone app, IPA or developer s
 
 After restarting your PC or signing out, sign in once with your usual Windows password or PIN before using iPhone unlock again.
 
+After native sign-in, the service keeps the bound phone's BLE connection across unlocks and lets Windows reconnect when it returns within range. Service structure uses Windows caching; each Unlock still requires fresh protected communication and signal evidence. Missing fresh signal waits within the existing request deadline.
+
 ### Installation
 
 1. Get the native x64 or ARM64 [Windows installer](https://github.com/dennis6481/unlock-windows-with-iphone/releases) and follow its steps. After restarting, sign in once with your usual Windows password or PIN, then choose **Start setup**.

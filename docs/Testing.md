@@ -14,6 +14,8 @@ Service association watchers now use the shared paired-only selectors. This chan
 
 Detailed service traces have static inspection only. Verify Diagnostics shows progress before completion, paired bond properties, watcher counts/status, GATT results and timings, then success/failure. Polling must not duplicate lines, including when the IPC-bounded trace drops older lines or a new request starts.
 
+Persistent BLE connections, Windows-cached structure and deadline-bounded RSSI waiting have static inspection only. No build, compilation tests, packaging, installation or hardware validation was run for this change. Record connection/session/service changes and distinguish Cached-mode queries from proven object reuse and new protected operations.
+
 ## Environment and evidence
 
 The [independent LocalSystem diagnostic](BleSystemPoc.md) has user-reported evidence for no iPhone app, both devices locked, desktop app exited, protected BLE/RSSI success, Bluetooth-off rejection and low-signal rejection. These observations permit implementation; they do not establish final Windows unlock or complete recovery acceptance.
@@ -73,7 +75,9 @@ Service **approved** does not replace the actual native Windows session result.
 | Initial sign-in, wrong account, signed-out or remote session | No eligible presence authorization/credential claim. Native sign-in remains available. |
 | Ordinary process imitates approve/start/claim/offer | No approval interface; privileged LogonUI operations reject the caller. |
 | IPC version 2, removed phone operations, malformed/truncated packets | Explicit rejection; no old transport or signature fallback. |
-| Cached discovery/communication, missing/stale RSSI, low signal | Fail without password release; a new click is required. |
+| Cached structure, historical communication or samples before request start | Structure may be reused; old evidence never authorizes password release. |
+| Missing/stale RSSI during verification | Wait within the original deadline; renew expired communication once eligible RSSI arrives. No deadline extension. |
+| Fresh RSSI below the saved threshold | Fail immediately without password release or threshold adjustment. |
 | Samples before request start, wrong/currently changed address or address type | Reject old correlation; accept only new current-associated samples. Unmatched endpoints fail. |
 | Initial GATT list changes | Discard provisional discovery and rediscover within the same 30-second deadline. |
 | GATT list changes after stability, disconnect or system relation invalidation | Invalidate request/grant immediately. |
@@ -101,9 +105,13 @@ All remaining cases are **not tested** for this product revision. Repeat each wi
 | Scenario | Checks |
 | --- | --- |
 | Phone leaves and returns | Old grant invalidates; next user click uses fresh communication/RSSI. |
+| Native login, repeated lock/unlock and desktop Quit | Service prepares independently, retains connection after each request and remains usable without the desktop. Compare connection, discovery and protected-operation latency. |
+| Idle connection and cancellation during background preparation | Idle connection does not return busy; accepted request cancels preparation, waits for pending native operations, then verifies without concurrent BLE work. |
+| Cold connection with populated Windows service cache | Wait for Connected/Active before stable structure discovery; log connection readiness separately. Cached structure alone cannot skip live verification. |
+| Connected phone with sparse/no advertisements | Only post-request address/type-associated RSSI qualifies; missing samples wait then time out. Never substitute historical RSSI. |
 | Bluetooth off/on, repeatedly on both devices | Off rejects; restored pairing/association is re-resolved on a new click. |
 | Screen off 5 minutes, 30 minutes and overnight | Record availability, latency, RSSI gaps and whether waking was needed. |
-| Suspend/resume | In-flight request invalidates; a new click can recover. |
+| Suspend/resume, logoff, binding removal or account change | In-flight request invalidates and connection closes; eligible login/resume prepares again without creating authorization. |
 | Service restart and PC reboot | No old task/grant survives; binding/threshold persist. |
 | Unpair/re-pair, address change, same-name second device | Unique registered system relation remains required; explicit rebinding handles changed endpoints. |
 | Watch/headphones coexistence and adapter/driver variants | Record protected operation, signal and recovery results separately. |
@@ -128,4 +136,4 @@ Start with Windows **Diagnostics** and the separate [system BLE diagnostic](BleS
 
 It does not start services/tasks, repair installation or mount offline hives. Access/read errors are evidence, not proof of absence.
 
-Compare console/caller eligibility → unique system relation/bond → Uncached discovery → protected CCCD operation/unsubscribe → current RSSI → one-time offer/claim → native Windows result. Keep approved and actual unlock results separate. Release notes must identify the exact revision and exercised scenarios.
+Compare console/caller eligibility → unique system relation/bond → connection and cached structure → new protected CCCD operation/unsubscribe → current RSSI → one-time offer/claim → native Windows result. Keep approved and actual unlock results separate. Release notes must identify the exact revision and exercised scenarios.

@@ -36,14 +36,19 @@ struct Evidence final {
 
 class Session final {
 public:
-    Session(BindingRecord binding, std::uint64_t started, std::function<bool()> valid,
+    Session(BindingRecord binding,
         std::function<void(const std::string&)> report = {});
     ~Session();
     Session(const Session&) = delete;
     Session& operator=(const Session&) = delete;
+    void prepare(std::uint64_t started, std::function<bool()> valid);
+    void beginRequest(std::uint64_t started, std::function<bool()> valid);
+    void endRequest();
     void verify();
     void refresh();
     void close();
+    bool healthy() const;
+    std::uint64_t revision() const;
     Evidence evidence() const;
 private:
     struct State;

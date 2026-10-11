@@ -16,11 +16,13 @@ This protection does not resist an administrator who obtains SYSTEM or a comprom
 
 IPC version **3** uses one pipe. Removed phone challenge, assertion and reload operations are rejected. Ordinary unlocked target-console clients read non-sensitive status; elevated clients manage passwords/bindings; only verified LogonUI can request unlock verification, receive a one-time offer or claim credentials. Process/pipe tokens, PID, session and expected LogonUI image are pinned and checked.
 
-One MTA worker owns BLE; IPC only validates, queues and reads status. Pending cleanup keeps the worker busy. The shared [BLE operations](../Bluetooth/SystemBleSession.cpp) verify unique system endpoints, pairing history, protected Uncached ANCS/CCCD operations and fresh RSSI. Communication and RSSI must still be within 3 seconds at claim.
+One MTA worker owns BLE and maintains the bound phone after native sign-in; IPC only validates, queues and reads status. Pending cleanup keeps the worker busy, but an idle retained connection does not. The shared [BLE operations](../Bluetooth/SystemBleSession.cpp) use Windows-cached service structure, verify unique system endpoints and pairing history, then perform new protected subscription/Uncached CCCD read/unsubscribe for every request. Missing/stale RSSI waits within the original deadline; fresh low signal fails. Communication and RSSI must still be within 3 seconds at claim.
 
 States distinguish idle, verifying, approved, failed, consumed and completed binding. Reasons distinguish pairing/association, protected operation, connection, RSSI, timeout, cancellation, storage and context failures. Request deadlines remain 30 seconds; no retry or callback extends them.
 
 `serviceDiagnostics` exposes the latest request's bounded verification trace to the verified unlocked target console user. Diagnostics records request IDs, watcher status/counts, pairing properties, GATT results, operation timings and failures. Cleanup failures preserve an earlier verification failure.
+
+Request completion clears evidence while retaining a valid connection. Disconnect invalidates evidence/structure and leaves Windows reconnection intent active; reconnection never approves a request. Logoff, account/binding change, suspend and service stop close the connection. Preparation errors are explicit; stable failures wait for an explicit request or changed context rather than retrying indefinitely.
 
 The service consumes authorization before decrypting. CP rebuild, packing failure and native password rejection cannot restore it. Connection, system association, console/power/account and registration changes invalidate affected requests. Actual native Windows session recovery remains the acceptance result.
 ## Password management

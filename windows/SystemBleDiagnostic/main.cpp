@@ -127,13 +127,14 @@ IAsyncAction probe(const std::shared_ptr<Run> run, guid target, int threshold) {
         BindingRecord record{L"diagnostic", std::wstring(classic.Id()), std::wstring(ble.Id()), target,
             std::wstring(ble.Name()), threshold};
         run->log->write(L"BEGIN shared system BLE verification; unique Classic/BLE container; threshold=" + std::to_wstring(threshold));
-        Session session(record, run->started, [run, cancellation] {
+        Session session(record, [run](const std::string& message) { run->log->write(std::wstring(winrt::to_hstring(message))); });
+        session.beginRequest(run->started, [run, cancellation] {
             return !run->invalid && !cancellation() && generation.load() == run->ticket &&
                 WTSGetActiveConsoleSessionId() == consoleSession.load() && !run->log->failed;
         });
         session.verify();
         const auto proof = session.evidence();
-        run->log->write(L"Protected Uncached ANCS/Notification Source/CCCD verification and unsubscribe completed; RSSI=" +
+        run->log->write(L"Cached-mode ANCS structure and protected Uncached CCCD verification/unsubscribe completed; RSSI=" +
             std::to_wstring(proof.rssi) + L" dBm; age=" + std::to_wstring(GetTickCount64() - proof.rssiAt) + L" ms");
         session.close();
         require(!run->invalid && generation.load() == run->ticket && GetTickCount64() < run->deadline && !cancellation(),

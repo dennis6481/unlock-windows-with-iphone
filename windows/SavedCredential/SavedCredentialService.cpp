@@ -46,6 +46,8 @@ constexpr ACCESS_MASK kClientPipeRights = 0x0012019B;
 std::atomic_bool gStopping{false};
 std::atomic<ULONGLONG> gConsoleGeneration{0};
 std::atomic<ULONGLONG> gIdentityGeneration{0};
+std::atomic<ULONGLONG> gConnectionGeneration{0};
+std::atomic_bool gSuspended{false};
 std::atomic<DWORD> gObservedConsoleSession{0xffffffff};
 std::atomic_bool gPipeFailed{false};
 SERVICE_STATUS_HANDLE gStatusHandle = nullptr;
@@ -413,6 +415,8 @@ public:
                     auto cancellation = openCancellation(removal.cancelEvent);
                     if (WaitForSingleObject(cancellation.value, 0) != WAIT_TIMEOUT || !verifiedManagementIdentity(console)) return response;
                     enrollmentStore_.remove();
+                    ++gConnectionGeneration;
+                    wake_.notify_one();
                     response.result = Result::success;
                     return response;
                 }
@@ -431,6 +435,8 @@ public:
                         if (WaitForSingleObject(cancellation.value, 0) != WAIT_TIMEOUT || bindingSummary() != original ||
                             !verifiedManagementIdentity(console)) fail("Threshold cancelled or binding/account changed before commit");
                     });
+                    ++gConnectionGeneration;
+                    wake_.notify_one();
                     response.result = Result::success;
                     return response;
                 }
@@ -554,11 +560,15 @@ public:
                 vault_.save(snapshot_->identity,
                     request.payload.value.data() + kNonceSize + sizeof(passwordBytes),
                     passwordBytes, request.operation == Operation::updateCredential);
+                ++gConnectionGeneration;
+                wake_.notify_one();
                 grant_.reset();
                 rejectTask(AuthenticationFailure::bindingChanged);
             } else if (request.operation == Operation::clearCredential) {
                 if (!client.admin || console.locked || !request.payload.value.empty()) return response;
                 vault_.clear();
+                ++gConnectionGeneration;
+                wake_.notify_one();
                 grant_.reset();
                 rejectTask(AuthenticationFailure::bindingChanged);
             } else if (request.operation == Operation::clearForRemoval) {
@@ -569,6 +579,8 @@ public:
                 provisioning_.reset();
                 rejectTask(AuthenticationFailure::bindingChanged);
                 removing_ = true;
+                ++gConnectionGeneration;
+                wake_.notify_one();
             } else if (request.operation == Operation::takeAutoSubmitOffer) {
                 if (!client.logonUi || !console.locked) return response;
                 Identity identity;
@@ -749,26 +761,133 @@ private:
         try {
             winrt::init_apartment(winrt::apartment_type::multi_threaded);
             struct Apartment final { ~Apartment() { winrt::uninit_apartment(); } } apartment;
+            std::shared_ptr<unlock_windows::system_ble::Session> retained;
+            std::optional<unlock_windows::system_ble::BindingRecord> retainedBinding;
+            std::optional<Console> retainedConsole;
+            ULONGLONG retainedGeneration = 0;
+            bool preparationFailed = false;
+            std::uint64_t preparationRevision = 0;
+            std::string backgroundError;
+            const auto closeRetained = [&] {
+                if (retained) {
+                    retained->close();
+                    retained.reset();
+                }
+                retainedBinding.reset();
+                retainedConsole.reset();
+                preparationFailed = false;
+            };
+            const auto report = [this](const std::string& message) {
+                std::lock_guard lock(mutex_);
+                appendDiagnostic(task_ ? std::string(task_->binding ? "binding" : "authentication") +
+                    " request=" + task_->status.requestId + " " + message : "BLE connection " + message);
+            };
             for (;;) {
                 std::shared_ptr<BleTask> task;
+                bool stopping;
                 {
-                    std::unique_lock lock(mutex_);
-                    wake_.wait(lock, [&] { return stopping_ || task_; });
-                    if (stopping_ && !task_) return;
+                    std::lock_guard lock(mutex_);
                     task = task_;
+                    stopping = stopping_;
+                }
+                if (gStopping || stopping) {
+                    closeRetained();
+                    return;
+                }
+                if (preparationFailed && retained && retained->healthy() && retained->revision() != preparationRevision)
+                    preparationFailed = false;
+                if (!task) {
+                    std::optional<unlock_windows::system_ble::BindingRecord> desired;
+                    std::optional<Console> console;
+                    const auto generation = gConnectionGeneration.load();
+                    try {
+                        {
+                            std::lock_guard lock(mutex_);
+                            if (!removing_ && !gSuspended) {
+                                const auto binding = bindingSummary();
+                                const auto stored = vault_.storedIdentity();
+                                if (binding.state == unlock_windows::system_ble::BindingState::bound && stored) {
+                                    console = currentConsole();
+                                    gObservedConsoleSession = console->session;
+                                    std::wstring targetSid;
+                                    winrt::check_hresult(unlock::components::readSetupTargetSid(targetSid));
+                                    if (console->sid == targetSid && binding.record.accountSid == targetSid && stored->sid == targetSid) {
+                                        if (sameIdentity(*stored, consoleIdentity(*console))) desired = binding.record;
+                                        else fail("BLE connection target online identity differs from saved identity");
+                                    }
+                                }
+                            }
+                        }
+                        const bool sameContext = desired && retainedBinding == desired && retainedConsole && console &&
+                            retainedGeneration == generation && retainedConsole->session == console->session &&
+                            retainedConsole->sid == console->sid && retainedConsole->logonId.LowPart == console->logonId.LowPart &&
+                            retainedConsole->logonId.HighPart == console->logonId.HighPart;
+                        if (!sameContext) {
+                            closeRetained();
+                            if (desired) {
+                                retainedBinding = desired;
+                                retainedConsole = console;
+                                retainedGeneration = generation;
+                                retained = std::make_shared<unlock_windows::system_ble::Session>(*desired, report);
+                                { std::lock_guard lock(mutex_); diagnosticSid_ = desired->accountSid; }
+                                report("Maintain selected phone after native sign-in; no authorization created");
+                            }
+                        }
+                        backgroundError.clear();
+                        if (retained && !preparationFailed) {
+                            try {
+                                retained->prepare(GetTickCount64(), [this, generation] {
+                                    std::lock_guard lock(mutex_);
+                                    return !stopping_ && !gStopping && !gSuspended && !task_ &&
+                                        generation == gConnectionGeneration.load();
+                                });
+                            } catch (const unlock_windows::system_ble::VerificationError& error) {
+                                if (error.reason != AuthenticationFailure::cancelled) {
+                                    preparationFailed = true;
+                                    preparationRevision = retained->revision();
+                                    report(std::string("Preparation failed; next explicit request may prepare again: ") + error.what());
+                                }
+                            } catch (...) {
+                                preparationFailed = true;
+                                preparationRevision = retained->revision();
+                                report("Preparation failed: " + winrt::to_string(winrt::to_message()));
+                            }
+                            if (!retained->healthy()) {
+                                retained->close();
+                                retained.reset();
+                                preparationFailed = true;
+                            }
+                        }
+                    } catch (...) {
+                        const auto error = winrt::to_string(winrt::to_message());
+                        closeRetained();
+                        if (error != backgroundError) { report("Preparation unavailable: " + error); backgroundError = error; }
+                    }
+                    std::unique_lock lock(mutex_);
+                    wake_.wait_for(lock, std::chrono::seconds(1), [&] { return stopping_ || gStopping || task_; });
+                    continue;
                 }
                 std::shared_ptr<unlock_windows::system_ble::Session> connection;
                 try {
-                    connection = std::make_shared<unlock_windows::system_ble::Session>(task->change.candidate, task->started, [task] {
-                        return !task->cancelled && !gStopping &&
+                    if (preparationFailed || !retainedBinding || *retainedBinding != task->change.candidate ||
+                        !retainedConsole || retainedConsole->session != task->session ||
+                        retainedConsole->sid != task->identity.sid || retainedConsole->logonId.LowPart != task->logonId.LowPart ||
+                        retainedConsole->logonId.HighPart != task->logonId.HighPart ||
+                        retainedGeneration != gConnectionGeneration.load()) closeRetained();
+                    if (!retained) {
+                        retainedBinding = task->change.candidate;
+                        retainedConsole = Console{task->session, task->identity.sid, !task->binding, task->logonId};
+                        retainedGeneration = gConnectionGeneration.load();
+                        retained = std::make_shared<unlock_windows::system_ble::Session>(*retainedBinding, report);
+                    }
+                    connection = retained;
+                    const auto connectionGeneration = retainedGeneration;
+                    connection->beginRequest(task->started, [task, connectionGeneration] {
+                        return !task->cancelled && !gStopping && !gSuspended &&
+                            connectionGeneration == gConnectionGeneration.load() &&
                             (!task->cancelEvent.value || WaitForSingleObject(task->cancelEvent.value, 0) == WAIT_TIMEOUT) &&
                             task->consoleGeneration == gConsoleGeneration.load() &&
                             task->identityGeneration == gIdentityGeneration.load();
-                    }, [this, task](const std::string& message) {
-                        std::lock_guard lock(mutex_);
-                        if (task_ == task)
-                            appendDiagnostic(std::string(task->binding ? "binding" : "authentication") +
-                                " request=" + task->status.requestId + " " + message);
                     });
                     connection->verify();
                     {
@@ -816,29 +935,40 @@ private:
                     }
                 } catch (const unlock_windows::system_ble::VerificationError& error) {
                     OutputDebugStringA(error.what());
+                    if (error.reason == AuthenticationFailure::associationInvalid || error.reason == AuthenticationFailure::bondRejected ||
+                        error.reason == AuthenticationFailure::internalError) preparationFailed = true;
                     std::lock_guard lock(mutex_);
                     if (!task->cancelled) rejectTask(error.reason, error.what());
                 } catch (...) {
                     const auto error = winrt::to_message();
                     OutputDebugStringW(error.c_str());
+                    preparationFailed = true;
                     std::lock_guard lock(mutex_);
                     if (!task->cancelled) rejectTask(task->binding ? AuthenticationFailure::storageFailed : AuthenticationFailure::internalError, winrt::to_string(error));
                 }
                 if (connection) {
-                    try { connection->close(); }
+                    try { connection->endRequest(); }
                     catch (...) {
-                        OutputDebugStringW(winrt::to_message().c_str());
-                        std::lock_guard lock(mutex_);
-                        if ((!task->binding || managementStatus_.stage != AuthenticationStage::completed) &&
-                            (task->binding ? managementStatus_ : authenticationStatus_).stage != AuthenticationStage::failed)
-                            rejectTask(AuthenticationFailure::protectedOperationFailed, winrt::to_string(winrt::to_message()));
+                        const auto error = winrt::to_string(winrt::to_message());
+                        {
+                            std::lock_guard lock(mutex_);
+                            appendDiagnostic("BLE request cleanup failed: " + error);
+                            if ((!task->binding || managementStatus_.stage != AuthenticationStage::completed) &&
+                                (task->binding ? managementStatus_ : authenticationStatus_).stage != AuthenticationStage::failed)
+                                rejectTask(AuthenticationFailure::protectedOperationFailed, error);
+                        }
+                        closeRetained();
+                    }
+                    if (retained && (preparationFailed || !retained->healthy())) {
+                        retained->close();
+                        retained.reset();
+                        preparationFailed = true;
                     }
                 }
                 {
                     std::lock_guard lock(mutex_);
                     task->connection.reset();
                     task_.reset();
-                    if (stopping_) return;
                 }
             }
         } catch (...) {
@@ -926,15 +1056,24 @@ DWORD WINAPI serviceControl(const DWORD control, const DWORD eventType, void* ev
 
         return NO_ERROR;
     }
-    if (control == SERVICE_CONTROL_POWEREVENT) { ++gConsoleGeneration; return NO_ERROR; }
+    if (control == SERVICE_CONTROL_POWEREVENT) {
+        ++gConsoleGeneration;
+        if (eventType == PBT_APMSUSPEND) { gSuspended = true; ++gConnectionGeneration; }
+        else if (eventType == PBT_APMRESUMEAUTOMATIC || eventType == PBT_APMRESUMESUSPEND || eventType == PBT_APMRESUMECRITICAL) {
+            gSuspended = false;
+            ++gConnectionGeneration;
+        }
+        return NO_ERROR;
+    }
     if (control == SERVICE_CONTROL_SESSIONCHANGE) {
         const auto* notification = static_cast<const WTSSESSION_NOTIFICATION*>(eventData);
         if (notification != nullptr && isObservedConsoleEvent(notification->dwSessionId, gObservedConsoleSession.load()) &&
-            (eventType == WTS_SESSION_LOCK || eventType == WTS_SESSION_UNLOCK || eventType == WTS_SESSION_LOGOFF ||
+            (eventType == WTS_SESSION_LOCK || eventType == WTS_SESSION_UNLOCK || eventType == WTS_SESSION_LOGON || eventType == WTS_SESSION_LOGOFF ||
             eventType == WTS_CONSOLE_CONNECT ||
             eventType == WTS_CONSOLE_DISCONNECT || eventType == WTS_REMOTE_DISCONNECT)) {
             ++gConsoleGeneration;
             if (eventType != WTS_SESSION_UNLOCK) ++gIdentityGeneration;
+            if (eventType != WTS_SESSION_LOCK && eventType != WTS_SESSION_UNLOCK) ++gConnectionGeneration;
         }
         return NO_ERROR;
     }

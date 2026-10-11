@@ -17,6 +17,8 @@ The user explicitly clicks **Unlock** on the PC. The phone needs no fresh Face I
 
 The service checks a unique Windows ContainerId relationship, authenticated Secure Connections pairing records, fresh protected ANCS/CCCD operations and current address/type-associated RSSI. Full account identity, request, binding, connection, session, logon and lock generation remain bound to one short-lived, single-use authorization.
 
+Connections and Windows-cached service structure may persist across unlocks. They are not authorization: every request resets its evidence and performs new protected operations. Background connection/reconnection never releases credentials.
+
 **Pairing records are not independent proof of current-link LESC mode or key reuse.** Successful authenticated/encrypted GATT requests prove the requested protected operation succeeded, within the Windows API boundary.
 
 **RSSI is not secure distance.** Advertisements are unauthenticated, can be spoofed or relayed, and may be missing during standby or address rotation. A nearby signal is a presence hint, not proof of the phone user's intent or resistance to a relay attack.
@@ -27,7 +29,7 @@ Original password/PIN providers remain available. Initial sign-in after boot or 
 
 IPC version 3 removes all signature/phone transport operations. Ordinary processes cannot begin unlock verification, approve it, obtain auto-submit offers or claim passwords. UAC is required for password and binding changes; the service verifies the installed target's complete identity rather than using the elevated administrator as target.
 
-Cancellation, expiry, disconnect, suspend, unlock, logoff, account/session change, binding mutation and invalid system association invalidate related authorization. Cached communication, old/missing RSSI, late callbacks and repeated claims are rejected. Native password failure never restores a consumed grant.
+Cancellation, expiry, disconnect, suspend, unlock, logoff, account/session change, binding mutation and invalid system association invalidate related authorization. Cached communication, old/missing RSSI, late callbacks and repeated claims cannot authorize release. Missing/stale RSSI may wait within the original request deadline; claim still requires fresh communication and signal. Native password failure never restores a consumed grant.
 
 ## Reporting and acceptance
 

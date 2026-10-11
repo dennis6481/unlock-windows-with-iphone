@@ -91,11 +91,16 @@ void StatusPage::Update(unlock_windows::desktop_app::DashboardSnapshot const& sn
     connection_.Text(bound ? snapshot.connection : L"");
     approvalCard_.Visibility(known && paired ? Visibility::Visible : Visibility::Collapsed);
     error_.Title(L"Status needs attention");
-    if (bound && bindingView_ && !bindingView_->busy()) {
+    const bool resetView = resetBindingView_ && known && !bound && !Busy();
+    if ((bound || resetView) && bindingView_ && !bindingView_->busy()) {
         bindingView_->stop();
         std::uint32_t index = 0;
         if (statusPanel_.Children().IndexOf(bindingView_->content, index)) statusPanel_.Children().RemoveAt(index);
         bindingView_.reset();
+    }
+    if (resetView) {
+        saveError_.clear();
+        resetBindingView_ = false;
     }
     if (known && !bound && !snapshot.busy && !bindingView_ && !stopped_) {
         try {
@@ -170,13 +175,27 @@ fire_and_forget StatusPage::save(weak_ref<StatusPage> weak) {
 
 void StatusPage::EnsureBindingView() {
     if (bindingView_) return;
-    bindingView_ = unlock_windows::desktop_app::createBindingView([weak = get_weak()](std::wstring failure) {
+    bindingView_ = unlock_windows::desktop_app::createBindingView([weak = get_weak()] {
+        const auto page = weak.get();
+        if (!page || page->stopped_) throw hresult_error(RO_E_CLOSED);
+        return page->XamlRoot();
+    }, [weak = get_weak()](std::wstring failure) {
         if (auto page = weak.get(); page && !page->stopped_) {
             page->saveError_ = std::move(failure);
             page->error_.Message(page->saveError_); page->error_.IsOpen(!page->saveError_.empty());
         }
+    }, [weak = get_weak()](const unlock_windows::saved_credential::BindingSummary& binding) {
+        if (auto page = weak.get(); page && !page->stopped_) {
+            page->resetBindingView_ = binding.state != unlock_windows::system_ble::BindingState::bound;
+            page->saveError_.clear();
+            page->refreshSnapshot_(page->resetBindingView_);
+        }
     });
     statusPanel_.Children().InsertAt(statusPanel_.Children().Size() - 1, bindingView_->content);
+}
+
+void StatusPage::SetHost(std::function<void(bool)> refresh) {
+    refreshSnapshot_ = std::move(refresh);
 }
 
 void StatusPage::Refresh() {

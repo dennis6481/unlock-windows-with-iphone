@@ -30,15 +30,21 @@ void DiagnosticsPage::Update(std::wstring const& diagnostics) {
     if (diagnostics == displayedDiagnostics_) return;
     const auto selectionStart = diagnostics_.SelectionStart();
     const auto selectionLength = diagnostics_.SelectionLength();
-    const auto scroll = DiagnosticsScroll();
-    const auto verticalOffset = scroll.VerticalOffset();
+    const auto scroll = scrollHost_.get();
+    const auto verticalOffset = scroll ? scroll.VerticalOffset() : 0.0;
     diagnostics_.Text(diagnostics);
     displayedDiagnostics_ = diagnostics;
     const auto textLength = static_cast<int32_t>(diagnostics_.Text().size());
     const auto start = std::min(selectionStart, textLength);
     diagnostics_.Select(start, std::min(selectionLength, textLength - start));
-    scroll.UpdateLayout();
-    scroll.ChangeView(nullptr, verticalOffset, nullptr, true);
+    if (scroll) {
+        scroll.UpdateLayout();
+        scroll.ChangeView(nullptr, verticalOffset, nullptr, true);
+    }
+}
+
+void DiagnosticsPage::SetScrollHost(ScrollViewer const& scroll) {
+    scrollHost_ = make_weak(scroll);
 }
 
 void DiagnosticsPage::Stop() {

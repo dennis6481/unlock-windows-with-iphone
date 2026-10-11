@@ -99,9 +99,9 @@ Module guides: [SavedCredential](SavedCredential/README.md), [CredentialProvider
 
 The main WinUI window and tray retain the desktop STA. A desktop worker handles helpers/status; the LocalSystem service's single MTA worker owns BLE validation. Closing the main window hides it; Quit exits the desktop app without disabling lock-screen verification. Role arguments do not grant service permission.
 
-Navigation remains **Status**, **Password**, **Diagnostics**, with **About** at the bottom. Password management, notifications and update checks retain their existing roles. Diagnostics preserves text selection/scrolling and no longer embeds BLE probe code.
+Navigation remains **Status**, **Password**, **Diagnostics**, with **About** at the bottom. Password management, notifications and update checks retain their existing roles. All pages share an outer scroller for headers, actions and content, with per-page positions. Diagnostics preserves text selection/scrolling and no longer embeds BLE probe code.
 
-**Status** shows pairing guidance and a paired-device list when no iPhone is bound. Open Windows Bluetooth settings to pair, return, select a device and click **Bind selected device**. Binding/removal require confirmation and UAC. A bound iPhone keeps its existing status layout with removal only; remove it before binding another. Removal leaves Windows pairing intact. There is no separate binding window.
+**Status** shows pairing guidance and a paired-device list when no iPhone is bound. Open Windows Bluetooth settings to pair, return, select a device and click **Bind selected device**. Binding/removal require confirmation and UAC. A bound iPhone keeps its existing status layout with removal only; remove it before binding another. The WinUI removal confirmation defaults to Cancel; successful removal returns to device selection and keeps Windows pairing and the saved password. Paired Classic/BLE entries share one row per valid ContainerId, showing only the device name. There is no separate binding window.
 
 **Status** displays the bound name and saved RSSI threshold. Dragging edits a pending value; **Save** requests UAC. Refusal/failure restores the saved value and shows the reason. Initial binding chooses the same threshold range/default. No hardware acceptance is claimed.
 ## Tag builds

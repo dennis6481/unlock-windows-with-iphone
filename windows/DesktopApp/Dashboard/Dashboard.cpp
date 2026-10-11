@@ -15,6 +15,7 @@
 #include <winrt/Windows.UI.Xaml.Interop.h>
 #include <winrt/Microsoft.UI.Windowing.h>
 #include <winrt/Microsoft.UI.Xaml.h>
+#include <winrt/Microsoft.UI.Xaml.Data.h>
 #include "Pages/AboutPage.xaml.h"
 #include <winrt/Microsoft.UI.Xaml.Controls.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
@@ -23,6 +24,7 @@
 #include <winrt/UnlockDesktop.h>
 #include <utility>
 #include <array>
+#include <map>
 
 namespace unlock_windows::desktop_app {
 using namespace winrt;
@@ -134,14 +136,20 @@ private:
         for (std::size_t index = 0; index < 3; ++index) nav_.MenuItems().Append(pages_[index]);
         nav_.FooterMenuItems().Append(pages_[3]);
 
+        scroll_ = ScrollViewer{};
+        scroll_.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);
+        scroll_.HorizontalScrollBarVisibility(ScrollBarVisibility::Disabled);
+        scroll_.HorizontalContentAlignment(HorizontalAlignment::Left);
+        scroll_.VerticalContentAlignment(VerticalAlignment::Top);
         root_ = Grid{};
         root_.MaxWidth(800);
+        root_.HorizontalAlignment(HorizontalAlignment::Stretch);
         root_.Padding({28, 24, 28, 24});
         RowDefinition headerRow;
         headerRow.Height(automatic());
         root_.RowDefinitions().Append(headerRow);
         RowDefinition bodyRow;
-        bodyRow.Height(star());
+        bodyRow.Height(automatic());
         root_.RowDefinitions().Append(bodyRow);
 
         Grid header;
@@ -195,19 +203,38 @@ private:
         Grid::SetRow(frame_, 1);
         root_.Children().Append(frame_);
 
-        nav_.Content(root_);
+        Border viewportHost;
+        viewportHost.HorizontalAlignment(HorizontalAlignment::Left);
+        Data::Binding viewportWidth;
+        viewportWidth.Source(scroll_);
+        viewportWidth.Path(PropertyPath(L"ViewportWidth"));
+        viewportWidth.Mode(Data::BindingMode::OneWay);
+        viewportHost.SetBinding(FrameworkElement::WidthProperty(), viewportWidth);
+        viewportHost.Child(root_);
+        scroll_.Content(viewportHost);
+        nav_.Content(scroll_);
         navigationToken_ = nav_.SelectionChanged([this](const auto&, const NavigationViewSelectionChangedEventArgs& args) {
             try {
                 const auto item = args.SelectedItem().try_as<NavigationViewItem>();
                 if (!item) return;
                 const auto pageId = static_cast<DashboardPage>(unbox_value<std::int32_t>(item.Tag()));
+                if (currentPage_) scrollOffsets_[*currentPage_] = scroll_.VerticalOffset();
+                currentPage_ = pageId;
                 const bool statusPage = pageId == DashboardPage::status;
                 const bool diagnosticsPage = pageId == DashboardPage::diagnostics;
                 if (statusPage) {
                     statusPage_ = navigateTo<winrt::UnlockDesktop::StatusPage>();
+                    get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->SetHost([this](bool resetScroll) {
+                        if (resetScroll) {
+                            scrollOffsets_[DashboardPage::status] = 0.0;
+                            if (currentPage_ == DashboardPage::status) scroll_.ChangeView(nullptr, 0.0, nullptr, true);
+                        }
+                        state_->refresh();
+                    });
                     get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->Update(state_->snapshot);
                 } else if (diagnosticsPage) {
                     diagnosticsPage_ = navigateTo<winrt::UnlockDesktop::DiagnosticsPage>();
+                    get_self<winrt::UnlockDesktop::implementation::DiagnosticsPage>(diagnosticsPage_)->SetScrollHost(scroll_);
                     get_self<winrt::UnlockDesktop::implementation::DiagnosticsPage>(diagnosticsPage_)->Update(state_->snapshot.diagnostics);
                 } else if (pageId == DashboardPage::password) {
                     passwordPage_ = navigateTo<winrt::UnlockDesktop::PasswordPage>();
@@ -223,6 +250,8 @@ private:
                 action_.Visibility(statusPage && state_->snapshot.paired.value_or(false) ? Visibility::Visible : Visibility::Collapsed);
                 refresh_.Visibility(statusPage || diagnosticsPage || pageId == DashboardPage::password
                     ? Visibility::Visible : Visibility::Collapsed);
+                scroll_.UpdateLayout();
+                scroll_.ChangeView(nullptr, scrollOffsets_[pageId], nullptr, true);
             } catch (const hresult_error& error) { state_->fail(error); }
         });
         nav_.SelectedItem(pages_[0]);
@@ -278,6 +307,9 @@ private:
     HWND hwnd_ = nullptr;
     NavigationView nav_{nullptr};
     std::array<NavigationViewItem, 4> pages_{nullptr, nullptr, nullptr, nullptr};
+    ScrollViewer scroll_{nullptr};
+    std::optional<DashboardPage> currentPage_;
+    std::map<DashboardPage, double> scrollOffsets_;
     Grid root_{nullptr};
     Frame frame_{nullptr};
     winrt::UnlockDesktop::StatusPage statusPage_{nullptr};

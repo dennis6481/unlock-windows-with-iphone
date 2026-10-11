@@ -4,9 +4,9 @@
 
 This guide defines acceptance checks, not recorded product results. The app-free replacement has an x64 Release product build on 11 Oct 2026 (0 errors, 0 warnings; tests disabled). Test compilation/execution, ARM64, installation and the hardware matrix remain pending. Do not mark all acceptance passed or claim a usable product before the matrix completes.
 
-The subsequent Windows-settings-only pairing and inline Status binding changes have static inspection only; they have not been built or validated on hardware.
+The subsequent Windows-settings-only pairing and inline Status binding changes, including dialog roots, grouped device rows and viewport-constrained shared outer scrolling, have static inspection only; they have not been built or validated on hardware.
 
-Service-to-Diagnostics reporting also has static inspection only. With matching updated service/app binaries, verify failures appear while binding on Status, include the request ID and technical reason, and survive switching pages. Verify unauthorized callers cannot read diagnostics and an unsupported service query reports an error.
+Service-to-Diagnostics reporting also has static inspection only. With matching updated service/app binaries, verify failures appear while binding on Status, include the request ID and technical reason, and survive switching pages. Verify unauthorized callers cannot read diagnostics and an unsupported service query reports an error. Lock/unlock must not flash a polling error on Status; a rejection during the same account's lock transition is discarded, while unlocked rejections, account changes and IPC failures still report errors.
 
 BLE timeout details now identify the pending enumeration or GATT operation. This change has static inspection only; verify a timed-out binding reports `BLE deadline exceeded during ...` in Diagnostics without extending the 30-second deadline.
 
@@ -14,7 +14,7 @@ Service association watchers now use the shared paired-only selectors. This chan
 
 Detailed service traces have static inspection only. Verify Diagnostics shows progress before completion, paired bond properties, watcher counts/status, GATT results and timings, then success/failure. Polling must not duplicate lines, including when the IPC-bounded trace drops older lines or a new request starts.
 
-Persistent BLE connections, Windows-cached structure and deadline-bounded RSSI waiting have static inspection only. No build, compilation tests, packaging, installation or hardware validation was run for this change. Record connection/session/service changes and distinguish Cached-mode queries from proven object reuse and new protected operations.
+Persistent BLE connections, Windows-cached structure, preparation through protected verification and deadline-bounded RSSI waiting have static inspection only. No build, compilation tests, packaging, installation or hardware validation was run for this change. Record connection/session/service changes and distinguish Cached-mode queries from proven object reuse and new protected operations.
 
 ## Environment and evidence
 
@@ -50,9 +50,9 @@ The [Release workflow](../.github/workflows/release.yml) builds Windows installe
 - Pair through Windows settings and confirm matching numbers on both devices. The app does not display a numeric ceremony or initiate pairing.
 - Added/Updated/Removed update the paired-device list without manual Refresh. Returning performs another enumeration; the user must select a device, click **Bind selected device** and confirm. No device auto-registers. Unpaired or removed devices cannot remain selected.
 - Existing Windows pairing is reused. Missing/weak/Secure Connections-unconfirmed bonds fail service validation rather than being downgraded.
-- Test same-name devices, missing/duplicate ContainerId relations and wrong Classic/BLE endpoint IDs. Names and guessed MAC addresses never change the target.
+- Merge paired Classic/BLE entries with the same ContainerId into one name-only row; prefer a nonempty Classic name, then BLE, then Name unavailable. Keep different same-name containers and missing-container endpoints separate. Updates preserve container selection; changed associations invalidate it. Missing/duplicate relationships and wrong endpoint IDs still fail binding.
 - During verification, bound-endpoint updates retaining the saved ContainerId and IsPaired=true must not reject binding. Changed/invalid ContainerId, IsPaired=false or invalid pairing values must reject it. This correction has static inspection only.
-- Binding and removal request confirmation/UAC. A bound phone has removal only; remove it before selecting another on Status. UAC refusal, cancellation, protected-operation or storage failure preserve the original binding. Removal keeps Windows Bluetooth pairing and the saved password.
+- Binding and removal confirmations use the visible page's XamlRoot and default to Cancel; dismissing one shows no error or UAC. Successful removal clears the old selection/errors and returns to initial device selection at the top. Binding and removal request confirmation/UAC. A bound phone has removal only; remove it before selecting another on Status. UAC refusal, cancellation, protected-operation or storage failure preserve the original binding. Removal keeps Windows Bluetooth pairing and the saved password.
 - Initial binding chooses −100…−20 dBm in 1 dBm steps, default −60. Status dragging changes only pending state; Save requests UAC. Successful save persists across service/PC restart. Refusal/failure restores the saved value and displays its reason.
 - Old public-key registration reports **requires rebinding** without decrypting/migrating it. A read, ACL or corruption error is distinct from no binding; an error cannot silently authorize overwrite.
 - Verify unlocked target-console setup after service restart, account switch and another administrator's UAC. No stale candidate or alternate account may become the target.
@@ -79,7 +79,7 @@ Service **approved** does not replace the actual native Windows session result.
 | Missing/stale RSSI during verification | Wait within the original deadline; renew expired communication once eligible RSSI arrives. No deadline extension. |
 | Fresh RSSI below the saved threshold | Fail immediately without password release or threshold adjustment. |
 | Samples before request start, wrong/currently changed address or address type | Reject old correlation; accept only new current-associated samples. Unmatched endpoints fail. |
-| Initial GATT list changes | Discard provisional discovery and rediscover within the same 30-second deadline. |
+| GATT list changes before the first complete protected subscribe/read/unsubscribe | Discard provisional structure/evidence and rediscover within the same 30-second deadline. Verify immediate remove/rebind of the same device without Refresh, including a subscription returning ERROR_CANCELLED after a service change. Genuine cancellation/deadline expiry still stops the request; stable protected-operation errors fail as Bluetooth verification errors, not storage errors. |
 | GATT list changes after stability, disconnect or system relation invalidation | Invalidate request/grant immediately. |
 | Cancel, timeout, suspend/resume, unlock, logoff or console/account change | Invalidate; late callbacks cannot approve or extend the deadline. |
 | Pending native operation/cleanup after cancellation | New BLE start returns busy; no extra worker or unbounded retry. |
@@ -91,7 +91,7 @@ Use an isolated environment for forged caller/context and delay injection. Do no
 
 ## Pairing and saved-password operations
 
-- Preserve navigation/order, tray behavior, notifications, native title bar, theme/DPI and page scrolling. Status shows binding name and production RSSI settings; Diagnostics contains text history only.
+- Verify all four pages use the outer content scroller with its bar at the right edge: headers/actions scroll with the body, navigation stays fixed and no inner page/device-list/text scroller competes. Resize across compact/expanded navigation and beyond the shared content maximum; content stays centered at a shared width regardless of page text length, Status/Password headers and body edges align, and right-side actions remain visible. Switching pages restores each position; first visits start at the top. Preserve navigation/order, tray behavior, notifications, native title bar and theme/DPI. Status shows binding name and production RSSI settings; Diagnostics contains text history only.
 - Password queries remain non-sensitive. Save/update/remove retain UAC, verified target identity, PasswordBox/ContentDialog and explicit failure reasons.
 - Check repeated clicks, queued UAC, title-bar close, cancel while service verification is pending and app shutdown. Opening Windows settings must not prevent navigating Status or cancelling binding. Old binding must survive pre-commit failure; a completed commit must report its actual state.
 - Open binding/removal from setup and Status: the window must appear without `RPC_E_WRONG_THREAD` (`0x8001010E`). Binding controls are created after WinUI application startup on its UI thread.

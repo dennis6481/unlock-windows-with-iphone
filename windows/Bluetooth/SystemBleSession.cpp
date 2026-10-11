@@ -61,7 +61,7 @@ struct Session::State final : std::enable_shared_from_this<State> {
     const char* failureDetail = "BLE evidence invalidated";
     std::uint64_t revision = 0, structureRevision = 0, address = 0;
     BluetoothAddressType addressType{};
-    bool requestActive = false, discovering = true, connected = false, closing = false;
+    bool requestActive = false, preparing = true, connected = false, closing = false;
     BluetoothLEDevice device{nullptr};
     GattSession session{nullptr};
     GattDeviceService service{nullptr};
@@ -95,8 +95,9 @@ struct Session::State final : std::enable_shared_from_this<State> {
         deadline = at + kOperationLifetimeMs;
         valid = std::move(predicate);
         proof = {};
+        if (transportFailure == Failure::none) failureDetail = "BLE evidence invalidated";
         requestActive = true;
-        discovering = true;
+        preparing = true;
     }
 
     void report(const std::string& message) const {
@@ -288,8 +289,12 @@ struct Session::State final : std::enable_shared_from_this<State> {
                     {
                         std::lock_guard lock(self->mutex);
                         ++self->revision;
-                        if (self->requestActive && !self->discovering && !self->closing)
+                        self->proof.communicationAt = self->proof.rssiAt = 0;
+                        self->proof.rssi = -127;
+                        if (self->requestActive && !self->preparing && !self->closing) {
                             self->proof.failure = Failure::protectedOperationFailed;
+                            self->failureDetail = "GATT services changed after protected verification became stable";
+                        }
                     }
                     self->report("GATT services changed; service structure invalidated");
                 } catch (...) { self->invalidate(Failure::protectedOperationFailed, "GATT services changed callback failed"); }
@@ -348,7 +353,6 @@ struct Session::State final : std::enable_shared_from_this<State> {
         {
             std::lock_guard lock(mutex);
             reusable = cccd && structureRevision == revision;
-            if (reusable) discovering = false;
         }
         if (reusable) { report("Reuse current connection service structure; live verification still required"); return; }
         discardStructure();
@@ -383,7 +387,7 @@ struct Session::State final : std::enable_shared_from_this<State> {
             {
                 std::lock_guard lock(mutex);
                 changed = initial != revision;
-                if (!changed) { structureRevision = initial; discovering = false; }
+                if (!changed) structureRevision = initial;
             }
             if (changed) { report("ANCS structure changed before publication; rediscover"); discardStructure(); continue; }
             break;
@@ -397,7 +401,7 @@ struct Session::State final : std::enable_shared_from_this<State> {
         if (!session) open();
         currentAddress();
         bool changed;
-        { std::lock_guard lock(mutex); changed = structureRevision != revision; discovering = true; }
+        { std::lock_guard lock(mutex); changed = structureRevision != revision; preparing = true; }
         if (changed) discardStructure();
         if (device.ConnectionStatus() == BluetoothConnectionStatus::Connected && (!cccd || changed)) discover();
     }
@@ -412,9 +416,17 @@ struct Session::State final : std::enable_shared_from_this<State> {
         auto reader = Windows::Storage::Streams::DataReader::FromBuffer(read.Value());
         reader.ByteOrder(Windows::Storage::Streams::ByteOrder::LittleEndian);
         if (reader.ReadUInt16() != 1) throw VerificationError(Failure::protectedOperationFailed, "CCCD subscription not confirmed");
-        { std::lock_guard lock(mutex); proof.communicationAt = GetTickCount64(); }
+        const auto verifiedAt = GetTickCount64();
         gatt(await(source.WriteClientCharacteristicConfigurationDescriptorWithResultAsync(GattClientCharacteristicConfigurationDescriptorValue::None), "CCCD unsubscribe"));
         subscribed = false;
+        check("protected verification publication");
+        {
+            std::lock_guard lock(mutex);
+            if (structureRevision != revision) return;
+            proof.communicationAt = verifiedAt;
+            preparing = false;
+        }
+        report("Protected verification complete; request evidence stable");
     }
 
     void verify() {
@@ -431,8 +443,37 @@ struct Session::State final : std::enable_shared_from_this<State> {
         }
         check("connected service structure preparation");
         currentAddress();
-        discover();
-        protectedCommunication();
+        const auto preparationChanged = [this] {
+            check("protected preparation invalidation");
+            std::lock_guard lock(mutex);
+            return preparing && structureRevision != revision;
+        };
+        for (;;) {
+            check("service structure and protected verification preparation");
+            discover();
+            try { protectedCommunication(); }
+            catch (const VerificationError& error) {
+                if (error.reason != Failure::protectedOperationFailed || !preparationChanged()) throw;
+                report(std::string("Protected preparation invalidated by GATT services change: ") + error.what());
+            } catch (const hresult_error& error) {
+                const auto code = error.code();
+                if ((code == RO_E_CLOSED || code == HRESULT_FROM_WIN32(ERROR_CANCELLED)) && preparationChanged()) {
+                    report("Protected preparation operation invalidated after GATT services change; HRESULT=" +
+                        std::to_string(static_cast<std::uint32_t>(code.value)) + ": " + winrt::to_string(error.message()));
+                } else {
+                    check("protected GATT operation failure");
+                    throw VerificationError(Failure::protectedOperationFailed,
+                        ("Protected GATT operation failed; HRESULT=" + std::to_string(static_cast<std::uint32_t>(code.value)) +
+                            ": " + winrt::to_string(error.message())).c_str());
+                }
+            }
+            bool stable;
+            { std::lock_guard lock(mutex); stable = !preparing; }
+            if (stable) break;
+            report("GATT services changed during protected preparation; rediscover within original deadline");
+            unsubscribe();
+            discardStructure();
+        }
         bool waiting = false;
         for (;;) {
             refresh();
@@ -501,16 +542,25 @@ struct Session::State final : std::enable_shared_from_this<State> {
         watch.watcher = nullptr;
     }
 
+    void unsubscribe() {
+        if (!subscribed || !source) return;
+        try {
+            auto result = source.WriteClientCharacteristicConfigurationDescriptorWithResultAsync(GattClientCharacteristicConfigurationDescriptorValue::None).get();
+            subscribed = false;
+            if (result.Status() != GattCommunicationStatus::Success)
+                throw VerificationError(Failure::protectedOperationFailed, "CCCD cleanup failed; connection must close");
+        } catch (const hresult_error& error) {
+            subscribed = false;
+            bool obsolete;
+            { std::lock_guard lock(mutex); obsolete = structureRevision != revision; }
+            if (error.code() != RO_E_CLOSED || !obsolete) throw;
+            report("CCCD cleanup: obsolete source already closed after structure invalidation; discard it");
+        } catch (...) { subscribed = false; throw; }
+    }
+
     void endRequest() {
-        { std::lock_guard lock(mutex); requestActive = false; proof = {}; discovering = true; }
-        if (subscribed && source) {
-            try {
-                auto result = source.WriteClientCharacteristicConfigurationDescriptorWithResultAsync(GattClientCharacteristicConfigurationDescriptorValue::None).get();
-                subscribed = false;
-                if (result.Status() != GattCommunicationStatus::Success)
-                    throw VerificationError(Failure::protectedOperationFailed, "CCCD cleanup failed; connection must close");
-            } catch (...) { subscribed = false; throw; }
-        }
+        { std::lock_guard lock(mutex); requestActive = false; proof = {}; preparing = true; }
+        unsubscribe();
         valid = {};
         bool changed;
         { std::lock_guard lock(mutex); changed = structureRevision != revision; }

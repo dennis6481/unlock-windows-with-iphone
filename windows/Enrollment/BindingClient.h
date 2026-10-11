@@ -5,8 +5,13 @@
 #include "../SavedCredential/SavedCredentialIpc.h"
 #include <string_view>
 #include <functional>
+#include <stdexcept>
 
 namespace unlock_windows::enrollment {
+struct BindingStatusRejected final : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
 saved_credential::BindingSummary readBinding();
 winrt::handle createCancellation(const std::wstring& sid, std::wstring& name);
 DWORD launchHelper(const std::wstring& arguments, bool elevated, const std::function<void()>& update = {});

@@ -27,6 +27,8 @@ BindingSummary readBinding() {
     CallDiagnostics diagnostics;
     if (!call(Operation::bindingStatus, SensitiveBytes{}, response, 2000, &diagnostics))
         throw std::runtime_error("Binding status IPC failed (Win32 " + std::to_string(diagnostics.win32Error) + ")");
+    if (response.result == Result::rejected)
+        throw BindingStatusRejected("Binding status query rejected by the service");
     BindingSummary summary;
     if (response.result == Result::internalError && !response.payload.value.empty())
         throw std::runtime_error(std::string(response.payload.value.begin(), response.payload.value.end()));

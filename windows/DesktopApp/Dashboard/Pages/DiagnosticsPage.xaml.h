@@ -13,10 +13,12 @@ struct DiagnosticsPage : DiagnosticsPageT<DiagnosticsPage> {
     void OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEventArgs const& args);
     void Update(std::wstring const& diagnostics);
     void Stop();
+    void SetScrollHost(Microsoft::UI::Xaml::Controls::ScrollViewer const& scroll);
 
 private:
     Microsoft::UI::Xaml::Controls::TextBox diagnostics_{nullptr};
     std::wstring displayedDiagnostics_;
+    winrt::weak_ref<Microsoft::UI::Xaml::Controls::ScrollViewer> scrollHost_;
 };
 }
 

@@ -31,39 +31,51 @@ struct ControllerState final {
     }
     void publish() {
         DashboardSnapshot status;
-        std::wstring serviceMessage;
-        Packet response;
-        CallDiagnostics callDiagnostics;
-        if (!call(Operation::serviceDiagnostics, SensitiveBytes{}, response, 2000, &callDiagnostics)) {
-            serviceMessage = L"Service diagnostics query failed (Win32 " + std::to_wstring(callDiagnostics.win32Error) +
-                L"). Ensure the installed service supports serviceDiagnostics.";
-        } else if (response.result != Result::success) {
-            serviceMessage = L"Service diagnostics query rejected (result " + std::to_wstring(static_cast<unsigned>(response.result)) + L").";
-        } else if (!response.payload.value.empty()) {
-            serviceMessage = winrt::to_hstring(std::string(response.payload.value.begin(), response.payload.value.end()));
-        }
-        if (serviceMessage != serviceDiagnostic) {
-            std::size_t overlap = 0;
-            for (std::size_t start = 0; start < serviceDiagnostic.size();) {
-                if (serviceMessage.starts_with(serviceDiagnostic.substr(start))) {
-                    overlap = serviceDiagnostic.size() - start;
-                    break;
-                }
-                const auto end = serviceDiagnostic.find(L'\n', start);
-                if (end == std::wstring::npos) break;
-                start = end + 1;
-            }
-            const auto newMessage = serviceMessage.substr(overlap);
-            serviceDiagnostic = serviceMessage;
-            if (!newMessage.empty()) record(L"[Service] " + newMessage);
-        }
         try {
-            const auto binding = enrollment::readBinding();
-            status.binding = binding;
-            status.paired = binding.state == system_ble::BindingState::bound;
-            status.status = binding.state == system_ble::BindingState::bound ? L"iPhone bound" :
-                binding.state == system_ble::BindingState::rebindRequired ? L"Previous registration requires rebinding" : L"Bind an iPhone";
-            status.connection = L"The service checks presence when you click Unlock.";
+            const auto console = enrollment::queryConsole();
+            if (console.locked) return;
+            const auto lockedDuringQuery = [&console] {
+                const auto current = enrollment::queryConsole();
+                return current.locked && current.session == console.session && current.sid == console.sid;
+            };
+            std::wstring serviceMessage;
+            Packet response;
+            CallDiagnostics callDiagnostics;
+            if (!call(Operation::serviceDiagnostics, SensitiveBytes{}, response, 2000, &callDiagnostics)) {
+                serviceMessage = L"Service diagnostics query failed (Win32 " + std::to_wstring(callDiagnostics.win32Error) +
+                    L"). Ensure the installed service supports serviceDiagnostics.";
+            } else if (response.result != Result::success) {
+                if (response.result == Result::rejected && lockedDuringQuery()) return;
+                serviceMessage = L"Service diagnostics query rejected (result " + std::to_wstring(static_cast<unsigned>(response.result)) + L").";
+            } else if (!response.payload.value.empty()) {
+                serviceMessage = winrt::to_hstring(std::string(response.payload.value.begin(), response.payload.value.end()));
+            }
+            if (serviceMessage != serviceDiagnostic) {
+                std::size_t overlap = 0;
+                for (std::size_t start = 0; start < serviceDiagnostic.size();) {
+                    if (serviceMessage.starts_with(serviceDiagnostic.substr(start))) {
+                        overlap = serviceDiagnostic.size() - start;
+                        break;
+                    }
+                    const auto end = serviceDiagnostic.find(L'\n', start);
+                    if (end == std::wstring::npos) break;
+                    start = end + 1;
+                }
+                const auto newMessage = serviceMessage.substr(overlap);
+                serviceDiagnostic = serviceMessage;
+                if (!newMessage.empty()) record(L"[Service] " + newMessage);
+            }
+            try {
+                const auto binding = enrollment::readBinding();
+                status.binding = binding;
+                status.paired = binding.state == system_ble::BindingState::bound;
+                status.status = binding.state == system_ble::BindingState::bound ? L"iPhone bound" :
+                    binding.state == system_ble::BindingState::rebindRequired ? L"Previous registration requires rebinding" : L"Bind an iPhone";
+                status.connection = L"The service checks presence when you click Unlock.";
+            } catch (const enrollment::BindingStatusRejected&) {
+                if (lockedDuringQuery()) return;
+                throw;
+            }
         } catch (...) { status.error = winrt::to_message(); status.status = L"Binding status unavailable"; }
         {
             std::lock_guard lock(mutex);

@@ -24,6 +24,16 @@ void PasswordPage::OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEven
     passwordPanel_.Children().Append(status_);
     notice_ = InfoBar{};
     notice_.Severity(InfoBarSeverity::Error);
+    retry_ = Button{};
+    retry_.Content(box_value(L"Retry"));
+    retry_.Visibility(Visibility::Collapsed);
+    retry_.Click([weak = get_weak()](const auto&, const auto&) {
+        if (auto page = weak.get()) {
+            try { page->Refresh(); }
+            catch (const hresult_error& error) { page->uiError(error); }
+        }
+    });
+    notice_.ActionButton(retry_);
     passwordPanel_.Children().Append(notice_);
     password_ = Button{};
     password_.Content(box_value(L"Save password"));
@@ -86,6 +96,7 @@ void PasswordPage::Refresh() {
     loading_ = true;
     summary_.reset();
     notice_.IsOpen(false);
+    retry_.Visibility(Visibility::Collapsed);
     applyState();
     query_ = query(get_weak(), DispatcherQueue(), reportError_);
 }
@@ -93,6 +104,7 @@ void PasswordPage::Refresh() {
 void PasswordPage::uiError(const hresult_error& failure) {
     rethrowNonlocalUiError(failure);
     Stop();
+    retry_.Visibility(Visibility::Collapsed);
     password_.IsEnabled(false);
     remove_.IsEnabled(false);
     error(L"Password UI: " + std::wstring(failure.message()));
@@ -103,6 +115,7 @@ void PasswordPage::beginOperation(Operation operation) {
         (operation == Operation::clearCredential && !summary_->credentialPresent)) return;
     managing_ = true;
     notice_.IsOpen(false);
+    retry_.Visibility(Visibility::Collapsed);
     applyState();
     operation_ = launch(get_weak(), DispatcherQueue(), operation, reportError_);
 }
@@ -126,9 +139,9 @@ Windows::Foundation::IAsyncAction PasswordPage::query(weak_ref<PasswordPage> wea
         CallDiagnostics diagnostics;
         if (!call(Operation::credentialSummary, SensitiveBytes{}, response, 2000, &diagnostics))
             failure = L"Saved password service is unavailable: " + std::wstring(callStageName(diagnostics.stage)) +
-                L" (Win32 " + std::to_wstring(diagnostics.win32Error) + L"). Choose Refresh to retry.";
+                L" (Win32 " + std::to_wstring(diagnostics.win32Error) + L"). Choose Retry to check again.";
         else if (response.result != Result::success)
-            failure = L"The service could not verify this signed-in Windows account. Choose Refresh to retry.";
+            failure = L"The service could not verify this signed-in Windows account. Choose Retry to check again.";
         else {
             CredentialSummary value;
             if (!decodeCredentialSummary(response.payload.value.data(), response.payload.value.size(), value))
@@ -145,7 +158,10 @@ Windows::Foundation::IAsyncAction PasswordPage::query(weak_ref<PasswordPage> wea
                 page->loading_ = false;
                 page->summary_ = std::move(summary);
                 page->applyState();
-                if (!failure.empty()) page->error(failure);
+                if (!failure.empty()) {
+                    page->error(failure);
+                    page->retry_.Visibility(Visibility::Visible);
+                }
             } catch (const hresult_error& error) {
                 page->uiError(error);
             }
@@ -190,7 +206,7 @@ Windows::Foundation::IAsyncAction PasswordPage::launch(weak_ref<PasswordPage> we
             DWORD result = 0;
             unlock_windows::enrollment::require(GetExitCodeProcess(process.value, &result), "Read password window result");
             if (result == static_cast<DWORD>(unlock_windows::desktop_app::SetupResult::error))
-                failure = L"The password window did not complete successfully. Refresh and retry.";
+                failure = L"The password window did not complete successfully. Try the password action again.";
         } catch (...) { failure = currentException(); }
     }
     if (cancellation()) co_return;

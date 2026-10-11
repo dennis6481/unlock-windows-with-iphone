@@ -12,7 +12,7 @@ For phone unlocking, CP checks console identity and asks the service for `unlock
 
 The tile contains the app logo, title and **Unlock** action; it does not accept typed passwords or test approvals. Enter / Unlock starts `beginVerification`. Selection and locking alone do not create requests. Initial enumeration has `autoLogon=FALSE`; default tile selection remains controlled by LogonUI.
 
-Manual initiation returns a no-credential waiting state rather than blocking on BLE. A worker queries structured service status by requestID and marshals UI changes onto the COM/Advise thread. The service owns the 30-second deadline. Deselection requests cancellation; late operations cannot create a grant.
+Manual initiation returns a no-credential waiting state rather than blocking on BLE. The tile shows **Just a moment…** during verification; failure messages remain specific. A worker queries structured service status by requestID and marshals UI changes onto the COM/Advise thread. The service owns the 30-second deadline. Deselection requests cancellation; late operations cannot create a grant.
 
 ## Automatic submission
 

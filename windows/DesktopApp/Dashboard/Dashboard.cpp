@@ -105,6 +105,7 @@ private:
     void buildWindow() {
         window_ = Window{};
         window_.Title(UNLOCK_PRODUCT_DISPLAY_NAME);
+        window_.SystemBackdrop(Media::MicaBackdrop{});
         check_hresult(window_.as<IWindowNative>()->get_WindowHandle(&hwnd_));
         appWindow_ = window_.AppWindow();
         appWindow_.TitleBar().PreferredTheme(Windowing::TitleBarTheme::UseDefaultAppMode);
@@ -122,7 +123,22 @@ private:
             } catch (const hresult_error& error) { state_->fail(error); }
         });
 
-        nav_ = NavigationView{};
+        nav_ = XamlReader::Load(LR"(<NavigationView
+            xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+            Background="Transparent">
+            <NavigationView.Resources>
+                <ResourceDictionary>
+                    <ResourceDictionary.ThemeDictionaries>
+                        <ResourceDictionary x:Key="Default" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+                            <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="Transparent"/>
+                        </ResourceDictionary>
+                        <ResourceDictionary x:Key="Light" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+                            <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="Transparent"/>
+                        </ResourceDictionary>
+                    </ResourceDictionary.ThemeDictionaries>
+                </ResourceDictionary>
+            </NavigationView.Resources>
+        </NavigationView>)").as<NavigationView>();
         nav_.PaneDisplayMode(NavigationViewPaneDisplayMode::Auto);
         nav_.OpenPaneLength(210);
         nav_.IsBackButtonVisible(NavigationViewBackButtonVisible::Collapsed);
@@ -152,51 +168,9 @@ private:
         bodyRow.Height(automatic());
         root_.RowDefinitions().Append(bodyRow);
 
-        Grid header;
-        ColumnDefinition titleColumn;
-        titleColumn.Width(star());
-        header.ColumnDefinitions().Append(titleColumn);
-        ColumnDefinition actionColumn;
-        actionColumn.Width(automatic());
-        header.ColumnDefinitions().Append(actionColumn);
         title_ = text(L"Status", 28);
         title_.VerticalAlignment(VerticalAlignment::Center);
-        header.Children().Append(title_);
-        StackPanel actions;
-        actions.Orientation(Orientation::Horizontal);
-        actions.Spacing(12);
-        Grid::SetColumn(actions, 1);
-        action_ = Button{};
-        action_.HorizontalAlignment(HorizontalAlignment::Right);
-        Grid::SetColumn(action_, 1);
-        actionToken_ = action_.Click([this](const auto&, const auto&) {
-            try {
-                if (!state_->snapshot.paired.has_value() || state_->snapshot.busy || actionPending_) return;
-                actionPending_ = true;
-                action_.IsEnabled(false);
-                if (statusPage_) get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->Remove();
-            } catch (const hresult_error& error) { state_->fail(error); }
-        });
-        actions.Children().Append(action_);
-        refresh_ = Button{};
-        refresh_.Content(box_value(L"Refresh"));
-        refresh_.HorizontalAlignment(HorizontalAlignment::Right);
-        Grid::SetColumn(refresh_, 1);
-        refreshToken_ = refresh_.Click([this](const auto&, const auto&) {
-            try {
-                if (passwordPage_ && nav_.SelectedItem() == pages_[1])
-                    get_self<winrt::UnlockDesktop::implementation::PasswordPage>(passwordPage_)->Refresh();
-                else {
-                    if (statusPage_ && nav_.SelectedItem() == pages_[0])
-                        get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->Refresh();
-                    state_->refresh();
-                }
-            }
-            catch (const hresult_error& error) { state_->fail(error); }
-        });
-        actions.Children().Append(refresh_);
-        header.Children().Append(actions);
-        root_.Children().Append(header);
+        root_.Children().Append(title_);
 
         frame_ = Frame{};
         frame_.IsNavigationStackEnabled(false);
@@ -247,9 +221,6 @@ private:
                         state_->reportError);
                 } else throw hresult_invalid_argument(L"Unknown Dashboard page.");
                 title_.Text(unbox_value<hstring>(item.Content()));
-                action_.Visibility(statusPage && state_->snapshot.paired.value_or(false) ? Visibility::Visible : Visibility::Collapsed);
-                refresh_.Visibility(statusPage || diagnosticsPage || pageId == DashboardPage::password
-                    ? Visibility::Visible : Visibility::Collapsed);
                 scroll_.UpdateLayout();
                 scroll_.ChangeView(nullptr, scrollOffsets_[pageId], nullptr, true);
             } catch (const hresult_error& error) { state_->fail(error); }
@@ -271,13 +242,6 @@ private:
 
     void applySnapshot() {
         const auto& snapshot = state_->snapshot;
-        actionPending_ = false;
-        const bool known = snapshot.paired.has_value();
-        const bool paired = snapshot.paired.value_or(false);
-        action_.Content(box_value(L"Remove iPhone"));
-        action_.Visibility(nav_.SelectedItem() == pages_[0] && paired ? Visibility::Visible : Visibility::Collapsed);
-        action_.IsEnabled(known && paired && !snapshot.busy &&
-            (!statusPage_ || !get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->Busy()));
         if (statusPage_) get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->Update(snapshot);
         if (diagnosticsPage_) get_self<winrt::UnlockDesktop::implementation::DiagnosticsPage>(diagnosticsPage_)->Update(snapshot.diagnostics);
     }
@@ -289,8 +253,6 @@ public:
         if (appWindow_ && closingToken_.value) appWindow_.Closing(closingToken_);
         if (window_ && activatedToken_.value) window_.Activated(activatedToken_);
         if (nav_ && navigationToken_.value) nav_.SelectionChanged(navigationToken_);
-        if (action_ && actionToken_.value) action_.Click(actionToken_);
-        if (refresh_ && refreshToken_.value) refresh_.Click(refreshToken_);
         if (aboutPage_) get_self<winrt::UnlockDesktop::implementation::AboutPage>(aboutPage_)->Stop();
         if (passwordPage_) get_self<winrt::UnlockDesktop::implementation::PasswordPage>(passwordPage_)->Stop();
         if (statusPage_) get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->Stop();
@@ -317,10 +279,8 @@ private:
     winrt::UnlockDesktop::AboutPage aboutPage_{nullptr};
     winrt::UnlockDesktop::PasswordPage passwordPage_{nullptr};
     TextBlock title_{nullptr};
-    Button action_{nullptr}, refresh_{nullptr};
-    bool actionPending_ = false;
     bool exiting_ = false;
-    event_token closingToken_{}, navigationToken_{}, actionToken_{}, refreshToken_{};
+    event_token closingToken_{}, navigationToken_{};
     event_token activatedToken_{};
 };
 

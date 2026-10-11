@@ -37,7 +37,7 @@ After sign-in, queries use `NetUserGetInfo` level 24 for the online provider/nam
 
 The snapshot lasts five minutes. A new management query can renew it without another sign-in. Candidates are invalidated by logoff, console disconnection, another console account or service restart. Unavailable or ambiguous Windows identity properties are explicit verification failures. The target is the console user, not an alternate administrator entered at UAC. Identity must not be reconstructed from diagnostics or the saved credential.
 
-The main Password page refreshes on entry, activation and operation-window exit. Refresh is in the page header; Save/Update and removal sit side by side. Unknown state disables password changes. The elevated window contains PasswordBox, Save/Update and Cancel; a failed query replaces the primary action with Retry. Removal uses ContentDialog with Cancel as default. InfoBar reports results/errors. **Remove saved password** clears only the local copy. Closing the window leaves the ordinary tray running.
+The main Password page refreshes on entry, activation and operation-window exit. There is no header Refresh; failed status queries show Retry inside the error InfoBar. Save/Update and removal sit side by side. Unknown state disables password changes. The elevated window contains PasswordBox, Save/Update and Cancel; a failed query replaces the primary action with Retry. Removal uses ContentDialog with Cancel as default. InfoBar reports results/errors. **Remove saved password** clears only the local copy. Closing the window leaves the ordinary tray running.
 
 ## Removal and maintenance
 

@@ -39,7 +39,7 @@ Use a physical iPhone running iOS 26 or later. No iPhone app, IPA or developer s
 ## What it does
 
 - Unlock your locked Windows session using your paired iPhone over Bluetooth. Select the phone unlock tile on the Windows lock screen; click **Unlock** to request a fresh presence check. The phone needs no action for each attempt; locking the PC alone does not request unlock.
-- Adjust the saved RSSI threshold on the Windows **Status** page. Dragging changes a pending value; **Save** requests UAC.
+- Adjust **Signal threshold** on the Windows **Status** page. Dragging changes a pending value; **Save** requests UAC.
 - Keep an encrypted copy of your Microsoft account password on your PC. Your password is never sent to your iPhone.
 - Manage system pairing, the product binding and saved password from the Windows tray app. The LocalSystem service verifies presence independently when the desktop app exits.
 - Install, update or remove the Windows app using its installer.
@@ -54,9 +54,9 @@ After native sign-in, the service keeps the bound phone's BLE connection across 
 2. Save your **Microsoft account password**, not your PIN. The encrypted copy stays on this PC and is never sent to the phone.
 3. On **Status**, use **Open Bluetooth settings** to pair your iPhone. Compare the Bluetooth numbers on both devices and accept only a match. Skip this step if Windows already shows the phone as paired.
 4. Return to **Status**, select your iPhone from the updated paired-device list and click **Bind selected device**. Windows records with the same device container are combined into one named entry. Devices are never bound automatically.
-5. Confirm the selected phone and initial RSSI threshold. UAC permits the service to verify pairing, protected BLE communication and signal strength before saving the binding.
+5. Confirm the selected phone and **Initial signal threshold**. UAC permits the service to verify pairing, protected BLE communication and signal strength before saving the binding.
 
-**Remove iPhone** asks for confirmation and returns to device selection after success. Windows Bluetooth pairing and the saved password remain.
+In **Remove bound iPhone**, click **Remove** to confirm removal and return to device selection. Windows Bluetooth pairing and the saved password remain.
 
 No claim of product readiness is made before [acceptance](docs/Testing.md) completes. Previous public-key registrations require explicit rebinding; they are not migrated.
 

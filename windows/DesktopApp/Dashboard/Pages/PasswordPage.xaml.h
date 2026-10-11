@@ -31,7 +31,7 @@ private:
         unlock_windows::desktop_app::Dashboard::ReportError reportError);
     Microsoft::UI::Xaml::Controls::StackPanel passwordPanel_{nullptr};
     Microsoft::UI::Xaml::Controls::TextBlock account_{nullptr}, status_{nullptr};
-    Microsoft::UI::Xaml::Controls::Button password_{nullptr};
+    Microsoft::UI::Xaml::Controls::Button password_{nullptr}, retry_{nullptr};
     Microsoft::UI::Xaml::Controls::Button remove_{nullptr};
     Microsoft::UI::Xaml::Controls::InfoBar notice_{nullptr};
     std::optional<unlock_windows::saved_credential::CredentialSummary> summary_;

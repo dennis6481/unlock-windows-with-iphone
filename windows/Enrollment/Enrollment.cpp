@@ -28,7 +28,7 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
     ListView devices{nullptr};
     Slider threshold{nullptr};
     TextBlock thresholdText{nullptr}, status{nullptr};
-    Button bind{nullptr}, settings{nullptr}, cancel{nullptr};
+    Button bind{nullptr}, settings{nullptr};
     TextBlock empty{nullptr};
     struct Item { DeviceInformation information{nullptr}; bool ble = false; };
     std::map<std::wstring, Item> items;
@@ -119,7 +119,7 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
             post([update](auto& self) { self.items.erase(std::wstring(update.Id())); });
         });
         auto stopped = watcher.Stopped([post](const auto&, const auto&) {
-            post([](auto& self) { self.message(L"Device enumeration stopped. Refresh or reopen Bluetooth settings."); });
+            post([](auto& self) { self.message(L"Device enumeration stopped. Reopen the app to update the device list."); });
         });
         revoke.push_back([watcher, added, updated, removed, stopped] {
             watcher.Added(added); watcher.Updated(updated); watcher.Removed(removed); watcher.Stopped(stopped);
@@ -154,7 +154,6 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
         remove = clear;
         busy = true; bind.IsEnabled(false); threshold.IsEnabled(false); devices.IsEnabled(false);
         reportError(L""); message(L"");
-        cancel.Visibility(Visibility::Visible);
         run();
     }
 
@@ -251,7 +250,6 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
         co_await foreground;
         if (!failure.empty()) { message(failure); reportError(failure); }
         busy = false; dialog = nullptr;
-        cancel.Visibility(Visibility::Collapsed);
         bind.IsEnabled(!selectedKey.empty()); threshold.IsEnabled(true); devices.IsEnabled(true);
         if (stopping && !scanning) finish(); else if (!stopping) scan();
         if (bindingChanged && failure.empty() && !stopping) {
@@ -280,7 +278,7 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
         cancelEvent = enrollment::createCancellation(target.sid, eventName);
         root = StackPanel{}; devices = ListView{}; threshold = Slider{};
         thresholdText = TextBlock{}; status = TextBlock{}; empty = TextBlock{};
-        bind = Button{}; settings = Button{}; cancel = Button{};
+        bind = Button{}; settings = Button{};
         root.Spacing(12);
         auto card = Markup::XamlReader::Load(LR"(<Border
             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -303,17 +301,17 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
         empty.TextWrapping(TextWrapping::Wrap); root.Children().Append(empty);
         threshold.Minimum(system_ble::kMinimumThreshold); threshold.Maximum(system_ble::kMaximumThreshold);
         threshold.StepFrequency(system_ble::kThresholdStep); threshold.Value(system_ble::kDefaultThreshold);
-        thresholdText.Text(L"Initial RSSI threshold: " + to_hstring(system_ble::kDefaultThreshold) + L" dBm");
-        root.Children().Append(thresholdText); root.Children().Append(threshold);
-        StackPanel actions; actions.Orientation(Orientation::Horizontal); actions.Spacing(12);
+        thresholdText.Text(to_hstring(system_ble::kDefaultThreshold) + L" dBm");
+        Automation::AutomationProperties::SetName(threshold, L"Initial signal threshold in dBm");
         bind.Content(box_value(L"Bind selected device")); bind.IsEnabled(false);
         bind.Style(Application::Current().Resources().Lookup(box_value(L"AccentButtonStyle")).as<Style>());
-        cancel.Content(box_value(L"Cancel")); cancel.Visibility(Visibility::Collapsed);
-        for (auto button : {bind, cancel}) actions.Children().Append(button);
-        root.Children().Append(actions); status.TextWrapping(TextWrapping::Wrap); root.Children().Append(status);
+        root.Children().Append(signalThresholdCard(L"Initial signal threshold", thresholdText, threshold));
+        bind.HorizontalAlignment(HorizontalAlignment::Right);
+        root.Children().Append(bind);
+        status.TextWrapping(TextWrapping::Wrap); root.Children().Append(status);
         const auto weak = weak_from_this();
         threshold.ValueChanged([weak](const auto&, const auto&) {
-            if (auto self = weak.lock()) self->thresholdText.Text(L"Initial RSSI threshold: " + to_hstring(static_cast<int>(self->threshold.Value())) + L" dBm");
+            if (auto self = weak.lock()) self->thresholdText.Text(to_hstring(static_cast<int>(self->threshold.Value())) + L" dBm");
         });
         devices.SelectionChanged([weak](const auto&, const auto&) {
             if (auto self = weak.lock(); self && !self->rendering) {
@@ -323,13 +321,6 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
             }
         });
         bind.Click([weak](const auto&, const auto&) { if (auto self = weak.lock()) self->start(); });
-        cancel.Click([weak](const auto&, const auto&) {
-            if (auto self = weak.lock()) {
-                ++self->generation;
-                if (!SetEvent(self->cancelEvent.get())) self->message(L"Binding cancellation event could not be signalled");
-                if (self->dialog) self->dialog.Hide();
-            }
-        });
         settings.Click([weak](const auto&, const auto&) { openSettings(weak); });
         watch(false); watch(true); scan();
     }

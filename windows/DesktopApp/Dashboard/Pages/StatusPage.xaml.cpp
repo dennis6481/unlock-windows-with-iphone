@@ -8,69 +8,54 @@
 
 namespace winrt::UnlockDesktop::implementation {
 using namespace unlock_windows::desktop_app::dashboard_ui;
-using namespace Microsoft::UI::Xaml::Markup;
 
 void StatusPage::OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEventArgs const&) {
     if (statusPanel_) return;
     statusPanel_ = StackPanel{};
     statusPanel_.Spacing(12);
-    auto phone = icon(L"\xE8EA", 100);
+    auto phone = icon(L"\xE8EA", 100, true);
     phone.HorizontalAlignment(HorizontalAlignment::Center);
     Automation::AutomationProperties::SetName(phone, L"iPhone");
     statusPanel_.Children().Append(phone);
     name_ = text(L"iPhone", 24);
     name_.TextAlignment(TextAlignment::Center);
     statusPanel_.Children().Append(name_);
-    statusText_ = text(L"");
-    statusText_.TextAlignment(TextAlignment::Center);
-    statusPanel_.Children().Append(statusText_);
-    connection_ = text(L"");
-    connection_.TextAlignment(TextAlignment::Center);
-    statusPanel_.Children().Append(connection_);
-
-    auto card = XamlReader::Load(LR"(<Border
-        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-        BorderThickness="1" CornerRadius="8" Padding="20,18" Margin="0,16,0,0"/>)").as<Border>();
-    Grid approval;
-    ColumnDefinition labelColumn;
-    labelColumn.Width(star());
-    approval.ColumnDefinitions().Append(labelColumn);
-    ColumnDefinition valueColumn;
-    valueColumn.Width(automatic());
-    approval.ColumnDefinitions().Append(valueColumn);
-    approval.Children().Append(text(L"Last approval"));
     auto value = text(L"N/A");
-    Grid::SetColumn(value, 1);
-    approval.Children().Append(value);
-    card.Child(approval);
+    value.HorizontalAlignment(HorizontalAlignment::Right);
+    auto card = settingsCard(L"Last approval", value, L"\xE81C");
+    card.Margin({0,16,0,0});
     approvalCard_ = card;
     statusPanel_.Children().Append(card);
 
-    thresholdText_ = text(L"RSSI threshold");
+    thresholdText_ = text(L"");
     threshold_ = Slider{};
     threshold_.Minimum(unlock_windows::system_ble::kMinimumThreshold);
     threshold_.Maximum(unlock_windows::system_ble::kMaximumThreshold);
     threshold_.StepFrequency(unlock_windows::system_ble::kThresholdStep);
     threshold_.Value(unlock_windows::system_ble::kDefaultThreshold);
-    Automation::AutomationProperties::SetName(threshold_, L"Saved RSSI threshold in dBm");
+    Automation::AutomationProperties::SetName(threshold_, L"Signal threshold in dBm");
     threshold_.ValueChanged([weak = get_weak()](const auto&, const auto&) {
         if (auto page = weak.get(); page && !page->updating_) {
             page->dirty_ = page->binding_ && static_cast<int>(page->threshold_.Value()) != page->binding_->record.threshold;
-            page->thresholdText_.Text(L"RSSI threshold: " + to_hstring(static_cast<int>(page->threshold_.Value())) + L" dBm");
+            page->thresholdText_.Text(to_hstring(static_cast<int>(page->threshold_.Value())) + L" dBm");
             page->save_.IsEnabled(page->dirty_ && !page->saving_ && !page->stopped_);
         }
     });
     save_ = Button{};
     save_.Content(box_value(L"Save"));
     save_.Click([weak = get_weak()](const auto&, const auto&) { save(weak); });
-    statusPanel_.Children().Append(thresholdText_);
-    statusPanel_.Children().Append(threshold_);
-    StackPanel actions;
-    actions.Orientation(Orientation::Horizontal); actions.Spacing(12);
-    actions.Children().Append(save_);
-    statusPanel_.Children().Append(actions);
+    thresholdCard_ = signalThresholdCard(L"Signal threshold", thresholdText_, threshold_, save_);
+    statusPanel_.Children().Append(thresholdCard_);
+
+    remove_ = Button{};
+    remove_.Content(box_value(L"Remove"));
+    remove_.HorizontalAlignment(HorizontalAlignment::Right);
+    remove_.Click([weak = get_weak()](const auto&, const auto&) {
+        if (auto page = weak.get()) page->Remove();
+    });
+    const auto removeGlyph = std::wstring(1, static_cast<wchar_t>(Symbol::Delete));
+    removalCard_ = settingsCard(L"Remove bound iPhone", remove_, removeGlyph.c_str());
+    statusPanel_.Children().Append(removalCard_);
 
     error_ = InfoBar{};
     error_.Severity(InfoBarSeverity::Error);
@@ -85,10 +70,7 @@ void StatusPage::Update(unlock_windows::desktop_app::DashboardSnapshot const& sn
     const bool paired = snapshot.paired.value_or(false);
     const bool bound = snapshot.binding && snapshot.binding->state == unlock_windows::system_ble::BindingState::bound;
     name_.Text(!known ? L"Binding status unavailable" : bound ?
-        (snapshot.binding->record.displayName.empty() ? L"Name unavailable" : snapshot.binding->record.displayName) : L"Bind an iPhone");
-    statusText_.Text(!known || paired || snapshot.busy ? snapshot.status :
-        L"No iPhone is bound. Pair it in Windows Bluetooth settings, then select it below.");
-    connection_.Text(bound ? snapshot.connection : L"");
+        (snapshot.binding->record.displayName.empty() ? L"Name unavailable" : snapshot.binding->record.displayName) : L"No iPhone bound");
     approvalCard_.Visibility(known && paired ? Visibility::Visible : Visibility::Collapsed);
     error_.Title(L"Status needs attention");
     const bool resetView = resetBindingView_ && known && !bound && !Busy();
@@ -120,12 +102,12 @@ void StatusPage::Update(unlock_windows::desktop_app::DashboardSnapshot const& sn
             updating_ = false;
         }
     }
-    thresholdText_.Text(L"RSSI threshold: " + to_hstring(static_cast<int>(threshold_.Value())) + L" dBm");
-    thresholdText_.Visibility(bound ? Visibility::Visible : Visibility::Collapsed);
-    threshold_.Visibility(bound ? Visibility::Visible : Visibility::Collapsed);
+    thresholdText_.Text(to_hstring(static_cast<int>(threshold_.Value())) + L" dBm");
+    thresholdCard_.Visibility(bound ? Visibility::Visible : Visibility::Collapsed);
     threshold_.IsEnabled(bound && !Busy() && !stopped_);
-    save_.Visibility(bound ? Visibility::Visible : Visibility::Collapsed);
     save_.IsEnabled(bound && dirty_ && !Busy() && !stopped_);
+    removalCard_.Visibility(bound ? Visibility::Visible : Visibility::Collapsed);
+    remove_.IsEnabled(bound && !snapshot.busy && !Busy() && !stopped_);
     error_.Message(saveError_.empty() ? snapshot.error : saveError_);
     error_.IsOpen(!saveError_.empty() || !snapshot.error.empty());
 }
@@ -135,6 +117,7 @@ fire_and_forget StatusPage::save(weak_ref<StatusPage> weak) {
     auto page = weak.get();
     if (!page || page->stopped_ || page->Busy() || !page->binding_ || !page->dirty_) co_return;
     page->saving_ = true; page->threshold_.IsEnabled(false); page->save_.IsEnabled(false);
+    page->remove_.IsEnabled(false);
     BindingChange change{*page->binding_, page->binding_->record, {}};
     change.candidate.threshold = static_cast<int>(page->threshold_.Value());
     try { page->cancellation_ = unlock_windows::enrollment::createCancellation(change.candidate.accountSid, change.cancelEvent); }
@@ -167,7 +150,7 @@ fire_and_forget StatusPage::save(weak_ref<StatusPage> weak) {
         page->updating_ = true;
         page->threshold_.Value(page->binding_ ? page->binding_->record.threshold : unlock_windows::system_ble::kDefaultThreshold);
         page->updating_ = false;
-        page->thresholdText_.Text(L"RSSI threshold: " + to_hstring(static_cast<int>(page->threshold_.Value())) + L" dBm");
+        page->thresholdText_.Text(to_hstring(static_cast<int>(page->threshold_.Value())) + L" dBm");
         page->threshold_.IsEnabled(true);
         page->error_.Message(failure); page->error_.IsOpen(!failure.empty());
     }
@@ -212,6 +195,9 @@ void StatusPage::Remove() {
         EnsureBindingView();
         bindingView_->content.Visibility(Visibility::Collapsed);
         bindingView_->remove();
+        remove_.IsEnabled(false);
+        threshold_.IsEnabled(false);
+        save_.IsEnabled(false);
     } catch (...) {
         saveError_ = currentException(); error_.Message(saveError_); error_.IsOpen(true);
     }

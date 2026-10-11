@@ -21,12 +21,12 @@ struct StatusPage : StatusPageT<StatusPage> {
 
 private:
     Microsoft::UI::Xaml::Controls::StackPanel statusPanel_{nullptr};
-    Microsoft::UI::Xaml::Controls::TextBlock name_{nullptr}, statusText_{nullptr}, connection_{nullptr};
-    Microsoft::UI::Xaml::Controls::Border approvalCard_{nullptr};
+    Microsoft::UI::Xaml::Controls::TextBlock name_{nullptr};
+    Microsoft::UI::Xaml::Controls::Border approvalCard_{nullptr}, thresholdCard_{nullptr}, removalCard_{nullptr};
     Microsoft::UI::Xaml::Controls::InfoBar error_{nullptr};
     Microsoft::UI::Xaml::Controls::Slider threshold_{nullptr};
     Microsoft::UI::Xaml::Controls::TextBlock thresholdText_{nullptr};
-    Microsoft::UI::Xaml::Controls::Button save_{nullptr};
+    Microsoft::UI::Xaml::Controls::Button save_{nullptr}, remove_{nullptr};
     std::optional<unlock_windows::desktop_app::BindingView> bindingView_;
     std::optional<unlock_windows::saved_credential::BindingSummary> binding_;
     bool saving_ = false, dirty_ = false, updating_ = false, stopped_ = false;

@@ -675,6 +675,12 @@ public:
         }
     }
 
+    void showAuthenticationStatus(const unlock_windows::saved_credential::AuthenticationStatus& status) {
+        using namespace unlock_windows::saved_credential;
+        showAuthenticationStatus(status.stage == AuthenticationStage::verifying
+            ? L"Just a moment\u2026" : authenticationStatusText(status));
+    }
+
     void updateAuthenticationStatus(const std::optional<unlock_windows::saved_credential::AuthenticationStatus>& status,
                                     const std::wstring& failure) {
         if (!authenticationPending_) return;
@@ -685,7 +691,7 @@ public:
             if (status->stage == unlock_windows::saved_credential::AuthenticationStage::failed ||
                 status->stage == unlock_windows::saved_credential::AuthenticationStage::consumed)
                 authenticationPending_ = false;
-            showAuthenticationStatus(unlock_windows::saved_credential::authenticationStatusText(*status));
+            showAuthenticationStatus(*status);
         } else if (status && status->stage == unlock_windows::saved_credential::AuthenticationStage::idle) {
             authenticationPending_ = false;
             showAuthenticationStatus(L"Click Unlock to verify your iPhone presence.");
@@ -771,7 +777,7 @@ public:
                 }
                 authenticationRequestId_ = started.requestId;
                 authenticationPending_ = true;
-                showAuthenticationStatus(authenticationStatusText(started));
+                showAuthenticationStatus(started);
                 *optionalStatusIcon = CPSI_NONE;
                 return S_OK;
             } catch (const std::bad_alloc&) {

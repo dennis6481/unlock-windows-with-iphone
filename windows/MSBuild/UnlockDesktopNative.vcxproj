@@ -30,7 +30,7 @@
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
-      <AdditionalIncludeDirectories>..;..\DesktopApp;..\DesktopApp\Dashboard\Pages;..\SavedCredential;..\PhoneApproval;..\Protocol;..\GattHost;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..;..\DesktopApp;..\DesktopApp\Dashboard\Pages;..\SavedCredential;..\Enrollment;..\Protocol;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
@@ -41,13 +41,13 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\DesktopApp\TrayManager.cpp" />
-    <ClCompile Include="..\GattHost\GattHost.cpp" />
+    <ClCompile Include="..\Enrollment\BindingClient.cpp" />
+    <ClCompile Include="..\DesktopApp\DesktopController.cpp" />
     <ClInclude Include="..\DesktopApp\TrayManager.h" />
-    <ClInclude Include="..\GattHost\GattController.h" />
+    <ClInclude Include="..\DesktopApp\DesktopController.h" />
 
     <ProjectReference Include="UnlockSavedCredentialIpc.vcxproj"><LinkLibraryDependencies>false</LinkLibraryDependencies></ProjectReference>
     <ProjectReference Include="UnlockEnrollmentStore.vcxproj"><LinkLibraryDependencies>false</LinkLibraryDependencies></ProjectReference>
-    <ProjectReference Include="UnlockProtocolCrypto.vcxproj"><LinkLibraryDependencies>false</LinkLibraryDependencies></ProjectReference>
   </ItemGroup>
   <ItemDefinitionGroup>
     <Link>

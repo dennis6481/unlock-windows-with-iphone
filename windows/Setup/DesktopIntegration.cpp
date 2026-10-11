@@ -4,7 +4,7 @@
 #include "WindowsAdapter.h"
 #include "../DesktopApp/DesktopApp.h"
 #include "SetupPlatform.h"
-#include "../PhoneApproval/EnrollmentStore.h"
+#include "../Enrollment/EnrollmentStore.h"
 #include <Windows.h>
 #include <tlhelp32.h>
 #include <shellapi.h>

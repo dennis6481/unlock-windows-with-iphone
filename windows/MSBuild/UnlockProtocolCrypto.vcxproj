@@ -41,9 +41,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\Protocol\UnlockCrypto.cpp" />
-    <ClCompile Include="..\Protocol\SigningPayload.cpp" />
     <ClInclude Include="..\Protocol\UnlockCrypto.h" />
-    <ClInclude Include="..\Protocol\SigningPayload.h" />
 
   </ItemGroup>
   <ItemDefinitionGroup>

@@ -2,29 +2,30 @@
 
 # Saved credential service
 
-The LocalSystem service is the Windows authority for requests, phone approval and password release. Saved identity consists of SID, the Windows-qualified account name and ProviderID; a matching SID alone is insufficient when the online identity has changed.
+The LocalSystem service is the Windows authority for bindings, presence verification and password release. Saved identity consists of SID, the Windows-qualified account name and ProviderID; a matching SID alone is insufficient when the online identity has changed.
 
 ## Password protection
 
 The vault uses **LocalSystem user-scope DPAPI**, with `CRYPTPROTECT_UI_FORBIDDEN`, not `CRYPTPROTECT_LOCAL_MACHINE`. Password files/directories have SYSTEM-only ACLs. Controlled plaintext is cleared as early as practical. Credentials are packed by CP inside LogonUI, not by the service in Session 0.
 
-This protection does not resist an administrator who obtains SYSTEM or a compromised kernel. Registration is separate public-key/SID storage using machine-scope DPAPI. Read [SECURITY.md](../../SECURITY.md) for limits.
+This protection does not resist an administrator who obtains SYSTEM or a compromised kernel. Binding stores SID, system endpoints, ContainerId, display name and threshold using machine-scope DPAPI with SYSTEM/administrator-only writes. Read [SECURITY.md](../../SECURITY.md) for limits.
 
 ## Authentication and IPC
 
 `unlockEligibility` checks an existing physical-console token, SID, session and explicit locked state. An eligible LogonUI caller can create a request only when its captured identity, saved identity and registration agree. The service owns all request/grant deadlines; the [protocol](../../PROTOCOL.md#request-and-one-time-approval) specifies their lifetimes.
 
-The phone pipe allows only status peek, one-time challenge delivery, phone failure reports and assertion submission. It cannot begin a request or access a password. Peeking neither returns nor consumes the challenge. Late failures cannot overwrite a later request.
+IPC version **3** uses one pipe. Removed phone challenge, assertion and reload operations are rejected. Ordinary unlocked target-console clients read non-sensitive status; elevated clients manage passwords/bindings; only verified LogonUI can request unlock verification, receive a one-time offer or claim credentials. Process/pipe tokens, PID, session and expected LogonUI image are pinned and checked.
 
-The saved-credential pipe authorizes operations according to administrator, current console and eligible LogonUI roles. Real pipe tokens, client PID/session, SYSTEM identity and required process image are checked with retained process handles. Impersonation must end before DPAPI operates as LocalSystem. Internal IPC version 2 rejects incompatible messages; matching builds use the same header/operation definitions.
+One MTA worker owns BLE; IPC only validates, queues and reads status. Pending cleanup keeps the worker busy. The shared [BLE operations](../Bluetooth/SystemBleSession.cpp) verify unique system endpoints, pairing history, protected Uncached ANCS/CCCD operations and fresh RSSI. Communication and RSSI must still be within 3 seconds at claim.
 
-Authentication states distinguish idle, waitingPhone, awaitingAssertion, approved, failed and consumed. Errors retain phase/reason rather than classifying every failure as a session change. Operations re-query the console; unrelated session notifications do not invalidate its request.
+States distinguish idle, verifying, approved, failed, consumed and completed binding. Reasons distinguish pairing/association, protected operation, connection, RSSI, timeout, cancellation, storage and context failures. Request deadlines remain 30 seconds; no retry or callback extends them.
 
-Only a valid phone assertion creates a grant. `takeAutoSubmitOffer` returns a non-secret one-time offer to eligible LogonUI. `claimCredential` rechecks identity/session and **consumes the grant before decrypting**. CP rebuilding, packing failure and native password rejection cannot restore it. Actual unlock, identity/session change, expiry and service restart invalidate outstanding approval.
+`serviceDiagnostics` exposes the latest request's bounded verification trace to the verified unlocked target console user. Diagnostics records request IDs, watcher status/counts, pairing properties, GATT results, operation timings and failures. Cleanup failures preserve an earlier verification failure.
 
+The service consumes authorization before decrypting. CP rebuild, packing failure and native password rejection cannot restore it. Connection, system association, console/power/account and registration changes invalidate affected requests. Actual native Windows session recovery remains the acceptance result.
 ## Password management
 
-After the first native sign-in, choose **Start setup** on the installation result page or launch `--setup`. The elevated WinUI password window verifies the installed target account. Only a saved copy matching the complete verified identity permits skipping the password step. Setup also requires the service to reload phone registration before handing control back to the ordinary tray. Saving a copy successfully advances to the WinUI iPhone pairing window; cancellation and failure do not. For independent maintenance, open tray **Password…** and choose save, update or removal.
+After the first native sign-in, choose **Start setup** on the installation result page or launch `--setup`. The elevated WinUI password window verifies the installed target account. Only a saved copy matching the complete verified identity permits skipping the password step. Saving a copy successfully enables binding on the ordinary Status page; cancellation and failure do not. For independent maintenance, open tray **Password…** and choose save, update or removal.
 
 `credentialSummary` returns the verified account and saved-copy state to the unlocked installation target's ordinary console session. It returns no password or snapshot nonce and creates no management snapshot or phone approval. The management pipe accepts local authenticated connections, but status/nonces and credential changes still require an administrator; phone-pipe operations remain unchanged.
 
@@ -38,6 +39,6 @@ The main Password page refreshes on entry, activation and operation-window exit.
 
 ## Removal and maintenance
 
-Installer `clearForRemoval` must receive service confirmation that the password, grant, snapshot and challenge were cleared before removal continues. There is no success path that skips a failed credential-clear operation.
+Installer `clearForRemoval` must receive service confirmation that the password, grant, snapshot and BLE request were cleared before removal continues. There is no success path that skips a failed credential-clear operation.
 
-Keep identity checks, consume-before-decrypt ordering, endpoint separation and impersonation boundaries intact during maintenance. Logs must not include passwords, nonce bytes, keys or assertion bodies. See the [testing guide](../../docs/Testing.md#authentication-and-security-boundaries) for caller, identity, replay and restart scenarios.
+Keep identity checks, consume-before-decrypt ordering, caller separation and impersonation boundaries intact during maintenance. Logs must not include passwords, nonce bytes, credential plaintext or device identifiers in public reports. See the [testing guide](../../docs/Testing.md#authentication-and-security-boundaries) for caller, identity, replay and restart scenarios.

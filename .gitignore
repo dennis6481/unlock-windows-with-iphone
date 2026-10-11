@@ -7,25 +7,13 @@
 *.vcxproj.user
 /windows/DesktopApp/packages/
 
-# Xcode
-xcuserdata/
-*.xcuserstate
-DerivedData/
 build/
 dist/
 .tmp/
-.build/
-.swiftpm/
 
 # Local diagnostic evidence (may contain account names, SIDs and token ACLs)
 lsa-token-probe*.txt
 lsa-s4u-token-probe*.txt
 unlock-lsa-convert-probe*.txt
 LsaConvertProbeInstaller/
-
-# Xcode build artifacts
-*.hmap
-*.ipa
-*.dSYM
-*.dSYM.zip
 

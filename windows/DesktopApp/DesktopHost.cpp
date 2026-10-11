@@ -6,7 +6,7 @@
 #include "TrayManager.h"
 #include "Dashboard/Dashboard.h"
 #include "Dashboard/Pages/PageControls.h"
-#include "../GattHost/GattController.h"
+#include "DesktopController.h"
 #include "../Resources/DesktopUi.h"
 #include <WtsApi32.h>
 #include <winrt/Microsoft.UI.Dispatching.h>
@@ -36,13 +36,13 @@ public:
             },
             [this](const std::wstring& message, bool error) { controller_->record((error ? L"Tray error: " : L"Tray: ") + message); }) {
         snapshot_.busy = true;
-        snapshot_.status = L"Starting Bluetooth discovery...";
+        snapshot_.status = L"Reading service binding status...";
     }
     ~DesktopHost() { if (singleton_) CloseHandle(singleton_); }
 
     bool prepare() {
         desktop_ui::require(ProcessIdToSessionId(GetCurrentProcessId(), &session_), "ProcessIdToSessionId");
-        singleton_ = CreateMutexW(nullptr, FALSE, L"Local\\UnlockWindowsWithIPhone-GattHost");
+        singleton_ = CreateMutexW(nullptr, FALSE, L"Local\\UnlockWindowsWithIPhone-DesktopHost");
         desktop_ui::require(singleton_ != nullptr, "CreateMutexW");
         if (GetLastError() != ERROR_ALREADY_EXISTS) return true;
         if (setup_ || !background_) {
@@ -68,13 +68,12 @@ public:
         notifications_ = std::make_unique<DesktopNotifications>([weak] {
             if (const auto host = weak.lock()) host->poll();
         });
-        controller_ = std::make_unique<GattController>([weak, dispatcher = dispatcher_] {
+        controller_ = std::make_unique<DesktopController>([weak, dispatcher = dispatcher_] {
             return dispatcher.TryEnqueue([weak] {
                 if (const auto host = weak.lock()) host->poll();
             });
         });
         dashboard_ = std::make_unique<Dashboard>(
-            [weak](bool remove) { if (const auto host = weak.lock()) host->execute(remove ? TrayCommand::removePhone : TrayCommand::pairPhone); },
             [weak] { if (const auto host = weak.lock()) host->execute(TrayCommand::status); },
             controller_->errorReporter(L"Dashboard needs attention"), controller_->errorReporter(L"", false));
         timer_ = dispatcher_.CreateTimer();
@@ -96,7 +95,7 @@ public:
                 host->controller_->start(host->instance_);
             }
         })) {
-            report(L"The WinUI dispatcher rejected the GATT startup task.", L"Desktop startup failed");
+            report(L"The WinUI dispatcher rejected the desktop startup task.", L"Desktop startup failed");
             exitCode_ = 1;
             requestStop();
             poll();
@@ -145,9 +144,12 @@ private:
     }
 
     void execute(TrayCommand command) {
+        if (command == TrayCommand::continueSetup && dashboard_) dashboard_->show(DashboardPage::status);
         if (command == TrayCommand::quit) { requestStop(); return; }
-        if (stopping_ || !controller_->command(command))
+        if (stopping_)
             report(L"The desktop app is stopping; the request was cancelled.", L"Operation cancelled");
+        else if (!controller_->command(command))
+            report(L"Another setup operation is in progress. Finish or cancel it first.", L"Operation busy");
     }
 
     void requestStop() {
@@ -192,7 +194,7 @@ private:
         } else if (stopping_ && !stopTimeoutReported_ && GetTickCount64() - stopRequestedAt_ >= kShutdownReportDelayMs) {
             stopTimeoutReported_ = true;
             polling_ = false;
-            report(L"Exit has not completed: the Bluetooth control thread is still stopping. The app remains responsive and will exit when cleanup finishes.",
+            report(L"Exit has not completed: the desktop control thread is still stopping. The app remains responsive and will exit when cleanup finishes.",
                 L"Exit needs attention");
         }
     }
@@ -264,7 +266,7 @@ private:
     event_token timerToken_{};
     event_token shutdownToken_{};
     Windows::Foundation::Deferral shutdownDeferral_{nullptr};
-    std::unique_ptr<GattController> controller_;
+    std::unique_ptr<DesktopController> controller_;
     std::unique_ptr<Dashboard> dashboard_;
     std::unique_ptr<DesktopNotifications> notifications_;
     DashboardSnapshot snapshot_;

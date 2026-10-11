@@ -12,12 +12,13 @@
 #include <cwchar>
 #include <limits>
 #include <utility>
+#include <string_view>
 
 namespace unlock_windows::saved_credential {
 namespace {
 
 constexpr std::uint32_t kMagic = 0x31434347;
-constexpr std::uint16_t kVersion = 2;
+constexpr std::uint16_t kVersion = kProtocolVersion;
 constexpr std::uint8_t kCredentialPresentFlag = 1;
 constexpr std::uint8_t kCredentialMatchesFlag = 2;
 constexpr std::uint8_t kCredentialStatusFlags = kCredentialPresentFlag | kCredentialMatchesFlag;
@@ -143,7 +144,7 @@ bool readPacketUsing(Packet& packet, Transfer transfer) {
     Header header{};
     if (!transfer(&header, sizeof(header))) return false;
     if (header.magic != kMagic || header.version != kVersion || header.size > kMaxPacket ||
-        !isKnownOperation(header.operation)) {
+        !isKnownOperation(header.operation) || header.result > static_cast<std::uint32_t>(Result::busy)) {
         SetLastError(ERROR_INVALID_DATA);
         return false;
     }
@@ -395,7 +396,7 @@ bool callOnPipe(const wchar_t* const pipeName, const Operation operation,
         SetLastError(error);
         return false;
     };
-    if (request.value.size() > kMaxPacket) {
+    if (request.value.size() > kMaxPacket || !isKnownOperation(static_cast<std::uint16_t>(operation))) {
         return failed(CallStage::requestValidation, ERROR_INVALID_PARAMETER);
     }
     const ULONGLONG deadline = GetTickCount64() + waitMs;
@@ -463,6 +464,126 @@ bool encodeAutoSubmitOffer(const AutoSubmitOffer& offer, SensitiveBytes& output)
     return true;
 }
 
+bool encodeBinding(const system_ble::BindingRecord& record, SensitiveBytes& output) {
+    output.clear();
+    if (!system_ble::validThreshold(record.threshold) || record.containerId == winrt::guid{}) return false;
+    PSID sid = nullptr;
+    if (!ConvertStringSidToSidW(record.accountSid.c_str(), &sid)) return false;
+    LocalFree(sid);
+    append(output, &record.containerId, sizeof(record.containerId));
+    const auto threshold = static_cast<std::int32_t>(record.threshold);
+    append(output, &threshold, sizeof(threshold));
+    for (const auto* value : {&record.accountSid, &record.classicId, &record.bleId, &record.displayName}) {
+        if ((value->empty() && value != &record.displayName) || value->size() > 2048 || value->find(L'\0') != std::wstring::npos) return false;
+        const auto length = static_cast<std::uint16_t>(value->size());
+        append(output, &length, sizeof(length));
+        append(output, value->data(), value->size() * sizeof(wchar_t));
+    }
+    return output.value.size() <= kMaxPacket;
+}
+
+bool decodeBinding(const std::uint8_t* data, std::size_t size, system_ble::BindingRecord& output) {
+    if (!data || size > kMaxPacket) return false;
+    auto cursor = data;
+    auto left = size;
+    system_ble::BindingRecord record;
+    std::int32_t threshold = 0;
+    if (!take(cursor, left, &record.containerId, sizeof(record.containerId)) ||
+        !take(cursor, left, &threshold, sizeof(threshold))) return false;
+    record.threshold = threshold;
+    for (auto* value : {&record.accountSid, &record.classicId, &record.bleId, &record.displayName}) {
+        std::uint16_t length = 0;
+        if (!take(cursor, left, &length, sizeof(length)) || (length == 0 && value != &record.displayName) || length > 2048) return false;
+        value->resize(length);
+        if (!take(cursor, left, value->data(), length * sizeof(wchar_t))) return false;
+    }
+    SensitiveBytes canonical;
+    if (left != 0 || !encodeBinding(record, canonical)) return false;
+    output = std::move(record);
+    return true;
+}
+
+bool encodeBindingSummary(const BindingSummary& summary, SensitiveBytes& output) {
+    output.clear();
+    if (summary.state > system_ble::BindingState::rebindRequired) return false;
+    SensitiveBytes record;
+    if (summary.state == system_ble::BindingState::bound && !encodeBinding(summary.record, record)) return false;
+    const auto state = static_cast<std::uint8_t>(summary.state);
+    append(output, &state, sizeof(state));
+    if (!record.value.empty()) append(output, record.value.data(), record.value.size());
+    return true;
+}
+
+bool decodeBindingSummary(const std::uint8_t* data, std::size_t size, BindingSummary& output) {
+    if (!data || !size || data[0] > static_cast<std::uint8_t>(system_ble::BindingState::rebindRequired)) return false;
+    BindingSummary summary;
+    summary.state = static_cast<system_ble::BindingState>(data[0]);
+    if (summary.state == system_ble::BindingState::bound ?
+        !decodeBinding(data + 1, size - 1, summary.record) : size != 1) return false;
+    output = std::move(summary);
+    return true;
+}
+
+bool encodeBindingChange(const BindingChange& change, SensitiveBytes& output) {
+    SensitiveBytes expected, candidate;
+    if (!encodeBindingSummary(change.expected, expected) || !encodeBinding(change.candidate, candidate) ||
+        change.cancelEvent.size() > 128 || change.cancelEvent.find(L'\0') != std::wstring::npos ||
+        expected.value.size() + candidate.value.size() + change.cancelEvent.size() * sizeof(wchar_t) + 12 > kMaxPacket) return false;
+    output.clear();
+    const std::array<std::uint32_t, 3> sizes{static_cast<std::uint32_t>(expected.value.size()),
+        static_cast<std::uint32_t>(candidate.value.size()), static_cast<std::uint32_t>(change.cancelEvent.size())};
+    append(output, sizes.data(), sizeof(sizes));
+    append(output, expected.value.data(), expected.value.size());
+    append(output, candidate.value.data(), candidate.value.size());
+    if (!change.cancelEvent.empty()) append(output, change.cancelEvent.data(), change.cancelEvent.size() * sizeof(wchar_t));
+    return true;
+}
+
+bool decodeBindingChange(const std::uint8_t* data, std::size_t size, BindingChange& output) {
+    if (!data || size < 12 || size > kMaxPacket) return false;
+    std::array<std::uint32_t, 3> sizes{};
+    std::memcpy(sizes.data(), data, sizeof(sizes));
+    if (sizes[0] > kMaxPacket || sizes[1] > kMaxPacket || sizes[2] > 128 ||
+        size != 12 + sizes[0] + sizes[1] + sizes[2] * sizeof(wchar_t)) return false;
+    BindingChange change;
+    if (!decodeBindingSummary(data + 12, sizes[0], change.expected) ||
+        !decodeBinding(data + 12 + sizes[0], sizes[1],
+            change.candidate)) return false;
+    change.cancelEvent.resize(sizes[2]);
+    if (sizes[2]) std::memcpy(change.cancelEvent.data(), data + 12 + sizes[0] + sizes[1], sizes[2] * sizeof(wchar_t));
+    if (change.cancelEvent.find(L'\0') != std::wstring::npos) return false;
+    output = std::move(change);
+    return true;
+}
+
+bool encodeBindingRemoval(const BindingRemoval& removal, SensitiveBytes& output) {
+    SensitiveBytes expected;
+    if (!encodeBindingSummary(removal.expected, expected) || removal.cancelEvent.empty() ||
+        removal.cancelEvent.size() > 128 || removal.cancelEvent.find(L'\0') != std::wstring::npos) return false;
+    output.clear();
+    const auto size = static_cast<std::uint32_t>(expected.value.size());
+    append(output, &size, sizeof(size));
+    append(output, expected.value.data(), expected.value.size());
+    append(output, removal.cancelEvent.data(), removal.cancelEvent.size() * sizeof(wchar_t));
+    return output.value.size() <= kMaxPacket;
+}
+
+bool decodeBindingRemoval(const std::uint8_t* data, std::size_t size, BindingRemoval& output) {
+    if (!data || size < 4 || size > kMaxPacket) return false;
+    std::uint32_t expectedSize = 0;
+    std::memcpy(&expectedSize, data, sizeof(expectedSize));
+    if (expectedSize > size - 4) return false;
+    const auto eventBytes = size - 4 - expectedSize;
+    if (!eventBytes || eventBytes % sizeof(wchar_t) || eventBytes > 128 * sizeof(wchar_t)) return false;
+    BindingRemoval removal;
+    if (!decodeBindingSummary(data + 4, expectedSize, removal.expected)) return false;
+    removal.cancelEvent.resize(eventBytes / sizeof(wchar_t));
+    std::memcpy(removal.cancelEvent.data(), data + 4 + expectedSize, eventBytes);
+    if (removal.cancelEvent.find(L'\0') != std::wstring::npos) return false;
+    output = std::move(removal);
+    return true;
+}
+
 bool decodeAutoSubmitOffer(const std::uint8_t* data, const std::size_t size, AutoSubmitOffer& output) {
     if (data == nullptr || size != kNonceSize + sizeof(ULONGLONG)) return false;
     AutoSubmitOffer decoded;
@@ -475,29 +596,32 @@ bool decodeAutoSubmitOffer(const std::uint8_t* data, const std::size_t size, Aut
 
 const wchar_t* authenticationStatusText(const AuthenticationStatus& status) noexcept {
     switch (status.failure) {
-    case AuthenticationFailure::rssiTooLow: return L"Move your iPhone closer and try again.";
-    case AuthenticationFailure::automaticDisabled: return L"Enable automatic approval in the iPhone app.";
-    case AuthenticationFailure::rssiUnavailable: return L"Couldn't check your iPhone's proximity. Try again.";
-    case AuthenticationFailure::subscriptionLost: return L"Connection to your iPhone was interrupted. Try again.";
-    case AuthenticationFailure::deliveryFailed: return L"Couldn't send the request to your iPhone. Try again.";
-    case AuthenticationFailure::signingFailed: return L"Couldn't verify approval from your iPhone. Try again.";
-    case AuthenticationFailure::expired: return L"Your iPhone didn't respond in time. Try again.";
-    case AuthenticationFailure::sessionChanged: return L"Your Windows session changed. Start again.";
-    case AuthenticationFailure::invalidAssertion: return L"Couldn't verify approval from your iPhone. Try again.";
     case AuthenticationFailure::none: break;
+    case AuthenticationFailure::rssiTooLow: return L"Move your iPhone closer and try again.";
+    case AuthenticationFailure::rssiUnavailable: return L"No fresh proximity sample. Try again.";
+    case AuthenticationFailure::connectionLost: return L"The Bluetooth connection was lost. Try again.";
+    case AuthenticationFailure::protectedOperationFailed: return L"Protected Bluetooth verification failed. Try again.";
+    case AuthenticationFailure::expired: return L"Verification timed out. Try again.";
+    case AuthenticationFailure::sessionChanged: return L"Your Windows session changed. Start again.";
+    case AuthenticationFailure::associationInvalid: return L"The system device association is missing or ambiguous. Bind again.";
+    case AuthenticationFailure::bondRejected: return L"Authenticated Secure Connections pairing is required.";
+    case AuthenticationFailure::cancelled: return L"Verification cancelled.";
+    case AuthenticationFailure::bindingChanged: return L"The binding changed. Start again.";
+    case AuthenticationFailure::storageFailed: return L"The binding could not be saved. The previous binding is retained.";
+    case AuthenticationFailure::evidenceExpired: return L"Bluetooth evidence expired. Click Unlock again.";
+    case AuthenticationFailure::internalError: return L"Verification failed. See diagnostics.";
     }
     switch (status.stage) {
-    case AuthenticationStage::waitingPhone: return L"Waiting for your iPhone\u2026";
-    case AuthenticationStage::awaitingAssertion: return L"Waiting for approval from your iPhone\u2026";
-    case AuthenticationStage::approved: return L"Approved by your iPhone. Unlocking this PC\u2026";
-    case AuthenticationStage::consumed: return L"This approval has already been used. Start again for a new approval.";
+    case AuthenticationStage::verifying: return L"Checking your iPhone's presence\u2026";
+    case AuthenticationStage::approved: return L"Presence verified. Unlocking this PC\u2026";
+    case AuthenticationStage::consumed: return L"This authorization has already been used. Start again.";
+    case AuthenticationStage::completed: return L"Binding saved.";
     default: return UNLOCK_PRODUCT_DISPLAY_NAME;
     }
 }
-
 bool encodeAuthenticationStatus(const AuthenticationStatus& status, SensitiveBytes& output) {
     output.clear();
-    if (status.stage > AuthenticationStage::consumed || status.failure > AuthenticationFailure::invalidAssertion ||
+    if (status.stage > AuthenticationStage::completed || status.failure > AuthenticationFailure::internalError ||
         (status.stage == AuthenticationStage::idle ? !status.requestId.empty() : status.requestId.size() != 36) ||
         (status.stage == AuthenticationStage::idle ? status.deadline != 0 : status.deadline == 0) ||
         ((status.stage == AuthenticationStage::failed) != (status.failure != AuthenticationFailure::none))) return false;
@@ -530,40 +654,9 @@ bool decodeAuthenticationStatus(const std::uint8_t* data, const std::size_t size
     return true;
 }
 
-bool encodePhoneChallenge(const PhoneChallengePayload& challenge, SensitiveBytes& output) {
-    if (!encodeAuthenticationStatus(challenge.status, output) || challenge.json.size() > 4096 ||
-        (!challenge.json.empty() && challenge.status.stage != AuthenticationStage::awaitingAssertion)) return false;
-    const auto size = static_cast<std::uint32_t>(challenge.json.size());
-    append(output, &size, sizeof(size));
-    if (size != 0) append(output, challenge.json.data(), size);
-    return true;
-}
-
-bool decodePhoneChallenge(const std::uint8_t* data, const std::size_t size, PhoneChallengePayload& output) {
-    if (data == nullptr || size < 52 || size > 52 + 4096) return false;
-    PhoneChallengePayload decoded;
-    if (!decodeAuthenticationStatus(data, 48, decoded.status)) return false;
-    std::uint32_t jsonSize = 0;
-    std::memcpy(&jsonSize, data + 48, sizeof(jsonSize));
-    if (jsonSize != size - 52 || (jsonSize != 0 && decoded.status.stage != AuthenticationStage::awaitingAssertion)) return false;
-    decoded.json.assign(reinterpret_cast<const char*>(data + 52), jsonSize);
-    output = std::move(decoded);
-    return true;
-}
-
 bool call(const Operation operation, SensitiveBytes&& request, Packet& reply, const DWORD waitMs,
           CallDiagnostics* const diagnostics) {
     return callOnPipe(kPipeName, operation, std::move(request), reply, waitMs, diagnostics);
-}
-
-bool callPhone(const Operation operation, SensitiveBytes&& request, Packet& reply, const DWORD waitMs,
-               CallDiagnostics* const diagnostics) {
-    if (!isPhoneOperation(operation)) {
-        SetLastError(ERROR_INVALID_PARAMETER);
-        if (diagnostics != nullptr) *diagnostics = {CallStage::requestValidation, ERROR_INVALID_PARAMETER};
-        return false;
-    }
-    return callOnPipe(kPhonePipeName, operation, std::move(request), reply, waitMs, diagnostics);
 }
 
 } // namespace unlock_windows::saved_credential

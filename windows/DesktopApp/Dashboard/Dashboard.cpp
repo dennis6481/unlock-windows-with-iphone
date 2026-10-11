@@ -37,7 +37,6 @@ struct Dashboard::State final {
     struct View;
     std::unique_ptr<View> view;
     DashboardSnapshot snapshot;
-    PairingAction action;
     RefreshAction refresh;
     ReportError reportError;
     ReportError passwordReport;
@@ -167,7 +166,7 @@ private:
                 if (!state_->snapshot.paired.has_value() || state_->snapshot.busy || actionPending_) return;
                 actionPending_ = true;
                 action_.IsEnabled(false);
-                state_->action(*state_->snapshot.paired);
+                if (statusPage_) get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->Remove();
             } catch (const hresult_error& error) { state_->fail(error); }
         });
         actions.Children().Append(action_);
@@ -179,7 +178,11 @@ private:
             try {
                 if (passwordPage_ && nav_.SelectedItem() == pages_[1])
                     get_self<winrt::UnlockDesktop::implementation::PasswordPage>(passwordPage_)->Refresh();
-                else state_->refresh();
+                else {
+                    if (statusPage_ && nav_.SelectedItem() == pages_[0])
+                        get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->Refresh();
+                    state_->refresh();
+                }
             }
             catch (const hresult_error& error) { state_->fail(error); }
         });
@@ -217,7 +220,7 @@ private:
                         state_->reportError);
                 } else throw hresult_invalid_argument(L"Unknown Dashboard page.");
                 title_.Text(unbox_value<hstring>(item.Content()));
-                action_.Visibility(statusPage ? Visibility::Visible : Visibility::Collapsed);
+                action_.Visibility(statusPage && state_->snapshot.paired.value_or(false) ? Visibility::Visible : Visibility::Collapsed);
                 refresh_.Visibility(statusPage || diagnosticsPage || pageId == DashboardPage::password
                     ? Visibility::Visible : Visibility::Collapsed);
             } catch (const hresult_error& error) { state_->fail(error); }
@@ -231,6 +234,8 @@ private:
             try {
                 if (passwordPage_ && nav_.SelectedItem() == pages_[1])
                     get_self<winrt::UnlockDesktop::implementation::PasswordPage>(passwordPage_)->Refresh();
+                if (statusPage_ && nav_.SelectedItem() == pages_[0])
+                    get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->Refresh();
             } catch (const hresult_error& error) { state_->fail(error); }
         });
     }
@@ -240,8 +245,10 @@ private:
         actionPending_ = false;
         const bool known = snapshot.paired.has_value();
         const bool paired = snapshot.paired.value_or(false);
-        action_.Content(box_value(hstring(paired ? L"Remove iPhone" : L"Pair iPhone")));
-        action_.IsEnabled(known && !snapshot.busy);
+        action_.Content(box_value(L"Remove iPhone"));
+        action_.Visibility(nav_.SelectedItem() == pages_[0] && paired ? Visibility::Visible : Visibility::Collapsed);
+        action_.IsEnabled(known && paired && !snapshot.busy &&
+            (!statusPage_ || !get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->Busy()));
         if (statusPage_) get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->Update(snapshot);
         if (diagnosticsPage_) get_self<winrt::UnlockDesktop::implementation::DiagnosticsPage>(diagnosticsPage_)->Update(snapshot.diagnostics);
     }
@@ -257,6 +264,8 @@ public:
         if (refresh_ && refreshToken_.value) refresh_.Click(refreshToken_);
         if (aboutPage_) get_self<winrt::UnlockDesktop::implementation::AboutPage>(aboutPage_)->Stop();
         if (passwordPage_) get_self<winrt::UnlockDesktop::implementation::PasswordPage>(passwordPage_)->Stop();
+        if (statusPage_) get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->Stop();
+        if (diagnosticsPage_) get_self<winrt::UnlockDesktop::implementation::DiagnosticsPage>(diagnosticsPage_)->Stop();
         if (hwnd_) RemoveWindowSubclass(hwnd_, sizing, 1);
         if (window_) window_.Close();
         window_ = nullptr;
@@ -283,8 +292,7 @@ private:
     event_token activatedToken_{};
 };
 
-Dashboard::Dashboard(PairingAction action, RefreshAction refresh, ReportError reportError, ReportError passwordReport) : state_(std::make_unique<State>()) {
-    state_->action = std::move(action);
+Dashboard::Dashboard(RefreshAction refresh, ReportError reportError, ReportError passwordReport) : state_(std::make_unique<State>()) {
     state_->refresh = std::move(refresh);
     state_->reportError = std::move(reportError);
     state_->passwordReport = std::move(passwordReport);

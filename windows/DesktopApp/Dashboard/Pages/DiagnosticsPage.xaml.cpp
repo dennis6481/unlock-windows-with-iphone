@@ -20,7 +20,10 @@ void DiagnosticsPage::OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationE
     ScrollViewer::SetHorizontalScrollBarVisibility(diagnostics_, ScrollBarVisibility::Disabled);
     Automation::AutomationProperties::SetName(diagnostics_, L"Technical details and diagnostic history");
 
-    BodyHost().Content(diagnostics_);
+    StackPanel body;
+    body.Spacing(24);
+    body.Children().Append(diagnostics_);
+    BodyHost().Content(body);
 }
 
 void DiagnosticsPage::Update(std::wstring const& diagnostics) {
@@ -36,5 +39,8 @@ void DiagnosticsPage::Update(std::wstring const& diagnostics) {
     diagnostics_.Select(start, std::min(selectionLength, textLength - start));
     scroll.UpdateLayout();
     scroll.ChangeView(nullptr, verticalOffset, nullptr, true);
+}
+
+void DiagnosticsPage::Stop() {
 }
 }

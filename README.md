@@ -2,7 +2,7 @@
 > [!WARNING]
 > **Developer technical preview**
 >
-> - **The iOS app requires your own signing.** It is not yet available on the App Store or TestFlight. Download the unsigned IPA from [Releases](https://github.com/dennis6481/unlock-windows-with-iphone/releases) and sign it yourself, or build and sign it using a Mac and Xcode. See the [iOS development guide](ios/README.md).
+> - **The app-free presence unlock acceptance matrix remains pending.** This revision has not been accepted on hardware.
 > - **Currently supports only Windows users who sign in with a Microsoft account (MSA).** The account must have a password. Local Windows accounts are not supported. See Microsoft's guide to [switching from a local account to a Microsoft account](https://support.microsoft.com/en-us/accounts-billing/manage/change-from-a-local-account-to-a-microsoft-account-in-windows).
 
 
@@ -31,49 +31,49 @@ Unlock Windows session using your iPhone in proximity.
 
 The *Unlock with iPhone* requires Windows 10 version **1809, build 17763**, or later, including Windows 11. Both x64 and ARM64 architecture are supported (althought the app has not yet been tested on a physical ARM64 machine).
 
-Your PC must have Bluetooth enabled, with an adapter and driver that support **Bluetooth Low Energy (BLE) peripheral advertising**.
+Your PC must have Bluetooth enabled, with an adapter and driver that support **BLE Central, protected GATT access and advertisement scanning**.
 
-The *Unlock PC* iOS app requires iOS 26 or later, and currently only supports iPhone and iPhone Duo. 
+Use a physical iPhone running iOS 26 or later. No iPhone app, IPA or developer signing is required.
 
 
 ## What it does
 
-- Unlock your locked Windows session using your paired iPhone over Bluetooth. Select the phone unlock tile on the Windows lock screen; your iPhone responds automatically when its configured conditions are met.
-- Adjust the proximity setting on your iPhone to control how close it needs to be to respond.
+- Unlock your locked Windows session using your paired iPhone over Bluetooth. Select the phone unlock tile on the Windows lock screen; click **Unlock** to request a fresh presence check. The phone needs no action for each attempt; locking the PC alone does not request unlock.
+- Adjust the saved RSSI threshold on the Windows **Status** page. Dragging changes a pending value; **Save** requests UAC.
 - Keep an encrypted copy of your Microsoft account password on your PC. Your password is never sent to your iPhone.
-- Manage pairing, the saved password and connection status from the Windows tray app.
+- Manage system pairing, the product binding and saved password from the Windows tray app. The LocalSystem service verifies presence independently when the desktop app exits.
 - Install, update or remove the Windows app using its installer.
 
 After restarting your PC or signing out, sign in once with your usual Windows password or PIN before using iPhone unlock again.
 
 ### Installation
 
-1. Download the unsigned *Unlock PC* IPA from [Releases](https://github.com/dennis6481/unlock-windows-with-iphone/releases) and sign it before installing, or build and run the app from `ios/` with Xcode. Choose the Windows installer from the same release so both apps use the same revision.
-2. Get the latest Unlock with iPhone [Windows installer](https://github.com/dennis6481/unlock-windows-with-iphone/releases) at GitHub release and follow the steps in installer. After restarting, sign in once with your usual Windows password or PIN. iPhone unlock is available only for subsequent unlocks of that session. When the installation result page appears, choose **Start setup** to continue.
+1. Get the native x64 or ARM64 [Windows installer](https://github.com/dennis6481/unlock-windows-with-iphone/releases) and follow its steps. After restarting, sign in once with your usual Windows password or PIN, then choose **Start setup**.
+2. Save your **Microsoft account password**, not your PIN. The encrypted copy stays on this PC and is never sent to the phone.
+3. On **Status**, use **Open Bluetooth settings** to pair your iPhone. Compare the Bluetooth numbers on both devices and accept only a match. Skip this step if Windows already shows the phone as paired.
+4. Return to **Status**, select your iPhone from the updated paired-device list and click **Bind selected device**. Devices are never bound automatically.
+5. Confirm the selected phone and initial RSSI threshold. UAC permits the service to verify pairing, protected BLE communication and signal strength before saving the binding.
 
-3. You will need to enter your **Microsoft account** password. This password will be ecrypted and store on your PC. (For the moment you have to be logged in with your Microsoft account to use the app. Local account support will be added later).
+No claim of product readiness is made before [acceptance](docs/Testing.md) completes. Previous public-key registrations require explicit rebinding; they are not migrated.
 
-4. On iPhone's *Unlock PC* app, tap *Add a Windows PC*, and *Continue*, than you should see your PC name under the SHA fingerprint.
-
-5. On your PC, verify that the SHA 256 fingerprint matches the one on iPhone, than click *Confirm*. You will see a confirmation page on your iPhone and you're all set.
+The tray app's **Diagnostics** page shows service verification steps, pairing properties, operation timings and failures with their request IDs. Update the installed service together with the desktop app to receive these details.
 
 ## Uninstall
 
 Open Windows **Settings → Apps**, find *Unlock with iPhone* and select **Uninstall**. Follow the uninstaller's instructions, including restarting if prompted.
 
-Uninstalling removes the Windows components, the Start Menu shortcut, the saved password copy and the iPhone pairing information stored on your PC. It does not change your Microsoft account password. If you reinstall, you will need to set up the app again.
+Uninstalling removes the Windows components, the Start Menu shortcut, the saved password copy and the product binding stored on your PC. It does not change your Microsoft account password. If you reinstall, you will need to set up the app again.
 
-The PC entry in the iPhone app is kept. You can remove it separately from *Unlock PC*.
+Windows system Bluetooth pairing is kept. Remove it separately in Windows Bluetooth settings if desired.
 
 ## Repository guide
 
 ```text
 .
-├── ios/           SwiftUI app, CoreBluetooth coordination, Secure Enclave signing and pure policy tests.
 ├── windows/       Desktop app, credential service, Credential Provider, installer, shared code and C++ tests.
 ├── docs/
 │   └── Testing.md Reproducible checks and release evidence requirements.
-├── PROTOCOL.md    Cross-platform protocol and overall architecture.
+├── PROTOCOL.md    Service-owned presence authorization and overall architecture.
 └── SECURITY.md    Credential protection, security assumptions and limitations.
 ```
 
@@ -82,17 +82,19 @@ The [Windows module index](windows/README.md#module-index) explains the source d
 ## Build and set up
 
 - [Windows: prerequisites, build, installation and setup](windows/README.md)
-- [iOS: Xcode signing, device installation and app settings](ios/README.md)
 - [Testing and diagnostics](docs/Testing.md)
+- [Independent system BLE diagnostic and recorded evidence](docs/BleSystemPoc.md)
 
-Build both platforms from the same revision. Do not mix service, Credential Provider and desktop binaries from different builds. A iOS simulator can be useful for UI work, but cannot exercise the Secure Enclave signing path.
+Do not mix service, Credential Provider and desktop binaries from different builds.
 
 Windows distribution is a single `windows/dist/UnlockWithIPhone_<version>_<architecture>_setup.exe` with the desktop app, service and Credential Provider embedded. 
 
 
 ## Known limitations
 
-- **Distribution:** There is no App Store or TestFlight distribution. Release builds provide an unsigned IPA that requires your own signing before installation.
+- **Presence authorization:** No fresh Face ID, Touch ID or phone confirmation is required for each Unlock request.
+- **RSSI:** Signal strength is an unauthenticated address-associated hint, not a secure distance or relay-resistance measurement.
+- **Bluetooth security:** Pairing records and successful protected GATT operations do not independently attest current-link LESC mode or key reuse.
 - **Windows sessions and accounts:** Currently, only Microsoft Account (MSA) accounts are supported; local Windows accounts are not supported. Account changes or an outdated saved password can cause native authentication to fail.
 - **Multi-users:** The Windows app does not currently support multi-users. I can only be configured for one MSA user on the PC.
 
@@ -104,7 +106,6 @@ The testing guide describes how to report results without treating a successful 
 - [ ] Modernize the Windows UI and setup guidance
 - [ ] Support multiple Windows users.
 - [ ] Support local Windows accounts.
-- [ ] Integrate iOS AccessorySetupKit.
 - [ ] watchOS supported.
 - [ ] Move Windows installer packaging to an MSI architecture.
 - [ ] Investigate LSA-based Windows authentication to replace the current implementation that stores a local Windows password copy.
@@ -124,13 +125,11 @@ The project uses the [MIT License](LICENSE.md). This is an independent project; 
 
 ## References
 
-- [Apple: Protecting keys with the Secure Enclave](https://developer.apple.com/documentation/security/protecting-keys-with-the-secure-enclave)
-- [Apple: Core Bluetooth background processing](https://developer.apple.com/library/archive/documentation/NetworkingInternetWeb/Conceptual/CoreBluetooth_concepts/CoreBluetoothBackgroundProcessingForIOSApps/PerformingTasksWhileYourAppIsInTheBackground.html)
 - [Microsoft: Credential Providers](https://learn.microsoft.com/en-us/windows/win32/secauthn/credential-providers-in-windows)
-- [Microsoft: GATT server](https://learn.microsoft.com/en-us/windows/apps/develop/devices-sensors/gatt-server)
+- [Apple: ANCS specification](https://developer.apple.com/library/archive/documentation/CoreBluetooth/Reference/AppleNotificationCenterServiceSpecification/Specification/Specification.html)
 
 - [Microsoft: Credential Provider system user array](https://learn.microsoft.com/en-us/windows/win32/api/credentialprovider/nf-credentialprovider-icredentialprovidersetuserarray-setuserarray)
 - [Microsoft: MSBuild for Visual C++](https://learn.microsoft.com/en-us/cpp/build/msbuild-visual-cpp)
 - [Microsoft: /MD and /MT runtime linkage](https://learn.microsoft.com/en-us/cpp/build/reference/md-mt-ld-use-run-time-library)
 - [Microsoft: Finding and loading resources](https://learn.microsoft.com/en-us/windows/win32/menurc/finding-and-loading-resources)
-- [Unlock PC: Privacy Policy](https://dennis6481.github.io/unlock-windows-with-iphone/)
+- [Privacy Policy](https://dennis6481.github.io/unlock-windows-with-iphone/)

@@ -270,9 +270,6 @@ private:
             snapshot = std::move(status);
             if (setup && snapshot->credentialMatches) {
                 if (cancellation()) co_return;
-                Packet response;
-                if (!call(Operation::reloadPhoneEnrollment, SensitiveBytes{}, response) || response.result != Result::success)
-                    throw std::runtime_error("The service could not reload phone registration. Setup has not continued. Choose Retry.");
                 ready = true;
             }
         } catch (...) { failure = currentException(); snapshot.reset(); }

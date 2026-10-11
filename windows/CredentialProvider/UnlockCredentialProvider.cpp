@@ -161,7 +161,7 @@ struct ApprovalWatch final {
                 if (!encodeIdentity(identity, statusRequest)) {
                     latest = L"Unlock with iPhone is temporarily unavailable. Use your PIN or password.";
                     logAutoSubmitError(L"phone status identity encoding", E_INVALIDARG);
-                } else if (!call(Operation::phoneAuthenticationStatus, std::move(statusRequest), statusReply, 250, &diagnostics)) {
+                } else if (!call(Operation::verificationStatus, std::move(statusRequest), statusReply, 250, &diagnostics)) {
                     latest = L"Unlock with iPhone is temporarily unavailable. Use your PIN or password.";
                     logAutoSubmitError(L"phone authentication status", HRESULT_FROM_WIN32(diagnostics.win32Error));
                 } else if (statusReply.result == Result::success) {
@@ -527,6 +527,18 @@ public:
     }
 
     HRESULT STDMETHODCALLTYPE SetDeselected() override {
+        if (authenticationPending_) {
+            try {
+                using namespace unlock_windows::saved_credential;
+                SensitiveBytes request;
+                request.value.assign(authenticationRequestId_.begin(), authenticationRequestId_.end());
+                Packet reply;
+                if (!call(Operation::cancelVerification, std::move(request), reply, 250) || reply.result != Result::success)
+                    OutputDebugStringW(L"[UnlockCP] verification cancellation failed; service deadline still applies\n");
+                authenticationPending_ = false;
+                automaticApproval_.reset();
+            } catch (...) { return E_FAIL; }
+        }
         return S_OK;
     }
 
@@ -676,7 +688,7 @@ public:
             showAuthenticationStatus(unlock_windows::saved_credential::authenticationStatusText(*status));
         } else if (status && status->stage == unlock_windows::saved_credential::AuthenticationStage::idle) {
             authenticationPending_ = false;
-            showAuthenticationStatus(L"Start again to request approval from your iPhone.");
+            showAuthenticationStatus(L"Click Unlock to verify your iPhone presence.");
         }
     }
 
@@ -741,7 +753,7 @@ public:
                     logAutoSubmitError(L"phone authentication identity encoding", E_INVALIDARG);
                     return copyString(L"This Windows account couldn't be verified. Use your PIN or password.", optionalStatusText);
                 }
-                if (!call(Operation::beginPhoneAuthentication, std::move(request), reply, 250, &diagnostics)) {
+                if (!call(Operation::beginVerification, std::move(request), reply, 250, &diagnostics)) {
                     logAutoSubmitError(L"begin phone authentication", HRESULT_FROM_WIN32(diagnostics.win32Error));
                     return copyString(L"Unlock with iPhone is temporarily unavailable. Use your PIN or password.", optionalStatusText);
                 }
@@ -753,7 +765,7 @@ public:
                 }
                 AuthenticationStatus started;
                 if (!decodeAuthenticationStatus(reply.payload.value.data(), reply.payload.value.size(), started) ||
-                    started.stage != AuthenticationStage::waitingPhone) {
+                    started.stage != AuthenticationStage::verifying) {
                     logAutoSubmitError(L"phone request framing", HRESULT_FROM_WIN32(ERROR_INVALID_DATA));
                     return copyString(L"Unlock with iPhone is temporarily unavailable. Use your PIN or password.", optionalStatusText);
                 }
@@ -796,7 +808,7 @@ public:
             }
             std::copy_n(captureReply.payload.value.begin(), savedNonce.size(), savedNonce.begin());
             if (automaticApproval && *automaticApproval != savedNonce) {
-                return copyString(L"Your iPhone approval is no longer available. Start again.",
+                return copyString(L"The iPhone presence check is no longer valid. Click Unlock again.",
                     optionalStatusText);
             }
             unlock_windows::saved_credential::SensitiveBytes request;
@@ -811,7 +823,7 @@ public:
                 ) || reply.result != unlock_windows::saved_credential::Result::success ||
                 reply.payload.value.empty() || reply.payload.value.size() > 2048 ||
                 reply.payload.value.size() % sizeof(wchar_t) != 0) {
-                return copyString(L"Your iPhone approval couldn't be used. Start again for a new approval.",
+                return copyString(L"The iPhone presence check could not be used. Click Unlock again.",
                     optionalStatusText);
             }
             const auto chars = reply.payload.value.size() / sizeof(wchar_t);
@@ -1370,7 +1382,7 @@ private:
             return HRESULT_FROM_WIN32(GetLastError());
         }
         try {
-            windowClassName_ = L"UnlockIPhoneApproval." + std::to_wstring(reinterpret_cast<UINT_PTR>(this));
+            windowClassName_ = L"UnlockIPhonePresence." + std::to_wstring(reinterpret_cast<UINT_PTR>(this));
         } catch (const std::bad_alloc&) {
             return E_OUTOFMEMORY;
         }
@@ -1454,7 +1466,7 @@ private:
             pendingAutomaticOffer_.reset();
             logAutoSubmitError(L"CredentialsChanged", status);
         } else {
-            OutputDebugStringW(L"[UnlockCP] phone approval triggered CredentialsChanged\n");
+            OutputDebugStringW(L"[UnlockCP] presence authorization triggered CredentialsChanged\n");
         }
     }
 

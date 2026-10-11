@@ -5,9 +5,10 @@
 
 #include "../Resources/resource.h"
 #include "WindowsAdapter.h"
+#include "../ProtectedStorage.h"
 #include "SetupPlatform.h"
 #include "SavedCredentialIpc.h"
-#include "../GattHost/GattController.h"
+
 #include "../CredentialProvider/UnlockCredentialProvider.h"
 #include "../Protocol/UnlockCrypto.h"
 
@@ -64,44 +65,9 @@ private:
 
 }
 void WindowsAdapter::ensureProtectedDirectory(const std::filesystem::path& path, bool create) const {
-    if (create) {
-        PSECURITY_DESCRIPTOR descriptor = nullptr;
-        checkWin32(ConvertStringSecurityDescriptorToSecurityDescriptorW(
-            L"D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FRFX;;;BU)", SDDL_REVISION_1,
-            &descriptor, nullptr), L"Create deployment directory security");
-        SECURITY_ATTRIBUTES security{sizeof(security), descriptor, FALSE};
-        const BOOL made = CreateDirectoryW(path.c_str(), &security);
-        const DWORD error = GetLastError(); LocalFree(descriptor);
-        if (!made && error != ERROR_ALREADY_EXISTS) fail(L"Could not create " + path.wstring() + L": " + win32ErrorMessage(error));
-    }
-    const DWORD attributes = GetFileAttributesW(path.c_str());
-    if (attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_DIRECTORY) ||
-        (attributes & FILE_ATTRIBUTE_REPARSE_POINT)) fail(L"Unsafe deployment directory: " + path.wstring());
-    PSECURITY_DESCRIPTOR raw = nullptr; PACL acl = nullptr; PSID owner = nullptr;
-    const DWORD result = GetNamedSecurityInfoW(const_cast<wchar_t*>(path.c_str()), SE_FILE_OBJECT,
-        OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION, &owner, nullptr, &acl, nullptr, &raw);
-    if (result != ERROR_SUCCESS) fail(L"Cannot inspect deployment ACL: " + win32ErrorMessage(result));
-    struct Descriptor { PSECURITY_DESCRIPTOR p; ~Descriptor() { LocalFree(p); } } descriptor{raw};
-    BYTE system[SECURITY_MAX_SID_SIZE]{}, administrators[SECURITY_MAX_SID_SIZE]{};
-    DWORD systemSize = sizeof(system), adminSize = sizeof(administrators);
-    checkWin32(CreateWellKnownSid(WinLocalSystemSid, nullptr, system, &systemSize), L"Resolve SYSTEM SID");
-    checkWin32(CreateWellKnownSid(WinBuiltinAdministratorsSid, nullptr, administrators, &adminSize), L"Resolve administrator SID");
-    if (!acl || !owner || (!EqualSid(owner, system) && !EqualSid(owner, administrators)))
-        fail(L"Deployment directory is not administrator-owned: " + path.wstring());
-    constexpr DWORD writes = FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA | FILE_WRITE_ATTRIBUTES |
-        FILE_DELETE_CHILD | DELETE | WRITE_DAC | WRITE_OWNER | GENERIC_WRITE | GENERIC_ALL;
-    for (DWORD i = 0; i < acl->AceCount; ++i) {
-        LPVOID entry = nullptr; checkWin32(GetAce(acl, i, &entry), L"Read deployment ACL entry");
-        const auto header = static_cast<ACE_HEADER*>(entry);
-        if (header->AceFlags & INHERIT_ONLY_ACE) continue;
-        if (header->AceType == ACCESS_DENIED_ACE_TYPE) continue;
-        if (header->AceType != ACCESS_ALLOWED_ACE_TYPE) fail(L"Unsupported deployment ACL entry.");
-        const auto ace = static_cast<ACCESS_ALLOWED_ACE*>(entry);
-        if ((ace->Mask & writes) && !EqualSid(&ace->SidStart, system) && !EqualSid(&ace->SidStart, administrators))
-            fail(L"Deployment directory is writable by another identity: " + path.wstring());
-    }
+    try { unlock_windows::storage::ensureProtectedDirectory(path, create); }
+    catch (...) { throw ComponentError(L"Protected deployment directory " + path.wstring() + L": " + std::wstring(winrt::to_message())); }
 }
-
 namespace {
 Architecture nativeArchitecture() {
     SYSTEM_INFO info{};
@@ -568,7 +534,7 @@ void WindowsAdapter::removeProductData(const std::wstring& targetSid) const {
     checkWin32(ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(A;;GA;;;SY)(A;;GA;;;BA)",
         SDDL_REVISION_1, &descriptor, nullptr), L"Protect enrollment removal lock");
     SECURITY_ATTRIBUTES attributes{sizeof(attributes), descriptor, FALSE};
-    const HANDLE raw = CreateMutexW(&attributes, FALSE, unlock_windows::phone_approval::kEnrollmentWriterMutex);
+    const HANDLE raw = CreateMutexW(&attributes, FALSE, unlock_windows::system_ble::kEnrollmentWriterMutex);
     const DWORD error = GetLastError(); LocalFree(descriptor); SetLastError(error);
     ScopedHandle writer(raw); checkWin32(raw != nullptr, L"Open enrollment writer lock");
     const DWORD waited = WaitForSingleObject(raw, 0);
@@ -578,32 +544,17 @@ void WindowsAdapter::removeProductData(const std::wstring& targetSid) const {
     if (std::filesystem::exists(directory)) {
         for (const auto& entry : std::filesystem::directory_iterator(directory)) {
             const auto name = entry.path().filename().wstring();
-            const std::wstring prefix = std::wstring(unlock_windows::phone_approval::kEnrollmentFileName) +
-                unlock_windows::phone_approval::kEnrollmentPendingSuffix;
+            const std::wstring prefix = std::wstring(unlock_windows::system_ble::kEnrollmentFileName) +
+                unlock_windows::system_ble::kEnrollmentPendingSuffix;
             const bool temporary = name.size() == prefix.size() + 32 && name.starts_with(prefix) &&
                 name.find_first_not_of(L"0123456789abcdef", prefix.size()) == std::wstring::npos;
-            if (name != unlock_windows::phone_approval::kEnrollmentFileName && !temporary) continue;
+            if (name != unlock_windows::system_ble::kEnrollmentFileName && !temporary) continue;
             const DWORD flags = GetFileAttributesW(entry.path().c_str());
             if (flags == INVALID_FILE_ATTRIBUTES || (flags & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)))
                 throw ComponentError(L"Unsafe enrollment file; removal paused.");
             deleteFileIfPresent(entry.path());
         }
     }
-    withUserHive(targetSid, [](HKEY hive) {
-        auto status = RegDeleteTreeW(hive, unlock_windows::desktop_app::kComputerIdentityRegistryPath);
-        if (status != ERROR_FILE_NOT_FOUND && status != ERROR_PATH_NOT_FOUND) checkRegistry(status, L"Remove target-user ComputerId");
-        ScopedRegistryKey key;
-        status = RegOpenKeyExW(hive, kProductRegistryPath, 0, KEY_READ, &key.value);
-        if (status == ERROR_FILE_NOT_FOUND) return;
-        checkRegistry(status, L"Inspect target-user product registry");
-        DWORD subkeys = 0, values = 0;
-        checkRegistry(RegQueryInfoKeyW(key.value, nullptr, nullptr, nullptr, &subkeys, nullptr, nullptr,
-            &values, nullptr, nullptr, nullptr, nullptr), L"Inspect target-user remaining data");
-        if (subkeys || values) throw ComponentError(L"Unknown target-user product registry data remains.");
-        RegCloseKey(key.value); key.value = nullptr;
-        checkRegistry(RegDeleteKeyW(hive, kProductRegistryPath), L"Remove empty target-user product key");
-        checkRegistry(RegFlushKey(hive), L"Flush target-user data removal");
-    });
 }
 void WindowsAdapter::restartWindows() const {
     const auto result = ShellExecuteW(nullptr, L"open", L"shutdown.exe", L"/r /t 0", nullptr, SW_HIDE);

@@ -40,7 +40,7 @@ function Read-RegistryRecord([Microsoft.Win32.RegistryKey]$Root, [string]$Path) 
 $manifest = Read-HeaderDefinitions (Join-Path $PSScriptRoot '..\ComponentFiles.h')
 $contract = Read-HeaderDefinitions (Join-Path $PSScriptRoot '..\Setup\SetupContract.h')
 Read-HeaderDefinitions (Join-Path $PSScriptRoot '..\SavedCredential\SavedCredentialIpc.h') | Out-Null
-Read-HeaderDefinitions (Join-Path $PSScriptRoot '..\PhoneApproval\EnrollmentStore.h') | Out-Null
+Read-HeaderDefinitions (Join-Path $PSScriptRoot '..\Enrollment\EnrollmentStore.h') | Out-Null
 $versionSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\ProductVersion.h') -Raw -ErrorAction Stop
 $version = [regex]::Matches($versionSource, 'kProductVersion\{(\d+), (\d+), (\d+)\}')
 if ($version.Count -ne 1) { throw 'Could not parse the authoritative product version.' }

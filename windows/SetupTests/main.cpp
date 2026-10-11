@@ -32,13 +32,10 @@ int main() {
     expect(launch({L"app"}).role == Role::tray, "ordinary startup selects only the tray role");
     expect(launch({L"app", L"--saved-password"}).role == Role::savedPassword,
         "password management does not select the tray role");
-    expect(launch({L"app", L"--bluetooth", L"channel", L"pair", L"1", L"sid", L"deadline", L"event", L"pid"}).role == Role::bluetoothEnrollment,
-        "Bluetooth enrollment dispatch leaves identity validation to enrollment");
-    expect(launch({L"app", L"--key-clipboard", L"--replace"}).replace, "manual replacement option remains supported");
-    expect(launch({L"app", L"--clear"}).clear, "manual removal remains explicit");
+    expect(launch({L"app", L"--binding-helper", L"21", L"00"}).role == Role::bindingHelper, "UAC helper dispatch remains separate");
     for (const auto arguments : {
             std::initializer_list<const wchar_t*>{L"app", L"--saved-password", L"--clear"},
-            {L"app", L"--key-hex"}, {L"app", L"--key-clipboard", L"--saved-password"},
+            {L"app", L"--bind"}, {L"app", L"--bind", L"--remove"}, {L"app", L"--key-hex"}, {L"app", L"--key-clipboard", L"--saved-password"},
             {L"app", L"--clear", L"--replace"}, {L"app", L"--bluetooth"}, {L"app", L"--unknown"}}) {
         bool rejected = false;
         try { launch(arguments); } catch (const std::invalid_argument&) { rejected = true; }

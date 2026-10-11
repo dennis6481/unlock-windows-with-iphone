@@ -77,67 +77,9 @@ jobs:
           path: windows/dist/*.exe
           if-no-files-found: error
 
-  ios:
-    name: iOS unsigned IPA
-    runs-on: xcode-27
-    steps:
-      - name: Check out tagged revision
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Archive without signing
-        shell: bash
-        run: |
-          xcodebuild -version
-          xcodebuild archive \
-            -project ios/ios.xcodeproj \
-            -scheme ios \
-            -configuration Release \
-            -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            -archivePath "$RUNNER_TEMP/UnlockPC.xcarchive" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            DEVELOPMENT_TEAM=""
-
-      - name: Package unsigned IPA
-        shell: bash
-        run: |
-          shopt -s nullglob
-          apps=("$RUNNER_TEMP/UnlockPC.xcarchive/Products/Applications/"*.app)
-          if [[ ${#apps[@]} -ne 1 ]]; then
-            echo "Expected one archived iOS app, found ${#apps[@]}." >&2
-            exit 1
-          fi
-          app="${apps[0]}"
-          executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Info.plist")
-          platform=$(/usr/libexec/PlistBuddy -c 'Print :DTPlatformName' "$app/Info.plist")
-          if [[ "$platform" != iphoneos ]]; then
-            echo "Expected an iOS device build, found $platform." >&2
-            exit 1
-          fi
-          lipo -verify_arch arm64 "$app/$executable"
-          if [[ -d "$app/_CodeSignature" || -f "$app/embedded.mobileprovision" ]]; then
-            echo 'Expected an unsigned app without a provisioning profile.' >&2
-            exit 1
-          fi
-          mkdir -p "$RUNNER_TEMP/ipa/Payload" dist
-          ditto "$app" "$RUNNER_TEMP/ipa/Payload/$(basename "$app")"
-          (cd "$RUNNER_TEMP/ipa" && zip -qry "$GITHUB_WORKSPACE/dist/UnlockPC_${GITHUB_REF_NAME}_unsigned.ipa" Payload)
-          unzip -t "dist/UnlockPC_${GITHUB_REF_NAME}_unsigned.ipa"
-
-      - name: Upload unsigned IPA
-        uses: actions/upload-artifact@v7
-        with:
-          name: ios-${{ github.ref_name }}-unsigned
-          path: dist/*.ipa
-          if-no-files-found: error
-
   publish:
     name: Publish GitHub Release
-    needs: [build, ios]
+    needs: [build]
     runs-on: windows-2022
     permissions:
       contents: write
@@ -149,12 +91,6 @@ jobs:
           path: installers
           merge-multiple: true
 
-      - name: Download unsigned IPA
-        uses: actions/download-artifact@v8
-        with:
-          name: ios-${{ github.ref_name }}-unsigned
-          path: installers
-
       - name: Publish release
         shell: pwsh
         env:
@@ -165,20 +101,15 @@ jobs:
           if ($installers.Count -ne 2) {
               throw "Expected two installers, found $($installers.Count)."
           }
-          $ipas = @(Get-ChildItem -LiteralPath installers -Filter '*.ipa' -File -ErrorAction Stop)
-          if ($ipas.Count -ne 1) {
-              throw "Expected one unsigned IPA, found $($ipas.Count)."
-          }
-          $assets = @($installers.FullName) + @($ipas.FullName)
+          $assets = @($installers.FullName)
           @"
-          Windows Release installers for x64 and ARM64, plus an unsigned iOS IPA, built from the same tagged revision.
+          Windows Release installers for x64 and ARM64, built from the same tagged revision. No iPhone app is required.
 
           Commit: $env:GITHUB_SHA
           Build: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID
 
-          The iOS IPA is unsigned and cannot be installed directly. Sign it with your own Apple development credentials and provisioning before installing on a physical iPhone running iOS 26 or later. No signing certificate or provisioning profile is included.
 
-          CI checks Windows package versions and PE architectures, and the iOS device platform, arm64 binary and IPA archive. Tests, signing, installation, BLE and native unlock are not exercised by this workflow; ARM64 physical-device acceptance remains unverified. This is a developer technical preview.
+          CI checks Windows package versions and PE architectures. Tests, installation, BLE and native unlock are not exercised by this workflow. The presence-unlock acceptance matrix remains pending; this is a developer technical preview.
           "@ | Set-Content -LiteralPath release-notes.md -Encoding utf8
           gh release create $env:GITHUB_REF_NAME @assets --verify-tag --draft --title $env:GITHUB_REF_NAME --notes-file release-notes.md
           if ($LASTEXITCODE -ne 0) { throw 'Release creation or asset upload failed.' }

@@ -1,0 +1,42 @@
+<!-- Created by Rui MA on 10 Oct 2026 -->
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>25161154-3719-459A-9E6C-308F63210222</ProjectGuid>
+    <ProjectName>UnlockSystemBleDiagnostic</ProjectName>
+    <RootNamespace>UnlockSystemBleDiagnostic</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64"><Configuration>Debug</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|ARM64"><Configuration>Debug</Configuration><Platform>ARM64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|ARM64"><Configuration>Release</Configuration><Platform>ARM64</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <PlatformToolset>v145</PlatformToolset>
+    <PlatformToolset Condition="'$(VisualStudioVersion)' == '17.0'">v143</PlatformToolset>
+    <UseDebugLibraries Condition="'$(Configuration)' == 'Debug'">true</UseDebugLibraries>
+    <UseDebugLibraries Condition="'$(Configuration)' == 'Release'">false</UseDebugLibraries>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <Import Project="$(MSBuildThisFileDirectory)..\UnlockNative.props" />
+  <PropertyGroup>
+    <TargetName>unlock_system_ble_diagnostic</TargetName>
+    <OutDir>$(UnlockBuildDirectory)\</OutDir>
+    <IntDir>$(UnlockBuildDirectory)\obj\$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <AdditionalDependencies>advapi32.lib;wtsapi32.lib;windowsapp.lib;ole32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="..\SystemBleDiagnostic\main.cpp" />
+    <ClCompile Include="..\Bluetooth\SystemBleSession.cpp" />
+    <ClInclude Include="..\Bluetooth\SystemBleContract.h" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

@@ -7,12 +7,14 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include "../../SavedCredential/SavedCredentialIpc.h"
 
 namespace unlock_windows::desktop_app {
 
 enum class DashboardPage { status, password, diagnostics, about };
 
 struct DashboardSnapshot final {
+    std::optional<saved_credential::BindingSummary> binding;
     std::optional<bool> paired;
     bool busy = false;
     std::wstring status;
@@ -23,11 +25,10 @@ struct DashboardSnapshot final {
 
 class Dashboard final {
 public:
-    using PairingAction = std::function<void(bool remove)>;
     using ReportError = std::function<void(std::wstring)>;
     using RefreshAction = std::function<void()>;
 
-    Dashboard(PairingAction action, RefreshAction refresh, ReportError reportError, ReportError passwordReport);
+    Dashboard(RefreshAction refresh, ReportError reportError, ReportError passwordReport);
     ~Dashboard();
     Dashboard(const Dashboard&) = delete;
     Dashboard& operator=(const Dashboard&) = delete;

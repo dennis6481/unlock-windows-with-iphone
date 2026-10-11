@@ -4,7 +4,8 @@
 #include "SavedCredentialIpc.h"
 #include "SavedCredentialVault.h"
 #include "EnrollmentStore.h"
-#include "PhoneApprovalCore.h"
+#include "../Bluetooth/SystemBleSession.h"
+#include "../Bluetooth/PresenceAuthorization.h"
 #include "../Setup/SetupIdentity.h"
 
 #include <WtsApi32.h>
@@ -16,12 +17,16 @@
 #include <propkey.h>
 
 #include <array>
+#include <algorithm>
+#include <cctype>
+#include <chrono>
 #include <atomic>
 #include <cstring>
 #include <cwchar>
 #include <exception>
 #include <memory>
 #include <mutex>
+#include <condition_variable>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -35,7 +40,7 @@ namespace {
 
 using namespace unlock_windows::saved_credential;
 constexpr ULONGLONG kSnapshotLifetimeMs = 5 * 60 * 1000;
-constexpr ULONGLONG kGrantLifetimeMs = 120 * 1000;
+
 constexpr ACCESS_MASK kClientPipeRights = 0x0012019B;
 
 std::atomic_bool gStopping{false};
@@ -45,6 +50,7 @@ std::atomic<DWORD> gObservedConsoleSession{0xffffffff};
 std::atomic_bool gPipeFailed{false};
 SERVICE_STATUS_HANDLE gStatusHandle = nullptr;
 SERVICE_STATUS gStatus{};
+void wakePipe(const wchar_t* name);
 
 void fail(const char* message) { throw std::runtime_error(message); }
 
@@ -310,51 +316,45 @@ struct Grant final {
     std::array<std::uint8_t, kNonceSize> nonce{};
     ULONGLONG consoleGeneration = 0;
     bool autoSubmitOffered = false;
+    unlock_windows::system_ble::PresenceAuthorization authorization;
 };
 
-struct PhoneChallenge final {
+struct BleTask final {
+    Handle cancelEvent;
     Identity identity;
     DWORD session = 0xffffffff;
     ULONGLONG consoleGeneration = 0;
-    ULONGLONG deadline = 0;
-    std::string requestId;
-    std::string json;
-    PhoneChallengeDeliveryState delivery;
+    ULONGLONG identityGeneration = 0;
+    LUID logonId{};
+    ULONGLONG started = 0;
+    AuthenticationStatus status;
+    BindingChange change;
+    bool binding = false;
+    std::atomic<bool> cancelled{false};
+    std::shared_ptr<unlock_windows::system_ble::Session> connection;
 };
-
-std::int64_t nowMilliseconds() {
-    FILETIME now{};
-    GetSystemTimeAsFileTime(&now);
-    ULARGE_INTEGER ticks{};
-    ticks.LowPart = now.dwLowDateTime;
-    ticks.HighPart = now.dwHighDateTime;
-    constexpr std::uint64_t offset = 116444736000000000ULL;
-    return static_cast<std::int64_t>((ticks.QuadPart - offset) / 10000ULL);
-}
-
 void setText(SensitiveBytes& target, const std::string& value) {
     target.value.assign(value.begin(), value.end());
 }
 
-std::string phoneResult(const char* const status, const bool authenticated = false) {
-    return std::string("{\"authenticated\":") + (authenticated ? "true" : "false") +
-        ",\"status\":\"" + status + "\"}";
-}
-
-enum class Endpoint { credential, phone };
-
 class Handler final {
 public:
-    Handler() : vault_() { reloadEnrollment(); }
+    Handler() : worker_([this] { workerMain(); }) {}
+    ~Handler() {
+        { std::lock_guard lock(mutex_); stopping_ = true; if (task_) task_->cancelled = true; }
+        wake_.notify_all();
+        if (worker_.joinable()) worker_.join();
+    }
 
-    Packet process(const HANDLE pipe, Packet& request, const Endpoint endpoint) {
+    Packet process(const HANDLE pipe, Packet& request) {
         std::lock_guard lock(mutex_);
         Packet response;
         response.operation = request.operation;
         response.result = Result::rejected;
         try {
             const auto client = inspectClient(pipe);
-            if (endpoint == Endpoint::credential && request.operation == Operation::captureProvisioningIdentity) {
+            if (requiresLogonUi(request.operation) && !client.logonUi) return response;
+            if (request.operation == Operation::captureProvisioningIdentity) {
                 const DWORD session = WTSGetActiveConsoleSessionId();
                 if (!client.logonUi || session == 0xffffffff || client.session != session || removing_)
                     return response;
@@ -381,53 +381,106 @@ public:
                 snapshot_.reset();
             }
             gObservedConsoleSession = console.session;
-            expirePhoneRequest(console);
+            expireRequest(console);
             if (client.session != console.session) return response;
             if (removing_ && request.operation != Operation::clearForRemoval) return response;
-            if (endpoint == Endpoint::phone) {
-                if (client.logonUi || client.userSid != console.sid || !console.locked) return response;
-                if (!isPhoneOperation(request.operation)) return response;
-                processPhone(request, console, response);
-                return response;
-            }
-            if (isPhoneOperation(request.operation)) return response;
             if (request.operation == Operation::unlockEligibility) {
                 Identity identity;
                 if (!client.logonUi || !console.locked ||
                     !decodeIdentity(request.payload.value.data(), request.payload.value.size(), identity) ||
-                    identity.sid != console.sid || (!enrolledSid_.empty() && identity.sid != enrolledSid_)) return response;
+                    identity.sid != console.sid) return response;
                 const auto stored = vault_.storedIdentity();
-                if (stored && stored->sid != console.sid) return response;
+                if (stored && !sameIdentity(*stored, identity)) return response;
                 response.result = Result::success;
                 return response;
             }
-            if (request.operation == Operation::beginPhoneAuthentication) {
+            if (request.operation == Operation::bindingStatus) {
+                if (client.logonUi || console.locked || client.userSid != console.sid ||
+                    !request.payload.value.empty() || !verifiedManagementIdentity(console)) return response;
+                if (!encodeBindingSummary(bindingSummary(), response.payload)) fail("binding status encoding failed");
+                response.result = Result::success;
+                return response;
+            }
+            if (request.operation == Operation::beginBinding || request.operation == Operation::saveThreshold ||
+                request.operation == Operation::removeBinding) {
+                if (!client.admin || console.locked || !verifiedManagementIdentity(console)) return response;
+                if (task_) { response.result = Result::busy; return response; }
+                const auto original = bindingSummary();
+                if (request.operation == Operation::removeBinding) {
+                    BindingRemoval removal;
+                    if (!decodeBindingRemoval(request.payload.value.data(), request.payload.value.size(), removal) ||
+                        removal.expected != original) return response;
+                    auto cancellation = openCancellation(removal.cancelEvent);
+                    if (WaitForSingleObject(cancellation.value, 0) != WAIT_TIMEOUT || !verifiedManagementIdentity(console)) return response;
+                    enrollmentStore_.remove();
+                    response.result = Result::success;
+                    return response;
+                }
+                BindingChange change;
+                if (!decodeBindingChange(request.payload.value.data(), request.payload.value.size(), change) ||
+                    change.expected != original || change.candidate.accountSid != provisioning_->identity.sid) return response;
+                const auto stored = vault_.storedIdentity();
+                if (!stored || !sameIdentity(*stored, provisioning_->identity)) return response;
+                if (request.operation == Operation::saveThreshold) {
+                    auto cancellation = openCancellation(change.cancelEvent);
+                    auto candidate = change.candidate;
+                    candidate.threshold = original.record.threshold;
+                    if (original.state != unlock_windows::system_ble::BindingState::bound || candidate != original.record)
+                        return response;
+                    enrollmentStore_.save(change.candidate, [&] {
+                        if (WaitForSingleObject(cancellation.value, 0) != WAIT_TIMEOUT || bindingSummary() != original ||
+                            !verifiedManagementIdentity(console)) fail("Threshold cancelled or binding/account changed before commit");
+                    });
+                    response.result = Result::success;
+                    return response;
+                }
+                queueTask(provisioning_->identity, console, std::move(change), true);
+                if (!encodeAuthenticationStatus(managementStatus_, response.payload)) fail("binding task status encoding failed");
+                response.result = Result::success;
+                return response;
+            }
+            if (request.operation == Operation::bindingTaskStatus) {
+                if (client.logonUi || console.locked || client.userSid != console.sid ||
+                    !request.payload.value.empty() || !verifiedManagementIdentity(console)) return response;
+                if (!encodeAuthenticationStatus(managementStatus_, response.payload)) fail("binding task status encoding failed");
+                response.result = Result::success;
+                return response;
+            }
+            if (request.operation == Operation::serviceDiagnostics) {
+                if (client.logonUi || console.locked || client.userSid != console.sid ||
+                    !request.payload.value.empty() || !verifiedManagementIdentity(console)) return response;
+                if (diagnosticSid_ == console.sid) setText(response.payload, diagnostic_);
+                response.result = Result::success;
+                return response;
+            }
+            if (request.operation == Operation::cancelVerification) {
+                if (!task_ || request.payload.value.size() != task_->status.requestId.size() ||
+                    std::string(request.payload.value.begin(), request.payload.value.end()) != task_->status.requestId ||
+                    (task_->binding ? client.logonUi || client.userSid != task_->identity.sid || console.locked :
+                        !client.logonUi || !console.locked)) return response;
+                rejectTask(AuthenticationFailure::cancelled);
+                response.result = Result::success;
+                return response;
+            }
+            if (request.operation == Operation::beginVerification) {
                 if (!client.logonUi || !console.locked) return response;
                 Identity identity;
                 if (!decodeIdentity(request.payload.value.data(), request.payload.value.size(), identity) ||
-                    identity.sid != console.sid || identity.sid != enrolledSid_ || !enrollmentMatches()) return response;
+                    identity.sid != console.sid) return response;
+                std::wstring targetSid;
+                const auto original = bindingSummary();
+                if (FAILED(unlock::components::readSetupTargetSid(targetSid)) || identity.sid != targetSid ||
+                    original.state != unlock_windows::system_ble::BindingState::bound ||
+                    original.record.accountSid != identity.sid) return response;
                 const auto stored = vault_.storedIdentity();
                 if (!stored || !sameIdentity(*stored, identity)) return response;
-                if (phoneChallenge_ || (grant_ && GetTickCount64() < grant_->expiresAt &&
-                    grant_->consoleGeneration == gConsoleGeneration.load())) {
-                    setText(response.payload, "An iPhone request is already in progress or approved. Wait for it to finish.");
-                    return response;
-                }
-                grant_.reset();
-                const auto generation = gConsoleGeneration.load();
-                const auto issued = phoneCore_.issueChallenge(nowMilliseconds());
-                if (generation != gConsoleGeneration.load()) return response;
-                authenticationIdentity_ = identity;
-                phoneChallenge_ = PhoneChallenge{identity, console.session, generation,
-                    GetTickCount64() + kPhoneAuthenticationLifetimeMs, phoneCore_.requestIdString(issued.challenge), issued.json, {}};
-                authenticationStatus_ = {phoneChallenge_->requestId, AuthenticationStage::waitingPhone,
-                    AuthenticationFailure::none, phoneChallenge_->deadline};
-                logAuthentication();
+                if (task_) { response.result = Result::busy; setText(response.payload, "Bluetooth verification is still finishing. Try again."); return response; }
+                queueTask(identity, console, {original, original.record}, false);
                 if (!encodeAuthenticationStatus(authenticationStatus_, response.payload)) fail("authentication status encoding failed");
                 response.result = Result::success;
                 return response;
             }
-            if (request.operation == Operation::phoneAuthenticationStatus) {
+            if (request.operation == Operation::verificationStatus) {
                 if (!client.logonUi || !console.locked) return response;
                 Identity identity;
                 if (!decodeIdentity(request.payload.value.data(), request.payload.value.size(), identity) ||
@@ -502,25 +555,20 @@ public:
                     request.payload.value.data() + kNonceSize + sizeof(passwordBytes),
                     passwordBytes, request.operation == Operation::updateCredential);
                 grant_.reset();
-                phoneChallenge_.reset();
+                rejectTask(AuthenticationFailure::bindingChanged);
             } else if (request.operation == Operation::clearCredential) {
                 if (!client.admin || console.locked || !request.payload.value.empty()) return response;
                 vault_.clear();
                 grant_.reset();
-                phoneChallenge_.reset();
+                rejectTask(AuthenticationFailure::bindingChanged);
             } else if (request.operation == Operation::clearForRemoval) {
                 if (!client.admin || console.locked || !request.payload.value.empty()) return response;
                 vault_.clear();
                 grant_.reset();
                 snapshot_.reset();
                 provisioning_.reset();
-                phoneChallenge_.reset();
+                rejectTask(AuthenticationFailure::bindingChanged);
                 removing_ = true;
-            } else if (request.operation == Operation::reloadPhoneEnrollment) {
-                if (!client.admin || console.locked || !request.payload.value.empty()) return response;
-                reloadEnrollment();
-                grant_.reset();
-                phoneChallenge_.reset();
             } else if (request.operation == Operation::takeAutoSubmitOffer) {
                 if (!client.logonUi || !console.locked) return response;
                 Identity identity;
@@ -529,7 +577,7 @@ public:
                 if (grant_ && !grant_->autoSubmitOffered &&
                     grant_->session == console.session && GetTickCount64() < grant_->expiresAt &&
                     grant_->consoleGeneration == gConsoleGeneration.load() &&
-                    sameIdentity(identity, grant_->identity) && enrollmentMatches()) {
+                    sameIdentity(identity, grant_->identity) && bindingMatches()) {
                     grant_->autoSubmitOffered = true;
                     if (!encodeAutoSubmitOffer({grant_->nonce, grant_->expiresAt}, response.payload)) {
                         fail("automatic submission offer encoding failed");
@@ -552,28 +600,51 @@ public:
                     currentPipePid != client.pid ||
                     WaitForSingleObject(client.process.value, 0) != WAIT_TIMEOUT ||
                     grant_->consoleGeneration != gConsoleGeneration.load() ||
-                    !enrollmentMatches()) return response;
+                    !bindingMatches()) return response;
+                const auto latest = currentConsole();
+                const bool contextMatches = sameIdentity(consoleIdentity(latest), identity) && latest.locked &&
+                    latest.session == console.session && latest.sid == console.sid &&
+                    latest.logonId.LowPart == task_->logonId.LowPart && latest.logonId.HighPart == task_->logonId.HighPart &&
+                    grant_->consoleGeneration == gConsoleGeneration.load() && !task_->cancelled &&
+                    task_->change.expected == bindingSummary();
+                if (!grant_->authorization.consume(contextMatches, task_->connection->evidence(), task_->started,
+                    GetTickCount64(), task_->status.deadline, task_->change.candidate.threshold)) {
+                    rejectTask(AuthenticationFailure::evidenceExpired);
+                    return response;
+                }
                 grant_.reset();
                 if (!authenticationStatus_.requestId.empty()) {
                     authenticationStatus_.stage = AuthenticationStage::consumed;
                     authenticationStatus_.failure = AuthenticationFailure::none;
                     logAuthentication();
                 }
+                if (task_) task_->cancelled = true;
                 response.payload = vault_.release(identity);
             } else {
                 response.result = Result::invalidRequest;
                 return response;
             }
             response.result = Result::success;
-        } catch (const std::exception& error) {
-            OutputDebugStringA(error.what());
+        } catch (...) {
+            const auto message = winrt::to_message();
+            OutputDebugStringW(message.c_str());
             response.result = Result::internalError;
             response.payload.clear();
+            if (request.operation == Operation::beginBinding || request.operation == Operation::saveThreshold ||
+                request.operation == Operation::removeBinding || request.operation == Operation::bindingStatus ||
+                request.operation == Operation::bindingTaskStatus) setText(response.payload, winrt::to_string(message));
         }
         return response;
     }
 
 private:
+    Handle openCancellation(const std::wstring& name) {
+        if (!name.starts_with(kBindingCancelPrefix)) fail("Binding cancellation event required");
+        Handle event(OpenEventW(SYNCHRONIZE, FALSE, name.c_str()));
+        if (!event.value || WaitForSingleObject(event.value, 0) != WAIT_TIMEOUT)
+            fail("Binding cancelled or cancellation event inaccessible");
+        return event;
+    }
     void logAuthentication() const {
         const auto now = GetTickCount64();
         const auto remaining = authenticationStatus_.deadline > now ? authenticationStatus_.deadline - now : 0;
@@ -584,131 +655,199 @@ private:
         OutputDebugStringW(text.c_str());
     }
 
-    void rejectAuthentication(AuthenticationFailure reason) {
-        authenticationStatus_.stage = AuthenticationStage::failed;
-        authenticationStatus_.failure = reason;
-        logAuthentication();
-        phoneChallenge_.reset();
-    }
-    void reloadEnrollment() {
-        phoneCore_.clearEnrolledPublicKey();
-        enrolledSid_.clear();
-        enrolledKey_.clear();
-        const auto record = enrollmentStore_.load();
-        if (!record) return;
-        phoneCore_.setEnrolledPublicKey(record->publicKey);
-        enrolledKey_ = record->publicKey;
-        enrolledSid_ = record->accountSid;
-        std::string sidAscii;
-        sidAscii.reserve(enrolledSid_.size());
-        for (const wchar_t character : enrolledSid_) {
-            if (character < L'!' || character > L'~') fail("enrollment SID is not ASCII");
-            sidAscii.push_back(static_cast<char>(character));
+    BindingSummary bindingSummary() const {
+        BindingSummary summary;
+        try {
+            auto record = enrollmentStore_.load();
+            if (record) { summary.state = unlock_windows::system_ble::BindingState::bound; summary.record = std::move(*record); }
+        } catch (const unlock_windows::system_ble::RebindRequired&) {
+            summary.state = unlock_windows::system_ble::BindingState::rebindRequired;
         }
-        phoneCore_.setEnrolledAccountSid(std::move(sidAscii));
+        return summary;
     }
 
-    bool enrollmentMatches() const {
-        const auto current = enrollmentStore_.load();
-        return current && !enrolledSid_.empty() && current->accountSid == enrolledSid_ &&
-            current->publicKey == enrolledKey_;
+    bool bindingMatches() const {
+        return task_ && !task_->binding && task_->change.expected == bindingSummary() && task_->connection &&
+            task_->connection->evidence().failure == AuthenticationFailure::none && !task_->cancelled;
     }
 
-    void processPhone(Packet& request, const Console& console, Packet& response) {
-        const ULONGLONG generation = gConsoleGeneration.load();
-        if (request.operation == Operation::takePhoneChallenge || request.operation == Operation::peekPhoneAuthentication) {
-            if (!request.payload.value.empty()) return;
-            const bool deliver = phoneChallenge_ && phoneChallenge_->delivery.beginDelivery(request.operation);
-            if (request.operation == Operation::peekPhoneAuthentication) {
-                if (!encodeAuthenticationStatus(authenticationStatus_, response.payload)) fail("phone status encoding failed");
-            } else if (deliver) {
-                authenticationStatus_.stage = AuthenticationStage::awaitingAssertion;
-                logAuthentication();
-                if (!encodePhoneChallenge({authenticationStatus_, phoneChallenge_->json}, response.payload)) fail("phone challenge encoding failed");
-            } else {
-                if (!encodePhoneChallenge({authenticationStatus_, {}}, response.payload)) fail("phone status encoding failed");
+    void appendDiagnostic(const std::string& message) {
+        const auto line = "tickMs=" + std::to_string(GetTickCount64()) + " " + message + "\n";
+        if (line.size() > kMaxPacket) fail("Service diagnostic entry exceeds IPC limit");
+        if (diagnostic_.size() + line.size() > kMaxPacket) {
+            diagnostic_.erase(0, diagnostic_.find('\n', diagnostic_.size() + line.size() - kMaxPacket - 1) + 1);
+        }
+        diagnostic_ += line;
+        OutputDebugStringA(line.c_str());
+    }
+
+    void rejectTask(AuthenticationFailure reason, const std::string& detail = {}) {
+        grant_.reset();
+        if (!task_) return;
+        task_->cancelled = true;
+        auto& status = task_->binding ? managementStatus_ : authenticationStatus_;
+        if (status.stage == AuthenticationStage::consumed || status.stage == AuthenticationStage::completed) return;
+        status.stage = AuthenticationStage::failed;
+        status.failure = reason;
+        diagnosticSid_ = task_->identity.sid;
+        appendDiagnostic(std::string(task_->binding ? "binding" : "authentication") + " request=" + status.requestId +
+            " failure=" + std::to_string(static_cast<unsigned>(reason)) + ": " +
+            (detail.empty() ? winrt::to_string(authenticationStatusText(status)) : detail));
+        if (!task_->binding) logAuthentication();
+    }
+
+    void expireRequest(const Console& console) {
+        if (!task_ || task_->cancelled) return;
+        if (task_->cancelEvent.value && WaitForSingleObject(task_->cancelEvent.value, 0) != WAIT_TIMEOUT) {
+            rejectTask(AuthenticationFailure::cancelled);
+            return;
+        }
+        auto reason = authenticationExpiry(GetTickCount64(), task_->status.deadline,
+            console.session == task_->session && console.sid == task_->identity.sid &&
+            console.logonId.LowPart == task_->logonId.LowPart && console.logonId.HighPart == task_->logonId.HighPart &&
+            gConsoleGeneration.load() == task_->consoleGeneration && gIdentityGeneration.load() == task_->identityGeneration,
+            task_->binding ? !console.locked : console.locked);
+        if (reason == AuthenticationFailure::none && task_->change.expected != bindingSummary())
+            reason = AuthenticationFailure::bindingChanged;
+        if (reason == AuthenticationFailure::none && grant_ && task_->connection)
+            reason = task_->connection->evidence().failure;
+        if (reason != AuthenticationFailure::none) rejectTask(reason);
+    }
+
+    void queueTask(const Identity& identity, const Console& console, BindingChange change, bool binding) {
+        auto task = std::make_shared<BleTask>();
+        if (binding) {
+            task->cancelEvent = openCancellation(change.cancelEvent);
+        }
+        task->identity = identity;
+        task->session = console.session;
+        task->consoleGeneration = gConsoleGeneration.load();
+        task->identityGeneration = gIdentityGeneration.load();
+        task->logonId = console.logonId;
+        task->started = GetTickCount64();
+        GUID id{};
+        winrt::check_hresult(CoCreateGuid(&id));
+        auto text = winrt::to_string(winrt::to_hstring(winrt::guid{id}));
+        if (text.size() == 38) text = text.substr(1, 36);
+        std::transform(text.begin(), text.end(), text.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+        task->status = {text, AuthenticationStage::verifying, AuthenticationFailure::none,
+            task->started + unlock_windows::system_ble::kOperationLifetimeMs};
+        task->change = std::move(change);
+        task->binding = binding;
+        diagnosticSid_ = identity.sid;
+        diagnostic_.clear();
+        appendDiagnostic(std::string(binding ? "binding" : "authentication") + " request=" + task->status.requestId +
+            " BEGIN deadlineMs=" + std::to_string(task->status.deadline));
+        if (binding) managementStatus_ = task->status;
+        else { authenticationIdentity_ = identity; authenticationStatus_ = task->status; }
+        task_ = std::move(task);
+        grant_.reset();
+        wake_.notify_one();
+    }
+
+    void workerMain() noexcept {
+        try {
+            winrt::init_apartment(winrt::apartment_type::multi_threaded);
+            struct Apartment final { ~Apartment() { winrt::uninit_apartment(); } } apartment;
+            for (;;) {
+                std::shared_ptr<BleTask> task;
+                {
+                    std::unique_lock lock(mutex_);
+                    wake_.wait(lock, [&] { return stopping_ || task_; });
+                    if (stopping_ && !task_) return;
+                    task = task_;
+                }
+                std::shared_ptr<unlock_windows::system_ble::Session> connection;
+                try {
+                    connection = std::make_shared<unlock_windows::system_ble::Session>(task->change.candidate, task->started, [task] {
+                        return !task->cancelled && !gStopping &&
+                            (!task->cancelEvent.value || WaitForSingleObject(task->cancelEvent.value, 0) == WAIT_TIMEOUT) &&
+                            task->consoleGeneration == gConsoleGeneration.load() &&
+                            task->identityGeneration == gIdentityGeneration.load();
+                    }, [this, task](const std::string& message) {
+                        std::lock_guard lock(mutex_);
+                        if (task_ == task)
+                            appendDiagnostic(std::string(task->binding ? "binding" : "authentication") +
+                                " request=" + task->status.requestId + " " + message);
+                    });
+                    connection->verify();
+                    {
+                        std::lock_guard lock(mutex_);
+                        const auto console = currentConsole();
+                        expireRequest(console);
+                        if (task->cancelled) throw unlock_windows::system_ble::VerificationError(AuthenticationFailure::cancelled, "Task invalidated");
+                        const auto stored = vault_.storedIdentity();
+                        if (!stored || !sameIdentity(*stored, task->identity) || !sameIdentity(consoleIdentity(console), task->identity))
+                            throw unlock_windows::system_ble::VerificationError(AuthenticationFailure::sessionChanged, "Full account identity changed");
+                        task->connection = connection;
+                        if (task->binding) {
+                            enrollmentStore_.save(task->change.candidate, [&] {
+                                const auto latest = currentConsole();
+                                expireRequest(latest);
+                                if (task->cancelled || connection->evidence().failure != AuthenticationFailure::none ||
+                                    !verifiedManagementIdentity(latest) || !sameIdentity(provisioning_->identity, task->identity))
+                                    fail("Binding invalidated before atomic commit");
+                            });
+                            managementStatus_.stage = AuthenticationStage::completed;
+                            appendDiagnostic("binding request=" + task->status.requestId + " COMPLETED binding saved");
+                            task->cancelled = true;
+                        } else {
+                            const auto proof = connection->evidence();
+                            if (proof.failure != AuthenticationFailure::none)
+                                throw unlock_windows::system_ble::VerificationError(proof.failure, "Evidence expired before approval");
+                            std::array<std::uint8_t, kNonceSize> nonce{};
+                            if (BCryptGenRandom(nullptr, nonce.data(), kNonceSize, BCRYPT_USE_SYSTEM_PREFERRED_RNG) < 0)
+                                fail("BLE grant nonce RNG failed");
+                            const auto expires = (std::min)(task->status.deadline, proof.communicationAt + unlock_windows::system_ble::kEvidenceLifetimeMs);
+                            grant_ = Grant{task->identity, task->session, expires, nonce, task->consoleGeneration};
+                            authenticationStatus_.stage = AuthenticationStage::approved;
+                            logAuthentication();
+                        }
+                    }
+                    while (!task->cancelled && !gStopping) {
+                        connection->refresh();
+                        {
+                            std::lock_guard lock(mutex_);
+                            expireRequest(currentConsole());
+                            if (!task->cancelled && connection->evidence().failure != AuthenticationFailure::none)
+                                rejectTask(connection->evidence().failure);
+                        }
+                        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                    }
+                } catch (const unlock_windows::system_ble::VerificationError& error) {
+                    OutputDebugStringA(error.what());
+                    std::lock_guard lock(mutex_);
+                    if (!task->cancelled) rejectTask(error.reason, error.what());
+                } catch (...) {
+                    const auto error = winrt::to_message();
+                    OutputDebugStringW(error.c_str());
+                    std::lock_guard lock(mutex_);
+                    if (!task->cancelled) rejectTask(task->binding ? AuthenticationFailure::storageFailed : AuthenticationFailure::internalError, winrt::to_string(error));
+                }
+                if (connection) {
+                    try { connection->close(); }
+                    catch (...) {
+                        OutputDebugStringW(winrt::to_message().c_str());
+                        std::lock_guard lock(mutex_);
+                        if ((!task->binding || managementStatus_.stage != AuthenticationStage::completed) &&
+                            (task->binding ? managementStatus_ : authenticationStatus_).stage != AuthenticationStage::failed)
+                            rejectTask(AuthenticationFailure::protectedOperationFailed, winrt::to_string(winrt::to_message()));
+                    }
+                }
+                {
+                    std::lock_guard lock(mutex_);
+                    task->connection.reset();
+                    task_.reset();
+                    if (stopping_) return;
+                }
             }
-            response.result = Result::success;
-            return;
-        }
-        if (request.operation == Operation::reportPhoneFailure) {
-            if (!phoneChallenge_ || !phoneChallenge_->delivery.delivered() || request.payload.value.size() != 37 ||
-                std::memcmp(request.payload.value.data(), phoneChallenge_->requestId.data(), 36) != 0) return;
-            const auto reason = request.payload.value[36];
-            if (reason < 1 || reason > 6) return;
-            rejectAuthentication(static_cast<AuthenticationFailure>(reason));
-            setText(response.payload, phoneResult("phone_rejected"));
-            response.result = Result::success;
-            return;
-        }
-        if (request.payload.value.empty() || request.payload.value.size() > 4096 ||
-            !phoneChallenge_ || !phoneChallenge_->delivery.delivered() || phoneChallenge_->session != console.session ||
-            phoneChallenge_->consoleGeneration != generation ||
-            phoneChallenge_->identity.sid != enrolledSid_ || !enrollmentMatches() ||
-            phoneChallenge_->identity.sid != console.sid) return;
-        const auto stored = vault_.storedIdentity();
-        if (!stored || !sameIdentity(*stored, phoneChallenge_->identity)) return;
-        const std::string assertion(request.payload.value.begin(), request.payload.value.end());
-        const auto result = phoneCore_.verifyAssertion(assertion, nowMilliseconds());
-        if (!result.unlockApproved()) {
-            if (result.code == unlock_windows::phone_approval::AssertionCode::request_mismatch) {
-                setText(response.payload, phoneResult("request_mismatch"));
-                response.result = Result::success;
-                return;
-            }
-            rejectAuthentication(AuthenticationFailure::invalidAssertion);
-            setText(response.payload, phoneResult(unlock_windows::phone_approval::assertionCodeName(result.code)));
-            response.result = Result::success;
-            return;
-        }
-        if (GetTickCount64() >= phoneChallenge_->deadline || generation != gConsoleGeneration.load()) {
-            const auto reason = authenticationExpiry(GetTickCount64(), phoneChallenge_->deadline,
-                generation == gConsoleGeneration.load(), console.locked);
-            rejectAuthentication(reason);
-            setText(response.payload, phoneResult(reason == AuthenticationFailure::sessionChanged ? "session_changed" : "challenge_expired"));
-            response.result = Result::success;
-            return;
-        }
-        const auto approved = phoneCore_.consumeUnlockApproval(nowMilliseconds());
-        if (!approved || std::wstring(approved->accountSid.begin(), approved->accountSid.end()) !=
-                phoneChallenge_->identity.sid || generation != gConsoleGeneration.load()) {
-            rejectAuthentication(generation != gConsoleGeneration.load()
-                ? AuthenticationFailure::sessionChanged : AuthenticationFailure::invalidAssertion);
-            return;
-        }
-        std::array<std::uint8_t, kNonceSize> nonce{};
-        if (BCryptGenRandom(nullptr, nonce.data(), kNonceSize,
-                BCRYPT_USE_SYSTEM_PREFERRED_RNG) < 0) {
-            fail("phone grant nonce RNG failed");
-        }
-        grant_ = Grant{*stored, console.session, GetTickCount64() + kGrantLifetimeMs,
-            nonce, generation};
-        authenticationStatus_.stage = AuthenticationStage::approved;
-        authenticationStatus_.deadline = grant_->expiresAt;
-        logAuthentication();
-        phoneChallenge_.reset();
-        setText(response.payload, phoneResult("unlock_approved", true));
-        response.result = Result::success;
-    }
-
-    void expirePhoneRequest(const Console& console) {
-        if (phoneChallenge_) {
-            const auto reason = authenticationExpiry(GetTickCount64(), phoneChallenge_->deadline,
-                console.session == phoneChallenge_->session && console.sid == phoneChallenge_->identity.sid &&
-                gConsoleGeneration.load() == phoneChallenge_->consoleGeneration, console.locked);
-            if (reason != AuthenticationFailure::none) rejectAuthentication(reason);
-        }
-        if (grant_) {
-            const auto reason = authenticationExpiry(GetTickCount64(), grant_->expiresAt,
-                console.session == grant_->session && console.sid == grant_->identity.sid &&
-                gConsoleGeneration.load() == grant_->consoleGeneration, console.locked);
-            if (reason != AuthenticationFailure::none) {
-                rejectAuthentication(reason);
-                grant_.reset();
-            }
+        } catch (...) {
+            OutputDebugStringW(winrt::to_message().c_str());
+            gPipeFailed = true;
+            gStopping = true;
+            wakePipe(kPipeName);
         }
     }
-
     bool verifiedManagementIdentity(const Console& console) {
         std::wstring targetSid;
         if (console.locked || FAILED(unlock::components::readSetupTargetSid(targetSid)) || targetSid != console.sid)
@@ -746,25 +885,28 @@ private:
     }
 
     Vault vault_;
-    unlock_windows::phone_approval::EnrollmentStore enrollmentStore_;
-    unlock_windows::phone_approval::PhoneApprovalCore phoneCore_;
-    std::wstring enrolledSid_;
-    std::vector<std::uint8_t> enrolledKey_;
+    unlock_windows::system_ble::EnrollmentStore enrollmentStore_;
     std::optional<Snapshot> snapshot_;
     std::optional<ProvisioningIdentity> provisioning_;
     std::optional<Grant> grant_;
-    std::optional<PhoneChallenge> phoneChallenge_;
+    std::shared_ptr<BleTask> task_;
+    AuthenticationStatus managementStatus_;
+    std::string diagnostic_;
+    std::wstring diagnosticSid_;
     std::optional<Identity> authenticationIdentity_;
     AuthenticationStatus authenticationStatus_;
     std::mutex mutex_;
     bool removing_ = false;
+    bool stopping_ = false;
+    std::condition_variable wake_;
+    std::thread worker_;
 };
 
 void reportServiceState(const DWORD state, const DWORD error = NO_ERROR) {
     gStatus.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
     gStatus.dwCurrentState = state;
     gStatus.dwControlsAccepted = state == SERVICE_RUNNING
-        ? SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SESSIONCHANGE : 0;
+        ? SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SESSIONCHANGE | SERVICE_ACCEPT_POWEREVENT : 0;
     gStatus.dwWin32ExitCode = error;
     gStatus.dwWaitHint = state == SERVICE_STOP_PENDING ? 5000 : 0;
     SetServiceStatus(gStatusHandle, &gStatus);
@@ -781,13 +923,15 @@ DWORD WINAPI serviceControl(const DWORD control, const DWORD eventType, void* ev
         gStopping = true;
         reportServiceState(SERVICE_STOP_PENDING);
         wakePipe(kPipeName);
-        wakePipe(kPhonePipeName);
+
         return NO_ERROR;
     }
+    if (control == SERVICE_CONTROL_POWEREVENT) { ++gConsoleGeneration; return NO_ERROR; }
     if (control == SERVICE_CONTROL_SESSIONCHANGE) {
         const auto* notification = static_cast<const WTSSESSION_NOTIFICATION*>(eventData);
         if (notification != nullptr && isObservedConsoleEvent(notification->dwSessionId, gObservedConsoleSession.load()) &&
-            (eventType == WTS_SESSION_UNLOCK || eventType == WTS_SESSION_LOGOFF ||
+            (eventType == WTS_SESSION_LOCK || eventType == WTS_SESSION_UNLOCK || eventType == WTS_SESSION_LOGOFF ||
+            eventType == WTS_CONSOLE_CONNECT ||
             eventType == WTS_CONSOLE_DISCONNECT || eventType == WTS_REMOTE_DISCONNECT)) {
             ++gConsoleGeneration;
             if (eventType != WTS_SESSION_UNLOCK) ++gIdentityGeneration;
@@ -797,20 +941,20 @@ DWORD WINAPI serviceControl(const DWORD control, const DWORD eventType, void* ev
     return ERROR_CALL_NOT_IMPLEMENTED;
 }
 
-void servePipe(const HANDLE pipe, Handler& handler, const Endpoint endpoint) {
+void servePipe(const HANDLE pipe, Handler& handler) {
     while (!gStopping) {
         const bool connected = ConnectNamedPipe(pipe, nullptr) ||
             GetLastError() == ERROR_PIPE_CONNECTED;
         if (!connected) {
             if (!gStopping) gPipeFailed = true;
             gStopping = true;
-            wakePipe(endpoint == Endpoint::phone ? kPipeName : kPhonePipeName);
+
             return;
         }
         if (!gStopping) {
             Packet request;
             if (readPacket(pipe, request) && request.result == Result::success) {
-                auto response = handler.process(pipe, request, endpoint);
+                auto response = handler.process(pipe, request);
                 if (!writePacket(pipe, response)) {
                     OutputDebugStringW(L"saved credential response write failed");
                 } else if (!awaitReplyAcknowledgment(pipe, request.operation, 2000)) {
@@ -846,38 +990,13 @@ void WINAPI serviceMain(DWORD, LPWSTR*) {
         LocalFree(descriptor);
         Handle pipe(rawPipe);
         if (pipe.value == INVALID_HANDLE_VALUE) fail("saved credential pipe creation failed");
-        descriptor = nullptr;
-        if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
-                L"D:P(A;;GA;;;SY)(A;;0x0012019B;;;AU)", SDDL_REVISION_1,
-                &descriptor, nullptr)) fail("phone approval pipe ACL creation failed");
-        attributes.lpSecurityDescriptor = descriptor;
-        const HANDLE rawPhonePipe = CreateNamedPipeW(kPhonePipeName,
-            PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
-            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
-            1, kMaxPacket + 16, kMaxPacket + 16, 0, &attributes);
-        LocalFree(descriptor);
-        Handle phonePipe(rawPhonePipe);
-        if (phonePipe.value == INVALID_HANDLE_VALUE) fail("phone approval pipe creation failed");
         reportServiceState(SERVICE_RUNNING);
-        std::thread phoneThread([&]() {
-            try {
-                winrt::init_apartment(winrt::apartment_type::multi_threaded);
-                servePipe(phonePipe.value, handler, Endpoint::phone);
-                winrt::uninit_apartment();
-            } catch (...) {
-                gPipeFailed = true;
-                gStopping = true;
-                wakePipe(kPipeName);
-            }
-        });
-        servePipe(pipe.value, handler, Endpoint::credential);
+        servePipe(pipe.value, handler);
         gStopping = true;
-        wakePipe(kPhonePipeName);
-        phoneThread.join();
         reportServiceState(SERVICE_STOPPED,
             gPipeFailed.load() ? ERROR_SERVICE_SPECIFIC_ERROR : NO_ERROR);
-    } catch (const std::exception& error) {
-        OutputDebugStringA(error.what());
+    } catch (...) {
+        OutputDebugStringW(winrt::to_message().c_str());
         reportServiceState(SERVICE_STOPPED, ERROR_SERVICE_SPECIFIC_ERROR);
     }
 }

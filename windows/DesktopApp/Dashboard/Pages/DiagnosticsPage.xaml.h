@@ -12,6 +12,7 @@ struct DiagnosticsPage : DiagnosticsPageT<DiagnosticsPage> {
     DiagnosticsPage() = default;
     void OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEventArgs const& args);
     void Update(std::wstring const& diagnostics);
+    void Stop();
 
 private:
     Microsoft::UI::Xaml::Controls::TextBox diagnostics_{nullptr};

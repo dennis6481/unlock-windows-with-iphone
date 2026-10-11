@@ -36,7 +36,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <AdditionalDependencies>advapi32.lib;bcrypt.lib;comctl32.lib;gdi32.lib;ole32.lib;oleaut32.lib;secur32.lib;shell32.lib;taskschd.lib;uuid.lib;wtsapi32.lib;user32.lib;version.lib;$(UnlockLibraryDirectory)\unlock_saved_credential_ipc.lib;$(UnlockLibraryDirectory)\unlock_protocol_crypto.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>advapi32.lib;bcrypt.lib;comctl32.lib;gdi32.lib;ole32.lib;oleaut32.lib;secur32.lib;shell32.lib;taskschd.lib;uuid.lib;wtsapi32.lib;user32.lib;version.lib;windowsapp.lib;$(UnlockLibraryDirectory)\unlock_saved_credential_ipc.lib;$(UnlockLibraryDirectory)\unlock_protocol_crypto.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/MANIFEST:NO %(AdditionalOptions)</AdditionalOptions>
     </Link>
   </ItemDefinitionGroup>

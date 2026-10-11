@@ -14,30 +14,6 @@
 
 namespace unlock_windows::enrollment {
 
-inline constexpr ULONGLONG kPairingLifetime = 120000;
-inline constexpr wchar_t kCancelPrefix[] = L"Local\\UnlockWindowsWithIPhone-Pairing-";
-
-enum class ExitCode : DWORD {
-    saved = 0,
-    error = 1,
-    cancelled = 3,
-    expired = 4,
-    invalidated = 5,
-    rejected = 6,
-    alreadyRegistered = 7,
-    savedReloadFailed = 8,
-    busy = 9,
-};
-
-enum class CandidateAction { first, alreadyRegistered, replace };
-
-inline CandidateAction classifyCandidate(const std::optional<phone_approval::EnrollmentRecord>& existing,
-    const std::vector<std::uint8_t>& publicKey, const std::wstring& sid) {
-    if (!existing) return CandidateAction::first;
-    return existing->accountSid == sid && existing->publicKey == publicKey
-        ? CandidateAction::alreadyRegistered : CandidateAction::replace;
-}
-
 struct Handle final {
     HANDLE value = nullptr;
     Handle() = default;
@@ -135,16 +111,6 @@ inline Console queryConsole() {
     result.locked = level.SessionFlags == WTS_SESSIONSTATE_LOCK;
     if (WTSGetActiveConsoleSessionId() != result.session)
         throw std::runtime_error("Physical console changed during query");
-    return result;
-}
-
-inline std::wstring groupedFingerprint(const std::string& fingerprint) {
-    std::wstring result;
-    for (std::size_t index = 0; index < fingerprint.size(); ++index) {
-        if (index != 0 && index % 32 == 0) result += L"\r\n";
-        else if (index != 0 && index % 8 == 0) result += L' ';
-        result += static_cast<wchar_t>(fingerprint[index]);
-    }
     return result;
 }
 

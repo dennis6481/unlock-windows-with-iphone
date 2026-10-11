@@ -5,7 +5,7 @@
 
 #include "WindowsAdapter.h"
 #include "../Resources/resource.h"
-#include "../PhoneApproval/EnrollmentStore.h"
+#include "../Enrollment/EnrollmentStore.h"
 #include <Windows.h>
 #include <shlobj.h>
 #include <sddl.h>
@@ -288,7 +288,7 @@ inline bool fileExists(const std::filesystem::path& path) {
     return setupKnownFolder(FOLDERID_CommonPrograms) / (std::wstring(UNLOCK_PRODUCT_DISPLAY_NAME) + L".lnk");
 }
 [[nodiscard]] inline std::filesystem::path productDataDirectory() {
-    return setupKnownFolder(FOLDERID_ProgramData) / unlock_windows::phone_approval::kEnrollmentDataDirectoryName;
+    return setupKnownFolder(FOLDERID_ProgramData) / unlock_windows::system_ble::kEnrollmentDataDirectoryName;
 }
 [[nodiscard]] inline std::filesystem::path transactionRoot() {
     return productDataDirectory() / kSetupDirectoryName / kTransactionsDirectoryName;

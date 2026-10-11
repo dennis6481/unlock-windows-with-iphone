@@ -72,7 +72,7 @@
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <ProgramDataBaseFileName>$(IntDir)$(ProjectName).pdb</ProgramDataBaseFileName>
       <AdditionalOptions>/utf-8 /bigobj %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>$(GeneratedFilesDir)Dashboard\Pages;..;..\DesktopApp\Dashboard\Pages;..\Protocol;..\PhoneApproval;..\SavedCredential;..\GattHost;Dashboard\Pages;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(GeneratedFilesDir)Dashboard\Pages;..;..\DesktopApp\Dashboard\Pages;..\Protocol;..\Enrollment;..\SavedCredential;Dashboard\Pages;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>UNICODE;_UNICODE;WIN32_LEAN_AND_MEAN;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <ResourceCompile>
@@ -80,7 +80,7 @@
     </ResourceCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <AdditionalDependencies>$(UnlockLibraryDirectory)\unlock_desktop_native.lib;$(UnlockLibraryDirectory)\unlock_saved_credential_ipc.lib;$(UnlockLibraryDirectory)\unlock_enrollment_store.lib;$(UnlockLibraryDirectory)\unlock_protocol_crypto.lib;windowsapp.lib;user32.lib;shell32.lib;wtsapi32.lib;ole32.lib;advapi32.lib;comctl32.lib;gdi32.lib;bcrypt.lib;crypt32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>$(UnlockLibraryDirectory)\unlock_desktop_native.lib;$(UnlockLibraryDirectory)\unlock_saved_credential_ipc.lib;$(UnlockLibraryDirectory)\unlock_enrollment_store.lib;windowsapp.lib;user32.lib;shell32.lib;wtsapi32.lib;ole32.lib;advapi32.lib;comctl32.lib;gdi32.lib;bcrypt.lib;crypt32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)'=='Debug'">
@@ -100,9 +100,12 @@
     <ClCompile Include="./DesktopHost.cpp" />
     <ClCompile Include="./DesktopNotifications.cpp" />
     <ClCompile Include="..\Enrollment/Enrollment.cpp" />
+    <ClCompile Include="..\Bluetooth\SystemBleSession.cpp" />
     <ClCompile Include="..\SavedCredential/CredentialManagement.cpp" />
     <ClInclude Include="./DesktopApplication.h" />
+    <ClInclude Include="..\Enrollment\BindingView.h" />
     <ClCompile Include="./Dashboard/Dashboard.cpp" />
+    <ClInclude Include="..\Bluetooth\SystemBleContract.h" />
     <ClCompile Include="Dashboard\Pages/StatusPage.xaml.cpp" />
     <ClCompile Include="Dashboard\Pages/PasswordPage.xaml.cpp" />
     <ClCompile Include="Dashboard\Pages/DiagnosticsPage.xaml.cpp" />

@@ -16,8 +16,6 @@ enum class TrayCommand {
     password,
     about,
     continueSetup,
-    pairPhone,
-    removePhone,
     quit,
 };
 

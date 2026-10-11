@@ -8,7 +8,7 @@ The Windows side contains four installed components: the desktop app, LocalSyste
 
 - **Windows:** Windows 10 version 1809, build 17763, or later, including Windows 11. The minimum is based on API requirements and has not been tested on that build.
 - **Architecture:** Native x64 or ARM64; all components must match the OS architecture. ARM64 has not been tested on physical hardware. 32-bit x86 and ARM32 are not supported.
-- **Bluetooth:** The adapter and driver must support BLE GATT server / peripheral advertising.
+- **Bluetooth:** The adapter and driver must support BLE Central, protected GATT and advertisement scanning.
 
 ## Build prerequisites
 
@@ -25,7 +25,7 @@ make -C windows test
 make -C windows build-release
 ```
 
-`test` builds first and then runs the six native test programs in their existing order. `make -C windows` builds and runs tests; `build-release` builds Release targets without executing them. The shared [WindowsBuild.ps1](WindowsBuild.ps1) helper finds Visual Studio with `vswhere`, selects native `x64` or `arm64`, initializes the MSBuild environment and validates the Windows SDK tools. It redirects compiler temporary files into the ignored root `.tmp/` directory.
+`test` builds first and then runs the four native test programs in their existing order. `make -C windows` builds and runs tests; `build-release` builds Release targets without executing them. The shared [WindowsBuild.ps1](WindowsBuild.ps1) helper finds Visual Studio with `vswhere`, selects native `x64` or `arm64`, initializes the MSBuild environment and validates the Windows SDK tools. It redirects compiler temporary files into the ignored root `.tmp/` directory.
 
 To select a target and separate build directories explicitly:
 
@@ -37,7 +37,7 @@ make -C windows build-release TARGET_ARCH=arm64 BUILD_DIR=build/arm64-release
 
 The installer is generated at `windows/dist/UnlockWithIPhone_<version>_<architecture>_setup.exe`, with `x64` or `arm64` matching the compiler target and the version read from [ProductVersion.h](ProductVersion.h). Distribute only the **Release** setup EXE; it embeds the desktop app and its runtime files, service and Credential Provider. Static libraries are isolated under `lib/<architecture>/<configuration>` to prevent Debug/Release runtime mixing. Use separate build directories per architecture/configuration; the active desktop EXE remains at the build root for existing make commands.
 
-The desktop build follows make → MSBuild Solution/.vcxproj. Native libraries, the service, Credential Provider, desktop WinUI app and installer are separate projects with explicit dependencies and outputs. Pinned Windows App SDK packages and Hybrid CRT remain in use; local NuGet caches and Visual Studio user settings are ignored by Git. XAML generation and `DesktopApp.files` preserve the pages' relative directories. `DesktopApp.files` comes from the WinUI project; packaging embeds one dependency manifest for paths, sizes, SHA-256 and PE machine types. Third-party files retain their versions. The x64 Debug and Release solution builds have passed; runtime, clean-machine deployment and ARM64 remain unverified.
+The desktop build follows make → MSBuild Solution/.vcxproj. Native libraries, the service, Credential Provider, desktop WinUI app and installer are separate projects with explicit dependencies and outputs. Pinned Windows App SDK packages and Hybrid CRT remain in use; local NuGet caches and Visual Studio user settings are ignored by Git. XAML generation and `DesktopApp.files` preserve the pages' relative directories. `DesktopApp.files` comes from the WinUI project; packaging embeds one dependency manifest for paths, sizes, SHA-256 and PE machine types. Third-party files retain their versions. The presence replacement built successfully for x64 Release on 11 Oct 2026 with tests disabled (0 errors, 0 warnings). Local resource limits required one MSBuild node and one compiler process. Tests, runtime, clean-machine deployment and ARM64 acceptance remain pending.
 
 ## Install and configure
 
@@ -56,32 +56,34 @@ For uninstall instructions, see the [main guide](../README.md#uninstall). For in
 
 ## Troubleshooting
 
-Use tray **Status… → Diagnostics**, iOS Settings → Diagnostics and the [testing guide](../docs/Testing.md#diagnostics). From the repository root, the read-only component inspector is:
+Use tray **Status… → Diagnostics** and the [testing guide](../docs/Testing.md#diagnostics). From the repository root, the read-only component inspector is:
 
 ```powershell
 & '.\windows\Diagnostics\Get-ComponentsStatus.ps1'
 ```
 
-It does not start services/tasks, repair installations or mount offline user hives. Do not run a second build-tree tray alongside the installed app. An approval status on the phone does not confirm that Windows accepted the password.
+It does not start services/tasks, repair installations or mount offline user hives. Do not run a second build-tree tray alongside the installed app. A service approved status does not confirm that Windows accepted the password.
 
 ## Module index
 
+The [system BLE diagnostic](../docs/BleSystemPoc.md#localsystem--session-0-prerequisite) uses a separate `SystemBleDiagnostic` target and shared `Bluetooth` definitions. It is not installed or built with the product and cannot unlock Windows.
+
 ```text
 windows/
+├── Bluetooth/          Shared system pairing relationship and service BLE operations.
+├── SystemBleDiagnostic/ Standalone diagnostic, never installed.
 ├── DesktopApp/         MSBuild desktop EXE, role dispatch, WinUI and Win32 TrayManager.
-├── GattHost/           Host lifecycle, lock-aware advertising, BLE and pairing transport.
-├── Enrollment/         Elevated enrollment and fingerprint confirmation.
+├── Enrollment/         Ordinary-user system pairing UI, UAC helper and protected binding store.
 ├── SavedCredential/    Credential service, IPC, encrypted password storage and management UI.
 ├── CredentialProvider/ Windows sign-in tile and native credential submission.
-├── PhoneApproval/      Challenge verification and protected registration storage.
-├── Protocol/           Signing payload, hashing and signature verification.
+├── Protocol/           SHA-256 hashing for installer package integrity.
 ├── Setup/              Installation, updates, removal and restart continuation.
 ├── Resources/          Win32 appearance, manifests, icons and version resources.
 ├── *Tests/             C++ regression tests orchestrated by UnlockWindowsTests.proj.
 └── Diagnostics/        Read-only component and installation-state inspection.
 ```
 
-Module guides: [GattHost](GattHost/README.md), [SavedCredential](SavedCredential/README.md), [CredentialProvider](CredentialProvider/README.md) and [Setup](Setup/README.md). See [PROTOCOL.md](../PROTOCOL.md) for the shared protocol.
+Module guides: [SavedCredential](SavedCredential/README.md), [CredentialProvider](CredentialProvider/README.md) and [Setup](Setup/README.md). See [PROTOCOL.md](../PROTOCOL.md) for the shared protocol.
 
 ## Desktop app roles
 
@@ -92,37 +94,23 @@ Module guides: [GattHost](GattHost/README.md), [SavedCredential](SavedCredential
 | `--saved-password` | Temporary elevated password-management window. |
 | `--saved-password --save`, `--saved-password --update`, `--saved-password --remove` | Internal operation-specific elevated WinUI password window. |
 | `--setup` | Ordinary-user setup request handled by the existing single-instance tray. |
-| `--saved-password --setup` | Internal elevated password step; an explicit readiness result permits the ordinary tray to continue to pairing. |
-| `--bluetooth` plus internal arguments | Temporary elevated WinUI pairing/removal window, launched by the tray. Not a public manual command. |
-| `--key-hex <public-key> [--replace]`, `--key-clipboard [--replace]`, `--clear` | Elevated manual public-key enrollment using the calling console. |
+| `--saved-password --setup` | Internal elevated password step; an explicit readiness result permits the ordinary tray to continue on Status. |
+| `--binding-helper <operation> <encoded-request>` | Internal temporary elevated service-management helper; not a public command. |
 
-The WinUI application, main window and tray share the main STA; GATT retains its background MTA control loop. The main window and native title bar follow the Windows app theme. Closing the main window hides it to the tray; Quit requests asynchronous host shutdown. Safely isolated UI errors are reported without restarting UI or stopping BLE; framework and fatal process faults are outside this guarantee. Closing an operation window does not exit the tray. Role parsing is defined in [DesktopApp.h](DesktopApp/DesktopApp.h); role arguments do not grant permission.
+The main WinUI window and tray retain the desktop STA. A desktop worker handles helpers/status; the LocalSystem service's single MTA worker owns BLE validation. Closing the main window hides it; Quit exits the desktop app without disabling lock-screen verification. Role arguments do not grant service permission.
 
-Left-clicking the tray shows the current page. Its right-click menu contains **Status**, **Password**, **About**, and **Quit**; page entries navigate the main window without elevation, including while Bluetooth is busy.
+Navigation remains **Status**, **Password**, **Diagnostics**, with **About** at the bottom. Password management, notifications and update checks retain their existing roles. Diagnostics preserves text selection/scrolling and no longer embeds BLE probe code.
 
-Pairing uses a separate WinUI window with the console account, complete fingerprint, waiting progress and replacement/removal warnings. Its worker owns registration, IPC and the writer lock; cancellation and session/power invalidation are checked before committing. Post-commit reload failures report the changed registration. Manual enrollment keeps its console input and exit codes.
+**Status** shows pairing guidance and a paired-device list when no iPhone is bound. Open Windows Bluetooth settings to pair, return, select a device and click **Bind selected device**. Binding/removal require confirmation and UAC. A bound iPhone keeps its existing status layout with removal only; remove it before binding another. Removal leaves Windows pairing intact. There is no separate binding window.
 
-Desktop notifications use independent WinUI windows, one at a time, including when the main window is hidden. Closing a notification leaves the tray running; Quit waits for queued notifications to be acknowledged after transport stops. Native emergency errors are used only when WinUI cannot start or continue displaying. The installer and its result scripts retain their existing UI. The x64 Debug and Release desktop builds have passed; pairing and notification runtime validation remains pending.
-
-Navigation contains **Status**, **Password**, **Diagnostics**, and **About** at the bottom. A Frame navigates between cached pages below the shared fixed header and action buttons in one centered container with a maximum width of 1744 effective pixels; each page owns its UI, scroll area and interactions. Diagnostics skips unchanged text snapshots and preserves selection and reading position when content updates. Dashboard coordinates navigation, the header and host callbacks; About owns update checks, which Quit cancels. Password shows the verified console account and saved-copy status, with **Save password** or **Update password** beside removal when a copy exists and **Refresh** in the header. Account queries read Windows identity properties even after the service restarts. Operations request UAC and use a separate WinUI PasswordBox/ContentDialog; InfoBar reports results and failures. Unknown status disables operations and offers Refresh. About shows the shared product version, GitHub project/MIT license links and a manual **Check for updates** against the latest formal GitHub Release. It compares numeric versions and links to a newer release without downloading or installing it; failures are shown separately from an up-to-date result.
-
-For manual enrollment, use an elevated PowerShell console on the unlocked target desktop, place the phone's 65-byte uncompressed P-256 public key as 130 hexadecimal digits on the clipboard, then run:
-
-```powershell
-$app = (Resolve-Path '.\windows\build\UnlockWithIPhone.exe').Path
-$process = Start-Process -FilePath $app -ArgumentList '--key-clipboard' -NoNewWindow -Wait -PassThru
-$process.ExitCode
-```
-
-Manual enrollment still requires fingerprint confirmation; replacement requires `--replace`, and clear requires explicit removal confirmation. It does not start BLE or provide an authentication bypass.
-
+**Status** displays the bound name and saved RSSI threshold. Dragging edits a pending value; **Save** requests UAC. Refusal/failure restores the saved value and shows the reason. Initial binding chooses the same threshold range/default. No hardware acceptance is claimed.
 ## Tag builds
 
 Windows installers are automatically built and published when a version tag is pushed. CI prepares build resources and invokes the MSBuild solution through `WindowsBuild.ps1`, without requiring GNU Make. See the [Release workflow](../.github/workflows/release.yml).
 
 ## References
 
-- [GattServiceProvider requirements](https://learn.microsoft.com/en-us/uwp/api/windows.devices.bluetooth.genericattributeprofile.gattserviceprovider)
+- [Windows device pairing](https://learn.microsoft.com/en-us/windows/uwp/devices-sensors/pair-devices)
 - [Windows App SDK self-contained deployment](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/self-contained-deploy/deploy-self-contained-apps)
 - [GetDpiForWindow requirements](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getdpiforwindow)
-- [Advertisement enum version history](https://learn.microsoft.com/en-us/uwp/api/windows.devices.bluetooth.genericattributeprofile.gattserviceprovideradvertisementstatus)
+- [Bluetooth GATT client](https://learn.microsoft.com/en-us/windows/uwp/devices-sensors/gatt-client)

@@ -168,8 +168,8 @@ OperationResult SetupTransaction::prepare(SetupTransactionState& state, const Pr
         store_.writeTransaction(state);
         report(progress, 100, L"Preparation complete. Restart to continue and verify finalization.");
         return {true, true, state.operation == SetupOperation::uninstall
-            ? L"Saved password deletion confirmed. Restart to remove programs, phone enrollment and computer identity."
-            : L"Restart to finish. Updates and reinstalls preserve credentials and phone enrollment."};
+            ? L"Saved password deletion confirmed. Restart to remove programs and product binding."
+            : L"Restart to finish. Updates and reinstalls preserve credentials and product binding."};
     } catch (const std::exception& error) {
         // Keep ownership and diagnostics on failure; only this transaction may continue.
         if (!continuationReady) state.phase = WizardPhase::preparing;

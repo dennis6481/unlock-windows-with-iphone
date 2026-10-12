@@ -22,13 +22,13 @@
 
 # Unlock with iPhone®
 
-Unlock Windows session using your iPhone in proximity.
+Unlock your Windows session with your nearby iPhone.
 
 ## Get started
 
 ### System requirements
 
-The *Unlock with iPhone* requires Windows 10 version **2004, build 19041**, or later, including Windows 11. Both x64 and ARM64 architecture are supported (althought the app has not yet been tested on a physical ARM64 machine).
+*Unlock with iPhone* requires Windows 10 version **2004, build 19041**, or later, including Windows 11. Both x64 and ARM64 architectures are supported, although the app has not yet been tested on a physical ARM64 machine.
 
 Your PC must have Bluetooth enabled, with an adapter and driver that support **BLE Central, protected GATT access and advertisement scanning**.
 
@@ -87,25 +87,26 @@ Windows distribution is a single `windows/dist/UnlockWithIPhone_<version>_<archi
 ## Known limitations
 
 - **Windows sessions and accounts:** Currently, only Microsoft Account (MSA) accounts are supported; local Windows accounts are not supported. Account changes or an outdated saved password can cause native authentication to fail.
-- **Multi-users:** The Windows app does not currently support multi-users. I can only be configured for one MSA user on the PC.
+- **Multiple users:** The Windows app can currently be configured for only one Microsoft account (MSA) user on the PC.
 
 ## To Do
 
 - [x] Modernize the Windows UI and setup guidance
 - [ ] Support multiple Windows users.
 - [ ] Support local Windows accounts.
-- [ ] watchOS supported.
+- [ ] Add watchOS support.
 - [ ] Move Windows installer packaging to an MSI architecture.
 - [ ] Investigate LSA-based Windows authentication to replace the current implementation that stores a local Windows password copy.
 
 ## Security
 
-Inspired by the fact that an Apple Watch can unlock a Mac seemlessly, the software is an exploration for the possibility to unlock Windows PC with an iPhone (or Apple Watch). Therefore this is not a commercial or professional secutity solution. I will deny all the liabilities in case of security breach. 
-Please refer to [SECURITY.md](SECURITY.md) for more details.
+Inspired by the way an Apple Watch can seamlessly unlock a Mac, this project explores the possibility of unlocking a Windows PC with an iPhone (or Apple Watch). It is an experimental project, not a commercial or professional security solution. Use it at your own risk; the author accepts no liability for security incidents.
+
+Please refer to [SECURITY.md](SECURITY.md) for details about its security model and limitations.
 
 ## Contributions
 
-A contribution is welcome. Feel free to open an issue if you would like to continue where I've left off, or simply if you found some bugs, or some improvements.
+Contributions are welcome. Feel free to open an issue if you would like to continue where I've left off, report a bug or suggest an improvement.
 
 ## License
 

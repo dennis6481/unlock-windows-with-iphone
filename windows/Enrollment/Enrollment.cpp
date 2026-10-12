@@ -94,7 +94,7 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
             }
         };
         auto added = watcher.Added([post](const auto&, DeviceInformation item) {
-            post([item](auto& self) { self.items[std::wstring(item.Id())] = item; });
+            post([item](auto& self) { self.items.insert_or_assign(std::wstring(item.Id()), item); });
         });
         auto updated = watcher.Updated([post](const auto&, DeviceInformationUpdate update) {
             post([update](auto& self) {
@@ -126,7 +126,7 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
             const auto bleItems = co_await system_ble::pairedEndpoints();
             if (!stopping && revision == listRevision) {
                 items.clear();
-                for (auto item : bleItems) items[std::wstring(item.Id())] = item;
+                for (auto item : bleItems) items.insert_or_assign(std::wstring(item.Id()), item);
                 render();
             } else if (!stopping) scanAgain = true;
         } catch (...) { if (!stopping) message(currentException()); }

@@ -15,10 +15,14 @@
   <a href="https://github.com/dennis6481/unlock-windows-with-iphone/releases">
     <img src="https://img.shields.io/github/v/release/dennis6481/unlock-windows-with-iphone?include_prereleases&amp;sort=date&amp;logo=github" alt="GitHub Release (including pre-releases)">
   </a>
+  <a href="https://sonarcloud.io/project/overview?id=dennis6481_unlock-windows-with-iphone">
+    <img src="https://sonarcloud.io/images/project_badges/sonarcloud-light.svg" alt="sonarqube" height="20">
+  </a>
   <a href="https://buymeacoffee.com/dennis6481">
     <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" height="20">
   </a>
 </p>
+
 
 # Unlock with iPhone®
 

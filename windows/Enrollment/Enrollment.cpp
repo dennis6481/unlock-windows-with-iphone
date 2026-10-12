@@ -30,9 +30,8 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
     TextBlock thresholdText{nullptr}, status{nullptr};
     Button bind{nullptr}, settings{nullptr};
     TextBlock empty{nullptr};
-    struct Item { DeviceInformation information{nullptr}; bool ble = false; };
-    std::map<std::wstring, Item> items;
-    struct Choice { std::wstring endpointId, name; bool classic = false, classicName = false; };
+    std::map<std::wstring, DeviceInformation> items;
+    struct Choice { std::wstring endpointId, name; };
     std::map<std::wstring, Choice> choices;
     std::wstring selectedKey;
     std::vector<std::function<void()>> revoke;
@@ -63,19 +62,8 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
         devices.Items().Clear();
         choices.clear();
         for (const auto& [id, item] : items) {
-            if (!item.information.Pairing().IsPaired()) continue;
-            const auto container = system_ble::containerId(item.information);
-            const auto key = container ? L"container:" + std::wstring(to_hstring(*container)) : L"endpoint:" + id;
-            auto& choice = choices[key];
-            if (choice.endpointId.empty() || (!item.ble && !choice.classic)) {
-                choice.endpointId = id;
-                choice.classic = !item.ble;
-            }
-            const auto name = item.information.Name();
-            if (!name.empty() && (choice.name.empty() || (!item.ble && !choice.classicName))) {
-                choice.name = std::wstring(name);
-                choice.classicName = !item.ble;
-            }
+            if (!item.Pairing().IsPaired()) continue;
+            choices[id] = {id, std::wstring(item.Name())};
         }
         for (const auto& [key, device] : choices) {
             ListViewItem choice;
@@ -91,9 +79,9 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
         rendering = false;
     }
 
-    void watch(bool lowEnergy) {
-        auto watcher = DeviceInformation::CreateWatcher(system_ble::deviceSelector(lowEnergy),
-            single_threaded_vector<hstring>({system_ble::kContainerProperty, L"System.Devices.Aep.IsPaired"}), DeviceInformationKind::AssociationEndpoint);
+    void watch() {
+        auto watcher = DeviceInformation::CreateWatcher(system_ble::deviceSelector(),
+            single_threaded_vector<hstring>({L"System.Devices.Aep.IsPaired"}), DeviceInformationKind::AssociationEndpoint);
         const auto weak = weak_from_this();
         auto post = [weak](std::function<void(BindingPanel&)> action) {
             if (auto self = weak.lock()) {
@@ -105,13 +93,13 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
                 })) OutputDebugStringW(L"Binding device update dispatcher rejected\n");
             }
         };
-        auto added = watcher.Added([post, lowEnergy](const auto&, DeviceInformation item) {
-            post([item, lowEnergy](auto& self) { self.items[std::wstring(item.Id())] = {item, lowEnergy}; });
+        auto added = watcher.Added([post](const auto&, DeviceInformation item) {
+            post([item](auto& self) { self.items[std::wstring(item.Id())] = item; });
         });
         auto updated = watcher.Updated([post](const auto&, DeviceInformationUpdate update) {
             post([update](auto& self) {
                 const auto found = self.items.find(std::wstring(update.Id()));
-                if (found != self.items.end()) found->second.information.Update(update);
+                if (found != self.items.end()) found->second.Update(update);
                 else self.scan();
             });
         });
@@ -135,12 +123,10 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
         scanning = true;
         const auto revision = listRevision;
         try {
-            const auto classicItems = co_await system_ble::pairedEndpoints(false);
-            const auto bleItems = co_await system_ble::pairedEndpoints(true);
+            const auto bleItems = co_await system_ble::pairedEndpoints();
             if (!stopping && revision == listRevision) {
                 items.clear();
-                for (auto item : classicItems) items[std::wstring(item.Id())] = {item, false};
-                for (auto item : bleItems) items[std::wstring(item.Id())] = {item, true};
+                for (auto item : bleItems) items[std::wstring(item.Id())] = item;
                 render();
             } else if (!stopping) scanAgain = true;
         } catch (...) { if (!stopping) message(currentException()); }
@@ -186,32 +172,16 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
                     throw hresult_error(E_FAIL, L"Remove the current iPhone binding before binding another device");
                 if (!choices.contains(selectedKey)) throw hresult_error(E_FAIL, L"Select a paired device first");
                 const auto choice = choices.at(selectedKey);
-                auto selected = items.at(choice.endpointId).information;
+                auto selected = items.at(choice.endpointId);
                 if (!selected.Pairing().IsPaired()) throw hresult_error(E_FAIL, L"Finish pairing in Windows Bluetooth settings, then return and select the device");
                 check(ticket);
-                const auto refreshed = co_await DeviceInformation::CreateFromIdAsync(hstring(choice.endpointId),
-                    single_threaded_vector<hstring>({system_ble::kContainerProperty}), DeviceInformationKind::AssociationEndpoint);
+                const auto paired = co_await system_ble::pairedEndpoints();
                 check(ticket);
-                const auto container = system_ble::containerId(refreshed);
-                if (!container) throw hresult_error(E_FAIL, L"No system ContainerId; names and guessed addresses cannot bind a phone");
-                if (selectedKey != L"container:" + std::wstring(to_hstring(*container)))
-                    throw hresult_error(E_FAIL, L"The selected device association changed. Select it again.");
-                DeviceInformation classicItem{nullptr}, bleItem{nullptr};
-                const auto associationDeadline = GetTickCount64() + system_ble::kOperationLifetimeMs;
-                for (;;) {
-                    const auto classicItems = co_await system_ble::pairedEndpoints(false);
-                    const auto bleItems = co_await system_ble::pairedEndpoints(true);
-                    check(ticket);
-                    classicItem = system_ble::findUniqueEndpoint(classicItems, *container);
-                    bleItem = system_ble::findUniqueEndpoint(bleItems, *container);
-                    if (classicItem && bleItem) break;
-                    if (GetTickCount64() >= associationDeadline) throw hresult_error(E_FAIL, L"Windows did not expose a unique paired Classic/BLE relationship");
-                    message(L"Waiting for Windows system pairing records to update...");
-                    co_await resume_after(std::chrono::milliseconds(200)); co_await foreground;
-                }
-                const auto name = !classicItem.Name().empty() ? classicItem.Name() : bleItem.Name();
-                BindingChange change{original, {target.sid, std::wstring(classicItem.Id()), std::wstring(bleItem.Id()),
-                    *container, std::wstring(name), static_cast<int>(threshold.Value())}, eventName};
+                const auto bleItem = system_ble::findUniqueEndpoint(paired, hstring(choice.endpointId));
+                if (!bleItem || !bleItem.Pairing().IsPaired())
+                    throw hresult_error(E_FAIL, L"The selected BLE endpoint is no longer paired. Pair it in Windows Bluetooth settings, then select it again.");
+                BindingChange change{original, {target.sid, {}, std::wstring(bleItem.Id()),
+                    {}, std::wstring(bleItem.Name()), static_cast<int>(threshold.Value())}, eventName};
                 dialog = ContentDialog{}; dialog.XamlRoot(dialogRoot());
                 dialog.Title(box_value(L"Bind selected iPhone?"));
                 dialog.Content(box_value(hstring(change.candidate.displayName + L"\nThe service will verify pairing, protected BLE communication and RSSI before saving.")));
@@ -284,14 +254,14 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
         guidance.Children().Append(text(L"Complete pairing in Windows, then select your iPhone below and bind it to this PC."));
         settings.Content(box_value(L"Open Bluetooth settings"));
         guidance.Children().Append(settings); card.Child(guidance); root.Children().Append(card);
-        root.Children().Append(text(L"Paired devices", 16));
+        root.Children().Append(text(L"Paired BLE devices", 16));
         devices.SelectionMode(ListViewSelectionMode::Single);
         ScrollViewer::SetVerticalScrollBarVisibility(devices, ScrollBarVisibility::Disabled);
         ScrollViewer::SetHorizontalScrollBarVisibility(devices, ScrollBarVisibility::Disabled);
         devices.HorizontalContentAlignment(HorizontalAlignment::Stretch);
-        Automation::AutomationProperties::SetName(devices, L"Devices paired in Windows");
+        Automation::AutomationProperties::SetName(devices, L"BLE devices paired in Windows");
         root.Children().Append(devices);
-        empty.Text(L"No paired devices found. Pair your iPhone in Windows Bluetooth settings, then return here.");
+        empty.Text(L"No paired BLE devices found. Pair your iPhone in Windows Bluetooth settings, then return here.");
         empty.TextWrapping(TextWrapping::Wrap); root.Children().Append(empty);
         threshold.Minimum(system_ble::kMinimumThreshold); threshold.Maximum(system_ble::kMaximumThreshold);
         threshold.StepFrequency(system_ble::kThresholdStep); threshold.Value(system_ble::kDefaultThreshold);
@@ -316,7 +286,7 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
         });
         bind.Click([weak](const auto&, const auto&) { if (auto self = weak.lock()) self->start(); });
         settings.Click([weak](const auto&, const auto&) { openSettings(weak); });
-        watch(false); watch(true); scan();
+        watch(); scan();
     }
     static fire_and_forget openSettings(std::weak_ptr<BindingPanel> weak) {
         if (auto self = weak.lock()) {

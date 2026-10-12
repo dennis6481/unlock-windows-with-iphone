@@ -9,7 +9,6 @@
 namespace unlock_windows::system_ble {
 inline constexpr winrt::guid kAncsService{L"7905F431-B5CE-4E99-A40F-4B1E122D00D0"};
 inline constexpr winrt::guid kNotificationSource{L"9FBF120D-6301-42D9-8C58-25E699A21DBD"};
-inline constexpr wchar_t kContainerProperty[] = L"System.Devices.Aep.ContainerId";
 inline constexpr int kMinimumThreshold = -100;
 inline constexpr int kMaximumThreshold = -20;
 inline constexpr int kDefaultThreshold = -60;
@@ -27,9 +26,15 @@ inline constexpr bool freshEvidence(std::uint64_t at, std::uint64_t started, std
 
 struct BindingRecord final {
     std::wstring accountSid;
+
+    // Legacy storage/IPC layout only; not used for device selection or verification. New bindings leave this empty.
     std::wstring classicId;
+
     std::wstring bleId;
+
+    // Legacy storage/IPC layout only; not used for device selection or verification. New bindings leave this zero.
     winrt::guid containerId{};
+
     std::wstring displayName;
     int threshold = kDefaultThreshold;
     bool operator==(const BindingRecord&) const = default;

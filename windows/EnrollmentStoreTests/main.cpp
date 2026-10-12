@@ -49,6 +49,11 @@ int main() {
         auto invalid = first; invalid.threshold = ble::kMaximumThreshold + 1;
         rejects([&] { store.save(invalid); }, "Invalid threshold must not commit");
         require(store.load() == std::optional<ble::BindingRecord>{first}, "Rejected threshold changed the original");
+        auto changedThreshold = first; changedThreshold.threshold = -55;
+        store.save(changedThreshold);
+        require(store.load() == std::optional<ble::BindingRecord>{changedThreshold},
+            "Threshold changes must preserve legacy fields");
+        second.classicId.clear(); second.containerId = {};
         second.threshold = -55; store.save(second);
         require(store.load() == std::optional<ble::BindingRecord>{second}, "Successful replacement must be atomic");
         {

@@ -541,6 +541,38 @@ void testPresenceContracts() {
     BindingRecord decoded;
     require(encodeBinding(record, bytes) && decodeBinding(bytes.value.data(), bytes.value.size(), decoded) && decoded == record,
         "binding codec must preserve SID, both IDs, container, display text and threshold");
+    // Fixed pre-change binding bytes: independent of the current encoder.
+    const std::uint8_t legacy[] = {
+        0x67,0x45,0x23,0x01,0xab,0x89,0xef,0xcd,0x01,0x23,0x45,0x67,0x89,0xab,0xcd,0xef,
+        0xc4,0xff,0xff,0xff,
+        8,0, 'S',0, '-',0, '1',0, '-',0, '5',0, '-',0, '1',0, '8',0,
+        1,0, 'c',0,
+        6,0, 'b',0, 'l',0, 'e',0, '-',0, 'i',0, 'd',0,
+        3,0, 'o',0, 'l',0, 'd',0
+    };
+    const BindingRecord legacyRecord{L"S-1-5-18", L"c", L"ble-id",
+        winrt::guid{L"01234567-89ab-cdef-0123-456789abcdef"}, L"old", -60};
+    require(decodeBinding(legacy, sizeof(legacy), decoded) && decoded == legacyRecord,
+        "pre-change binding layout must remain readable without migration");
+    auto newRecord = record; newRecord.classicId.clear(); newRecord.containerId = {};
+    SensitiveBytes newBytes;
+    require(encodeBinding(legacyRecord, newBytes) && newBytes.value.size() == sizeof(legacy) &&
+        std::equal(newBytes.value.begin(), newBytes.value.end(), legacy),
+        "legacy record encoding must retain the exact pre-change byte layout");
+    require(encodeBinding(newRecord, newBytes) && decodeBinding(newBytes.value.data(), newBytes.value.size(), decoded) && decoded == newRecord,
+        "new bindings must round trip with empty legacy fields");
+    for (std::size_t size = 0; size < newBytes.value.size(); ++size)
+        require(!decodeBinding(newBytes.value.data(), size, decoded), "truncated new bindings must reject");
+    newBytes.value.push_back(0);
+    require(!decodeBinding(newBytes.value.data(), newBytes.value.size(), decoded), "new binding trailing data must reject");
+    auto invalidRecord = newRecord; invalidRecord.bleId.clear();
+    require(!encodeBinding(invalidRecord, newBytes), "empty BLE ID must reject");
+    invalidRecord = newRecord; invalidRecord.accountSid = L"invalid";
+    require(!encodeBinding(invalidRecord, newBytes), "invalid target SID must reject");
+    invalidRecord = newRecord; invalidRecord.classicId.assign(2049, L'x');
+    require(!encodeBinding(invalidRecord, newBytes), "oversized legacy fields must reject");
+    invalidRecord = newRecord; invalidRecord.bleId.push_back(L'\0');
+    require(!encodeBinding(invalidRecord, newBytes), "embedded NUL in BLE ID must reject");
     for (std::size_t size = 0; size < bytes.value.size(); ++size)
         require(!decodeBinding(bytes.value.data(), size, decoded), "all truncated binding packets must fail");
     bytes.value.push_back(0);
@@ -555,6 +587,10 @@ void testPresenceContracts() {
     require(encodeBindingChange(change, bytes) && decodeBindingChange(bytes.value.data(), bytes.value.size(), restored) &&
         restored.expected == change.expected && restored.candidate == change.candidate && restored.cancelEvent == change.cancelEvent,
         "management request must preserve the expected record and cancellation event");
+    change.expected = {BindingState::bound, legacyRecord}; change.candidate = newRecord;
+    require(encodeBindingChange(change, bytes) && decodeBindingChange(bytes.value.data(), bytes.value.size(), restored) &&
+        restored.expected == change.expected && restored.candidate == newRecord,
+        "management codec must preserve old expected state and new empty legacy fields");
     bytes.value[0] = 255;
     require(!decodeBindingChange(bytes.value.data(), bytes.value.size(), restored), "malformed expected-length must fail");
     BindingRemoval removal{{BindingState::bound, record}, L"Global\\test-cancellation"};
@@ -562,6 +598,9 @@ void testPresenceContracts() {
     require(encodeBindingRemoval(removal, bytes) && decodeBindingRemoval(bytes.value.data(), bytes.value.size(), removed) &&
         removed.expected == removal.expected && removed.cancelEvent == removal.cancelEvent, "removal must bind its expected state and cancellation");
     require(!decodeBindingRemoval(bytes.value.data(), bytes.value.size() - 1, removed), "truncated removal must fail");
+    removal.expected.record = newRecord;
+    require(encodeBindingRemoval(removal, bytes) && decodeBindingRemoval(bytes.value.data(), bytes.value.size(), removed) &&
+        removed.expected == removal.expected, "new bindings must remain removable with empty legacy fields");
     for (auto state : {BindingState::absent, BindingState::bound}) {
         BindingSummary summary{state, state == BindingState::bound ? record : BindingRecord{}};
         BindingSummary read;
@@ -612,16 +651,15 @@ void testPresenceContracts() {
 }
 
 struct EndpointFixture : winrt::implements<EndpointFixture, winrt::Windows::Devices::Enumeration::IDeviceInformation> {
-    winrt::guid container;
-    explicit EndpointFixture(winrt::guid value) : container(value) {}
-    winrt::hstring Id() { return L"fixture"; }
+    winrt::hstring endpointId;
+    explicit EndpointFixture(winrt::hstring value) : endpointId(std::move(value)) {}
+    winrt::hstring Id() { return endpointId; }
     winrt::hstring Name() { return L"fixture"; }
     bool IsEnabled() { return true; }
     bool IsDefault() { return false; }
     winrt::Windows::Devices::Enumeration::EnclosureLocation EnclosureLocation() { return nullptr; }
     winrt::Windows::Foundation::Collections::IMapView<winrt::hstring, winrt::Windows::Foundation::IInspectable> Properties() {
         auto properties = winrt::single_threaded_map<winrt::hstring, winrt::Windows::Foundation::IInspectable>();
-        properties.Insert(unlock_windows::system_ble::kContainerProperty, winrt::box_value(container));
         return properties.GetView();
     }
     void Update(winrt::Windows::Devices::Enumeration::DeviceInformationUpdate const&) { throw winrt::hresult_not_implemented(); }
@@ -633,26 +671,27 @@ struct EndpointFixture : winrt::implements<EndpointFixture, winrt::Windows::Devi
     }
 };
 
-void testEndpointAssociation() {
+void testEndpointSelection() {
     using namespace winrt::Windows::Devices::Enumeration;
     using namespace unlock_windows::system_ble;
     winrt::init_apartment();
     {
-        const winrt::guid target{L"12345678-1234-1234-1234-123456789abc"};
+        const winrt::hstring target{L"selected-ble-id"};
         const auto selected = winrt::make<EndpointFixture>(target).as<DeviceInformation>();
-        const auto unrelated = winrt::make<EndpointFixture>(winrt::guid{}).as<DeviceInformation>();
+        const auto unrelated = winrt::make<EndpointFixture>(winrt::hstring{L"other-ble-id"}).as<DeviceInformation>();
         auto entries = winrt::single_threaded_vector<DeviceInformation>();
         const auto collection = entries.GetView().as<DeviceInformationCollection>();
-        require(!findUniqueEndpoint(collection, target), "missing association returns no endpoint for UI waiting");
-        try { (void)uniqueEndpoint(collection, target); require(false, "service must reject a missing association"); }
-        catch (const VerificationError& error) { require(error.reason == Failure::associationInvalid, "missing association has the correct failure"); }
+        require(!findUniqueEndpoint(collection, target), "missing BLE ID returns no selected endpoint");
+        try { (void)uniqueEndpoint(collection, target); require(false, "service must reject a missing BLE endpoint"); }
+        catch (const VerificationError& error) { require(error.reason == Failure::associationInvalid, "missing BLE endpoint has the correct failure"); }
         entries.Append(unrelated);
         entries.Append(selected);
+        require(!findUniqueEndpoint(collection, winrt::hstring{}), "empty BLE ID must not select a device");
         require(findUniqueEndpoint(collection, target) == selected && uniqueEndpoint(collection, target) == selected,
-            "one matching container returns its endpoint despite unrelated devices");
+            "exact BLE ID selects its endpoint despite same-name unrelated devices");
         entries.Append(winrt::make<EndpointFixture>(target).as<DeviceInformation>());
-        try { (void)findUniqueEndpoint(collection, target); require(false, "duplicate association must reject immediately"); }
-        catch (const VerificationError& error) { require(error.reason == Failure::associationInvalid, "ambiguous association has the correct failure"); }
+        try { (void)findUniqueEndpoint(collection, target); require(false, "duplicate BLE ID must reject immediately"); }
+        catch (const VerificationError& error) { require(error.reason == Failure::associationInvalid, "duplicate BLE ID has the correct failure"); }
     }
     winrt::uninit_apartment();
 }
@@ -721,7 +760,7 @@ void testConsoleLockState() {
 
 int main() {
     testBindingSummaryReadback();
-    testEndpointAssociation();
+    testEndpointSelection();
     testPreparationState();
     testConsoleLockState();
     testLastUnlockCodec();

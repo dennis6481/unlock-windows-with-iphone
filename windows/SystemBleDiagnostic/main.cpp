@@ -94,16 +94,12 @@ struct Logger final {
 };
 
 void listEndpoints() {
-    for (const bool ble : {false, true}) {
-        const auto items = pairedEndpoints(ble).get();
-        std::wcout << (ble ? L"BLE" : L"Bluetooth Classic") << L" paired endpoints:\n";
-        for (const auto& item : items) {
-            const auto id = containerId(item);
-            std::wcout << L"  name=" << item.Name().c_str() << L"\n  container=" <<
-                (id ? to_hstring(*id).c_str() : L"UNAVAILABLE") << L"\n  endpoint=" << item.Id().c_str() << L"\n";
-        }
+    const auto items = pairedEndpoints().get();
+    std::wcout << L"BLE paired endpoints:\n";
+    for (const auto& item : items) {
+        std::wcout << L"  name=" << item.Name().c_str() << L"\n  endpoint=" << item.Id().c_str() << L"\n";
     }
-    std::wcout << L"Select a container with exactly one Classic and one BLE endpoint. Names are display text only.\n";
+    std::wcout << L"Select the exact paired BLE endpoint ID. Names are display text only.\n";
 }
 
 struct Run final {
@@ -116,17 +112,13 @@ struct Run final {
     void invalidate(const std::wstring& reason) { invalid = true; log->write(L"INVALIDATED: " + reason); }
 };
 
-IAsyncAction probe(const std::shared_ptr<Run> run, guid target, int threshold) {
+IAsyncAction probe(const std::shared_ptr<Run> run, std::wstring target, int threshold) {
     co_await resume_background();
     const auto cancellation = co_await get_cancellation_token();
     try {
-        const auto classicItems = pairedEndpoints(false).get();
-        const auto bleItems = pairedEndpoints(true).get();
-        const auto classic = uniqueEndpoint(classicItems, target);
-        const auto ble = uniqueEndpoint(bleItems, target);
-        BindingRecord record{L"diagnostic", std::wstring(classic.Id()), std::wstring(ble.Id()), target,
-            std::wstring(ble.Name()), threshold};
-        run->log->write(L"BEGIN shared system BLE verification; unique Classic/BLE container; threshold=" + std::to_wstring(threshold));
+        const auto ble = uniqueEndpoint(pairedEndpoints().get(), hstring(target));
+        BindingRecord record{L"diagnostic", {}, std::wstring(ble.Id()), {}, std::wstring(ble.Name()), threshold};
+        run->log->write(L"BEGIN shared system BLE verification; selected BLE endpoint; threshold=" + std::to_wstring(threshold));
         Session session(record, [run](const std::string& message) { run->log->write(std::wstring(winrt::to_hstring(message))); });
         session.beginRequest(run->started, [run, cancellation] {
             return !run->invalid && !cancellation() && generation.load() == run->ticket &&
@@ -205,7 +197,7 @@ void recordConsole(const std::shared_ptr<Logger>& log) {
         std::to_wstring(flags) + L" (0=locked, 1=unlocked)");
 }
 
-guid selectedContainer{};
+std::wstring selectedEndpoint;
 int selectedThreshold = kDefaultThreshold;
 
 void WINAPI serviceMain(DWORD, wchar_t**) noexcept {
@@ -224,7 +216,7 @@ void WINAPI serviceMain(DWORD, wchar_t**) noexcept {
         if (!stopRequested(kPreparationMs)) {
             const auto run = std::make_shared<Run>(log);
             recordConsole(log);
-            auto action = probe(run, selectedContainer, selectedThreshold);
+            auto action = probe(run, selectedEndpoint, selectedThreshold);
             bool interrupted = false;
             while (action.Status() == AsyncStatus::Started) {
                 if (stopRequested(100) ||
@@ -266,12 +258,12 @@ int wmain(int argc, wchar_t** argv) {
         }
         if ((argc != 3 && argc != 4) || std::wstring_view(argv[1]) != L"--service") {
             std::wcerr << L"Usage: unlock_system_ble_diagnostic --list\n"
-                L"  SCM ImagePath: unlock_system_ble_diagnostic --service <system-container-GUID> [RSSI-threshold]\n"
+                L"  SCM ImagePath: unlock_system_ble_diagnostic --service <paired-BLE-endpoint-ID> [RSSI-threshold]\n"
                 L"  Service name: " << kDiagnosticService << L"\n";
             return 2;
         }
-        selectedContainer = guid{std::wstring_view(argv[2])};
-        require(selectedContainer != guid{}, L"Nonzero system container GUID required.");
+        selectedEndpoint = argv[2];
+        require(!selectedEndpoint.empty(), L"Paired BLE endpoint ID required.");
         if (argc == 4) {
             std::size_t consumed = 0;
             selectedThreshold = std::stoi(argv[3], &consumed);

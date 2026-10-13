@@ -119,6 +119,8 @@ private:
         closingToken_ = appWindow_.Closing([this](const auto&, const Windowing::AppWindowClosingEventArgs& args) {
             try {
                 args.Cancel(true);
+                if (statusPage_)
+                    get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->DismissBindingSuccess();
                 appWindow_.Hide();
             } catch (const hresult_error& error) { state_->fail(error); }
         });

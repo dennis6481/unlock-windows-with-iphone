@@ -13,6 +13,18 @@ void StatusPage::OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEventA
     if (statusPanel_) return;
     statusPanel_ = StackPanel{};
     statusPanel_.Spacing(12);
+    success_ = InfoBar{};
+    success_.Severity(InfoBarSeverity::Success);
+    success_.IsClosable(true);
+    success_.IsOpen(false);
+    success_.Visibility(Visibility::Collapsed);
+    success_.Margin({0, 0, 0, 20});
+    success_.Closed([weak = get_weak()](const auto&, const auto&) {
+        if (auto page = weak.get()) page->success_.Visibility(Visibility::Collapsed);
+    });
+    success_.Title(L"iPhone bound successfully");
+    success_.Message(L"Lock this PC and click Unlock on the Windows sign-in screen to try it.");
+    statusPanel_.Children().Append(success_);
     auto phone = icon(L"\xE8EA", 100, true);
     phone.HorizontalAlignment(HorizontalAlignment::Center);
     Automation::AutomationProperties::SetName(phone, L"iPhone");
@@ -76,10 +88,20 @@ void StatusPage::OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEventA
     BodyHost().Content(statusPanel_);
 }
 
+void StatusPage::OnNavigatedFrom(Microsoft::UI::Xaml::Navigation::NavigationEventArgs const&) {
+    DismissBindingSuccess();
+}
+
+void StatusPage::DismissBindingSuccess() {
+    if (success_) success_.IsOpen(false);
+}
+
 void StatusPage::Update(unlock_windows::desktop_app::DashboardSnapshot const& snapshot) {
     hostBusy_ = snapshot.busy;
     const bool known = snapshot.binding.has_value();
     const bool bound = snapshot.binding && snapshot.binding->state == unlock_windows::system_ble::BindingState::bound;
+    if (known && !bound && binding_ && binding_->state == unlock_windows::system_ble::BindingState::bound)
+        DismissBindingSuccess();
     if (!bound || snapshot.busy || Busy() || stopped_) removalFlyout_.Hide();
     lastUnlockCard_.Visibility(bound ? Visibility::Visible : Visibility::Collapsed);
     lastUnlockText_.Text(unlock_windows::desktop_app::lastUnlockText(snapshot.lastUnlock, GetTickCount64()));
@@ -187,7 +209,12 @@ void StatusPage::EnsureBindingView() {
         if (auto page = weak.get(); page && !page->stopped_) {
             page->resetBindingView_ = binding.state != unlock_windows::system_ble::BindingState::bound;
             page->saveError_.clear();
-            page->refreshSnapshot_(page->resetBindingView_);
+            if (page->resetBindingView_) page->DismissBindingSuccess();
+            else {
+                page->success_.Visibility(Visibility::Visible);
+                page->success_.IsOpen(true);
+            }
+            page->refreshSnapshot_(true);
         }
     });
     statusPanel_.Children().InsertAt(statusPanel_.Children().Size() - 1, bindingView_->content);

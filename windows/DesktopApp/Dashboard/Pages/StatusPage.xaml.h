@@ -12,6 +12,8 @@ namespace winrt::UnlockDesktop::implementation {
 struct StatusPage : StatusPageT<StatusPage> {
     StatusPage() = default;
     void OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEventArgs const& args);
+    void OnNavigatedFrom(Microsoft::UI::Xaml::Navigation::NavigationEventArgs const& args);
+    void DismissBindingSuccess();
     void Update(unlock_windows::desktop_app::DashboardSnapshot const& snapshot);
     void Stop();
     void Refresh();
@@ -25,7 +27,7 @@ private:
     Microsoft::UI::Xaml::Controls::TextBlock lastUnlockText_{nullptr};
     Microsoft::UI::Xaml::Controls::Border lastUnlockCard_{nullptr};
     Microsoft::UI::Xaml::Controls::Border thresholdCard_{nullptr}, removalCard_{nullptr};
-    Microsoft::UI::Xaml::Controls::InfoBar error_{nullptr};
+    Microsoft::UI::Xaml::Controls::InfoBar success_{nullptr}, error_{nullptr};
     Microsoft::UI::Xaml::Controls::Slider threshold_{nullptr};
     Microsoft::UI::Xaml::Controls::TextBlock thresholdText_{nullptr};
     Microsoft::UI::Xaml::Controls::Button save_{nullptr}, remove_{nullptr};

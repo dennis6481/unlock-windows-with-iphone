@@ -433,7 +433,7 @@ struct Session::State final : std::enable_shared_from_this<State> {
                 report(std::string("Protected preparation invalidated by GATT services change: ") + error.what());
             } catch (const hresult_error& error) {
                 const auto code = error.code();
-                if ((code == RO_E_CLOSED || code == HRESULT_FROM_WIN32(ERROR_CANCELLED)) && preparationChanged()) {
+                if ((code == RO_E_CLOSED || code == E_ABORT || code == HRESULT_FROM_WIN32(ERROR_CANCELLED)) && preparationChanged()) {
                     report("Protected preparation operation invalidated after GATT services change; HRESULT=" +
                         std::to_string(static_cast<std::uint32_t>(code.value)) + ": " + winrt::to_string(error.message()));
                 } else {
@@ -529,7 +529,7 @@ struct Session::State final : std::enable_shared_from_this<State> {
             subscribed = false;
             bool obsolete;
             { std::lock_guard lock(mutex); obsolete = structureRevision != revision; }
-            if (error.code() != RO_E_CLOSED || !obsolete) throw;
+            if (!obsolete || (error.code() != RO_E_CLOSED && error.code() != E_ABORT)) throw;
             report("CCCD cleanup: obsolete source already closed after structure invalidation; discard it");
         } catch (...) { subscribed = false; throw; }
     }

@@ -469,6 +469,7 @@ public:
                     response.result = Result::success;
                     return response;
                 }
+                change.candidate.threshold = unlock_windows::system_ble::kDefaultThreshold;
                 queueTask(provisioning_->identity, console, std::move(change), true);
                 if (!encodeAuthenticationStatus(managementStatus_, response.payload)) fail("binding task status encoding failed");
                 response.result = Result::success;
@@ -946,7 +947,8 @@ private:
                             (!task->cancelEvent.value || WaitForSingleObject(task->cancelEvent.value, 0) == WAIT_TIMEOUT) &&
                             task->consoleGeneration == gConsoleGeneration.load() &&
                             task->identityGeneration == gIdentityGeneration.load();
-                    });
+                    }, task->binding ? unlock_windows::system_ble::VerificationPurpose::binding :
+                        unlock_windows::system_ble::VerificationPurpose::unlock);
                     connection->verify();
                     {
                         std::lock_guard lock(mutex_);

@@ -26,8 +26,7 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
     Microsoft::UI::Dispatching::DispatcherQueue dispatcher{nullptr};
     StackPanel root{nullptr};
     ListView devices{nullptr};
-    Slider threshold{nullptr};
-    TextBlock thresholdText{nullptr}, status{nullptr};
+    TextBlock status{nullptr};
     Button bind{nullptr}, settings{nullptr};
     TextBlock empty{nullptr};
     std::map<std::wstring, DeviceInformation> items;
@@ -138,7 +137,7 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
     void start(bool clear = false) {
         if (busy || stopping) return;
         remove = clear;
-        busy = true; bind.IsEnabled(false); threshold.IsEnabled(false); devices.IsEnabled(false);
+        busy = true; bind.IsEnabled(false); devices.IsEnabled(false);
         reportError(L""); message(L"");
         run();
     }
@@ -181,10 +180,10 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
                 if (!bleItem || !bleItem.Pairing().IsPaired())
                     throw hresult_error(E_FAIL, L"The selected BLE endpoint is no longer paired. Pair it in Windows Bluetooth settings, then select it again.");
                 BindingChange change{original, {target.sid, {}, std::wstring(bleItem.Id()),
-                    {}, std::wstring(bleItem.Name()), static_cast<int>(threshold.Value())}, eventName};
+                    {}, std::wstring(bleItem.Name()), system_ble::kDefaultThreshold}, eventName};
                 dialog = ContentDialog{}; dialog.XamlRoot(dialogRoot());
                 dialog.Title(box_value(L"Bind selected iPhone?"));
-                dialog.Content(box_value(hstring(change.candidate.displayName + L"\nThe service will verify pairing, protected BLE communication and RSSI before saving.")));
+                dialog.Content(box_value(hstring(change.candidate.displayName + L"\nThe service will verify pairing and protected BLE communication before saving.")));
                 dialog.PrimaryButtonText(L"Confirm binding"); dialog.CloseButtonText(L"Cancel");
                 dialog.DefaultButton(ContentDialogButton::Close);
                 if (co_await dialog.ShowAsync() == ContentDialogResult::Primary) {
@@ -214,7 +213,7 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
         co_await foreground;
         if (!failure.empty()) { message(failure); reportError(failure); }
         busy = false; dialog = nullptr;
-        bind.IsEnabled(!selectedKey.empty()); threshold.IsEnabled(true); devices.IsEnabled(true);
+        bind.IsEnabled(!selectedKey.empty()); devices.IsEnabled(true);
         if (stopping && !scanning) finish(); else if (!stopping) scan();
         if (bindingChanged && failure.empty() && !stopping) {
             try { changed(original); }
@@ -240,8 +239,8 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
         if (target.locked || target.sid != system_ble::EnrollmentStore::currentUserSid() || enrollment::elevatedAdmin())
             throw hresult_error(E_ACCESSDENIED, L"Bind from the ordinary target user's unlocked physical console");
         cancelEvent = enrollment::createCancellation(target.sid, eventName);
-        root = StackPanel{}; devices = ListView{}; threshold = Slider{};
-        thresholdText = TextBlock{}; status = TextBlock{}; empty = TextBlock{};
+        root = StackPanel{}; devices = ListView{};
+        status = TextBlock{}; empty = TextBlock{};
         bind = Button{}; settings = Button{};
         root.Spacing(12);
         auto card = Markup::XamlReader::Load(LR"(<Border
@@ -263,20 +262,12 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
         root.Children().Append(devices);
         empty.Text(L"No paired BLE devices found. Pair your iPhone in Windows Bluetooth settings, then return here.");
         empty.TextWrapping(TextWrapping::Wrap); root.Children().Append(empty);
-        threshold.Minimum(system_ble::kMinimumThreshold); threshold.Maximum(system_ble::kMaximumThreshold);
-        threshold.StepFrequency(system_ble::kThresholdStep); threshold.Value(system_ble::kDefaultThreshold);
-        thresholdText.Text(to_hstring(system_ble::kDefaultThreshold) + L" dBm");
-        Automation::AutomationProperties::SetName(threshold, L"Initial signal threshold in dBm");
         bind.Content(box_value(L"Bind selected device")); bind.IsEnabled(false);
         bind.Style(Application::Current().Resources().Lookup(box_value(L"AccentButtonStyle")).as<Style>());
-        root.Children().Append(signalThresholdCard(L"Initial signal threshold", thresholdText, threshold));
         bind.HorizontalAlignment(HorizontalAlignment::Right);
         root.Children().Append(bind);
         status.TextWrapping(TextWrapping::Wrap); root.Children().Append(status);
         const auto weak = weak_from_this();
-        threshold.ValueChanged([weak](const auto&, const auto&) {
-            if (auto self = weak.lock()) self->thresholdText.Text(to_hstring(static_cast<int>(self->threshold.Value())) + L" dBm");
-        });
         devices.SelectionChanged([weak](const auto&, const auto&) {
             if (auto self = weak.lock(); self && !self->rendering) {
                 if (auto choice = self->devices.SelectedItem().try_as<ListViewItem>()) self->selectedKey = std::wstring(unbox_value<hstring>(choice.Tag()));

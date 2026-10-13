@@ -53,6 +53,7 @@ struct Session::State final : std::enable_shared_from_this<State> {
     mutable std::mutex reportMutex;
     mutable std::mutex mutex;
     Evidence proof;
+    VerificationPurpose purpose = VerificationPurpose::unlock;
     Failure transportFailure = Failure::none;
     const char* failureDetail = "BLE evidence invalidated";
     std::uint64_t revision = 0, structureRevision = 0, address = 0;
@@ -84,12 +85,13 @@ struct Session::State final : std::enable_shared_from_this<State> {
     State(BindingRecord value, std::function<void(const std::string&)> report)
         : binding(std::move(value)), reporter(std::move(report)) {}
 
-    void beginRequest(std::uint64_t at, std::function<bool()> predicate) {
+    void beginRequest(std::uint64_t at, std::function<bool()> predicate, VerificationPurpose requestPurpose) {
         std::lock_guard lock(mutex);
         if (requestActive) throw VerificationError(Failure::internalError, "BLE request already active");
         started = at;
         deadline = at + kOperationLifetimeMs;
         valid = std::move(predicate);
+        purpose = requestPurpose;
         proof = {};
         if (transportFailure == Failure::none) failureDetail = "BLE evidence invalidated";
         requestActive = true;
@@ -202,7 +204,8 @@ struct Session::State final : std::enable_shared_from_this<State> {
     }
 
     void open() {
-        report("Verify paired BLE endpoint; threshold=" + std::to_string(binding.threshold) + " dBm");
+        report(purpose == VerificationPurpose::binding ? "Verify paired BLE endpoint for binding; RSSI not required" :
+            "Verify paired BLE endpoint; threshold=" + std::to_string(binding.threshold) + " dBm");
         report("Requested target; BLEId=" + winrt::to_string(binding.bleId));
         if (!bleWatch.watcher) watchEndpoint();
         auto nextReport = GetTickCount64();
@@ -292,7 +295,11 @@ struct Session::State final : std::enable_shared_from_this<State> {
                 } catch (...) { self->invalidate(Failure::connectionLost, "GATT session status callback failed"); }
             }
         });
+    }
+
+    void startRssi() {
         currentAddress();
+        const std::weak_ptr<State> weak = shared_from_this();
         advertisements = BluetoothLEAdvertisementWatcher();
         received = advertisements.Received(auto_revoke, [weak](const auto&, const BluetoothLEAdvertisementReceivedEventArgs& args) {
             if (const auto self = weak.lock()) {
@@ -408,6 +415,7 @@ struct Session::State final : std::enable_shared_from_this<State> {
     void verify() {
         check("BLE request start");
         open();
+        if (purpose == VerificationPurpose::unlock) startRssi();
         if (device.ConnectionStatus() != BluetoothConnectionStatus::Connected || session.SessionStatus() != GattSessionStatus::Active) {
             const auto at = GetTickCount64();
             report("BEGIN BLE/GATT connection readiness wait within original deadline");
@@ -418,7 +426,7 @@ struct Session::State final : std::enable_shared_from_this<State> {
             report("END BLE/GATT connection readiness wait elapsedMs=" + std::to_string(GetTickCount64() - at));
         }
         check("connected service structure preparation");
-        currentAddress();
+        if (purpose == VerificationPurpose::unlock) currentAddress();
         const auto preparationChanged = [this] {
             check("protected preparation invalidation");
             std::lock_guard lock(mutex);
@@ -453,6 +461,13 @@ struct Session::State final : std::enable_shared_from_this<State> {
         bool waiting = false;
         for (;;) {
             refresh();
+            if (purpose == VerificationPurpose::binding) {
+                const auto result = evidence();
+                if (result.failure != Failure::none)
+                    throw VerificationError(result.failure, "Binding communication evidence rejected");
+                report("Binding protected communication evidence verified; RSSI not required");
+                return;
+            }
             Evidence sample;
             { std::lock_guard lock(mutex); sample = proof; }
             if (freshEvidence(sample.rssiAt, started, GetTickCount64())) {
@@ -490,21 +505,23 @@ struct Session::State final : std::enable_shared_from_this<State> {
         try {
             if (result.failure == Failure::none && (!device || device.ConnectionStatus() != BluetoothConnectionStatus::Connected))
                 result.failure = Failure::connectionLost;
-            else if (result.failure == Failure::none && (device.BluetoothAddress() != address || device.BluetoothAddressType() != addressType))
+            else if (result.failure == Failure::none && purpose == VerificationPurpose::unlock &&
+                (device.BluetoothAddress() != address || device.BluetoothAddressType() != addressType))
                 result.failure = Failure::rssiUnavailable;
         } catch (...) { result.failure = Failure::connectionLost; }
         const auto now = GetTickCount64();
         if (result.failure == Failure::none && !freshEvidence(result.communicationAt, started, now))
             result.failure = Failure::evidenceExpired;
-        if (result.failure == Failure::none && !freshEvidence(result.rssiAt, started, now))
+        if (result.failure == Failure::none && purpose == VerificationPurpose::unlock && !freshEvidence(result.rssiAt, started, now))
             result.failure = result.rssiAt ? Failure::evidenceExpired : Failure::rssiUnavailable;
-        if (result.failure == Failure::none && result.rssi < binding.threshold) result.failure = Failure::rssiTooLow;
+        if (result.failure == Failure::none && purpose == VerificationPurpose::unlock && result.rssi < binding.threshold)
+            result.failure = Failure::rssiTooLow;
         return result;
     }
 
     void refresh() {
         check();
-        currentAddress();
+        if (purpose == VerificationPurpose::unlock) currentAddress();
         if (device.ConnectionStatus() != BluetoothConnectionStatus::Connected)
             throw VerificationError(Failure::connectionLost, "BLE disconnected");
         std::lock_guard lock(mutex);
@@ -536,6 +553,8 @@ struct Session::State final : std::enable_shared_from_this<State> {
 
     void endRequest() {
         { std::lock_guard lock(mutex); requestActive = false; proof = {}; preparing = true; }
+        received.revoke(); stopped.revoke();
+        if (advertisements) { advertisements.Stop(); advertisements = nullptr; }
         unsubscribe();
         valid = {};
         bool changed;
@@ -548,8 +567,6 @@ struct Session::State final : std::enable_shared_from_this<State> {
         { std::lock_guard lock(reportMutex); reporter = {}; }
         std::exception_ptr cleanupError;
         try { endRequest(); } catch (...) { cleanupError = std::current_exception(); }
-        received.revoke(); stopped.revoke();
-        if (advertisements) { advertisements.Stop(); advertisements = nullptr; }
         stopWatch(bleWatch);
         connection.revoke(); services.revoke(); sessionStatus.revoke();
         discardStructure();
@@ -572,7 +589,9 @@ Session::~Session() {
 }
 void Session::verify() { state_->verify(); }
 void Session::prepare(std::uint64_t started, std::function<bool()> valid) { state_->prepare(started, std::move(valid)); }
-void Session::beginRequest(std::uint64_t started, std::function<bool()> valid) { state_->beginRequest(started, std::move(valid)); }
+void Session::beginRequest(std::uint64_t started, std::function<bool()> valid, VerificationPurpose purpose) {
+    state_->beginRequest(started, std::move(valid), purpose);
+}
 void Session::endRequest() { state_->endRequest(); }
 void Session::refresh() { state_->refresh(); }
 void Session::close() { state_->close(); }

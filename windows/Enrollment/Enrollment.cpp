@@ -9,6 +9,7 @@
 #include <winrt/Windows.System.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
+#include <winrt/Microsoft.UI.Xaml.Data.h>
 #include <map>
 #include <chrono>
 
@@ -28,6 +29,8 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
     ListView devices{nullptr};
     TextBlock status{nullptr};
     Button bind{nullptr}, settings{nullptr};
+    ProgressRing bindingProgress{nullptr};
+    TextBlock bindText{nullptr};
     TextBlock empty{nullptr};
     std::map<std::wstring, DeviceInformation> items;
     struct Choice { std::wstring endpointId, name; };
@@ -190,7 +193,10 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
                     dialog = nullptr; check(ticket);
                     SensitiveBytes bytes;
                     if (!encodeBindingChange(change, bytes)) throw hresult_error(E_INVALIDARG, L"Invalid system binding");
-                    message(L"Waiting for UAC and independent service verification…");
+                    bindText.Text(L"Binding\u2026");
+                    Automation::AutomationProperties::SetName(bind, L"Binding in progress");
+                    bindingProgress.Visibility(Visibility::Visible);
+                    bindingProgress.IsActive(true);
                     co_await resume_background(); enrollment::manageBinding(Operation::beginBinding, bytes); co_await foreground;
                     for (;;) {
                         check(ticket); co_await resume_background();
@@ -213,7 +219,11 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
         co_await foreground;
         if (!failure.empty()) { message(failure); reportError(failure); }
         busy = false; dialog = nullptr;
-        bind.IsEnabled(!selectedKey.empty()); devices.IsEnabled(true);
+        bindingProgress.IsActive(false);
+        bindingProgress.Visibility(Visibility::Collapsed);
+        bindText.Text(L"Bind selected device");
+        Automation::AutomationProperties::SetName(bind, L"Bind selected device");
+        bind.IsEnabled(!selectedKey.empty() && !stopping); devices.IsEnabled(true);
         if (stopping && !scanning) finish(); else if (!stopping) scan();
         if (bindingChanged && failure.empty() && !stopping) {
             try { changed(original); }
@@ -261,12 +271,33 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
         root.Children().Append(devices);
         empty.Text(L"No paired BLE devices found. Pair your iPhone in Windows Bluetooth settings, then return here.");
         empty.TextWrapping(TextWrapping::Wrap); root.Children().Append(empty);
-        bind.Content(box_value(L"Bind selected device")); bind.IsEnabled(false);
+        StackPanel bindContent;
+        bindContent.Orientation(Orientation::Horizontal); bindContent.Spacing(8);
+        bindingProgress = ProgressRing{};
+        bindingProgress.Width(20); bindingProgress.Height(20);
+        bindingProgress.IsIndeterminate(true); bindingProgress.IsActive(false);
+        bindingProgress.Visibility(Visibility::Collapsed);
+        bindingProgress.VerticalAlignment(VerticalAlignment::Center);
+        bindText = text(L"Bind selected device");
+        bindText.VerticalAlignment(VerticalAlignment::Center);
+        bindContent.Children().Append(bindingProgress); bindContent.Children().Append(bindText);
+        bind.Content(bindContent); bind.IsEnabled(false);
+        Automation::AutomationProperties::SetName(bind, L"Bind selected device");
         bind.Style(Application::Current().Resources().Lookup(box_value(L"AccentButtonStyle")).as<Style>());
         bind.HorizontalAlignment(HorizontalAlignment::Right);
         root.Children().Append(bind);
         status.TextWrapping(TextWrapping::Wrap); root.Children().Append(status);
         const auto weak = weak_from_this();
+        bind.Loaded([weak](const auto&, const auto&) {
+            if (auto self = weak.lock()) {
+                // The official button template applies state/theme colors to its ContentPresenter.
+                Data::Binding foreground;
+                foreground.Source(Media::VisualTreeHelper::GetChild(self->bind, 0).as<ContentPresenter>());
+                foreground.Path(PropertyPath(L"Foreground"));
+                foreground.Mode(Data::BindingMode::OneWay);
+                self->bindText.SetBinding(TextBlock::ForegroundProperty(), foreground);
+            }
+        });
         devices.SelectionChanged([weak](const auto&, const auto&) {
             if (auto self = weak.lock(); self && !self->rendering) {
                 if (auto choice = self->devices.SelectedItem().try_as<ListViewItem>()) self->selectedKey = std::wstring(unbox_value<hstring>(choice.Tag()));

@@ -27,14 +27,24 @@ struct VerificationError final : std::runtime_error {
     VerificationError(Failure value, const char* message) : std::runtime_error(message), reason(value) {}
 };
 
-struct Evidence final {
+struct CommunicationEvidence final {
     Failure failure = Failure::none;
     std::uint64_t communicationAt = 0;
-    std::uint64_t rssiAt = 0;
-    int rssi = -127;
+    std::uint64_t revision = 0;
 };
 
-enum class VerificationPurpose { unlock, binding };
+inline Failure communicationFailure(const CommunicationEvidence& proof, std::uint64_t started, std::uint64_t now) noexcept {
+    if (proof.failure != Failure::none) return proof.failure;
+    return freshEvidence(proof.communicationAt, started, now) ? Failure::none : Failure::evidenceExpired;
+}
+
+struct ConnectionTarget final {
+    std::wstring endpointId;
+    std::uint64_t address = 0;
+    winrt::Windows::Devices::Bluetooth::BluetoothAddressType addressType{};
+    std::uint64_t revision = 0;
+    bool operator==(const ConnectionTarget&) const = default;
+};
 
 class PreparationState final {
 public:
@@ -52,21 +62,22 @@ private:
 
 class Session final {
 public:
-    Session(BindingRecord binding,
+    Session(std::wstring endpointId,
         std::function<void(const std::string&)> report = {});
     ~Session();
     Session(const Session&) = delete;
     Session& operator=(const Session&) = delete;
     void prepare(std::uint64_t started, std::function<bool()> valid);
-    void beginRequest(std::uint64_t started, std::function<bool()> valid,
-        VerificationPurpose purpose = VerificationPurpose::unlock);
+    void beginRequest(std::uint64_t started, std::function<bool()> valid);
     void endRequest();
-    void verify();
+    void connect();
+    void verifyCommunication();
     void refresh();
     void close();
     bool healthy() const;
     std::uint64_t revision() const;
-    Evidence evidence() const;
+    CommunicationEvidence evidence() const;
+    ConnectionTarget target() const;
 private:
     struct State;
     std::shared_ptr<State> state_;

@@ -13,7 +13,9 @@
 
 The user explicitly clicks **Unlock** on the PC. The phone needs no fresh Face ID, Touch ID, tap or app interaction. Locking the PC alone does not initiate unlock.
 
-The service checks the selected system-paired BLE endpoint ID, authenticated Secure Connections pairing records, fresh protected ANCS/CCCD operations and current address/type-associated RSSI. Full account identity, request, binding, connection, session, logon and lock generation remain bound to one short-lived, single-use authorization.
+For unlock, the service checks the selected system-paired BLE endpoint ID, authenticated Secure Connections pairing records, fresh protected ANCS/CCCD operations and current address/type-associated RSSI. Full account identity, request, binding, connection, session, logon and lock generation remain bound to one short-lived, single-use authorization.
+
+Binding verifies secure pairing and fresh protected communication without starting RSSI collection or authorizing password release. RSSI collection has separate request-local evidence; samples from another endpoint, address/type, connection revision or request cannot authorize unlock.
 
 Connections and Windows-cached service structure may persist across unlocks. They are not authorization: every request resets its evidence and performs new protected operations. Background connection/reconnection never releases credentials.
 

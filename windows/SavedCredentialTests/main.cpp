@@ -625,22 +625,43 @@ void testPresenceContracts() {
     require(authenticationExpiry(30'000, 30'000, true, true) == AuthenticationFailure::expired &&
         authenticationExpiry(1, 30'000, false, true) == AuthenticationFailure::sessionChanged &&
         authenticationExpiry(1, 30'000, true, false) == AuthenticationFailure::sessionChanged, "deadline and console boundary must reject");
-    const Evidence fresh{Failure::none, 10'000, 10'000, kDefaultThreshold};
+    const ConnectionTarget target{L"selected-ble-id", 42, winrt::Windows::Devices::Bluetooth::BluetoothAddressType::Random, 7};
+    const PresenceEvidence fresh{{Failure::none, 10'000, 7}, {Failure::none, 9'000, 10'000, kDefaultThreshold, target}, target};
     PresenceAuthorization oneTime;
     require(!oneTime.consume(false, fresh, 9'000, 10'001, 39'000, kDefaultThreshold), "wrong request/registration/connection/account/session context must reject");
     require(oneTime.consume(true, fresh, 9'000, 10'001, 39'000, kDefaultThreshold), "current evidence at threshold must authorize once");
     require(!oneTime.consume(true, fresh, 9'000, 10'002, 39'000, kDefaultThreshold), "duplicate credential claim must reject");
-    for (auto proof : {Evidence{Failure::none, 8'999, 10'000, -50}, Evidence{Failure::none, 10'000, 8'999, -50},
-            Evidence{Failure::none, 10'000, 0, -50}, Evidence{Failure::none, 10'000, 10'000, kDefaultThreshold - 1},
-            Evidence{Failure::connectionLost, 10'000, 10'000, -50}}) {
+    for (unsigned scenario = 0; scenario < 14; ++scenario) {
+        auto proof = fresh;
+        switch (scenario) {
+        case 0: proof.communication.communicationAt = 8'999; break;
+        case 1: proof.proximity.sampledAt = 8'999; break;
+        case 2: proof.proximity.sampledAt = 0; break;
+        case 3: proof.proximity.rssi = kDefaultThreshold - 1; break;
+        case 4: proof.communication.failure = Failure::connectionLost; break;
+        case 5: ++proof.target.address; break;
+        case 6: proof.target.addressType = winrt::Windows::Devices::Bluetooth::BluetoothAddressType::Public; break;
+        case 7: ++proof.target.revision; break;
+        case 8: proof.target.endpointId = L"other-ble-id"; break;
+        case 9: proof.communication.revision = 6; break;
+        case 10: proof.proximity.started = 8'000; break;
+        case 11: proof.proximity.sampledAt = 10'002; break;
+        case 12: proof.communication.failure = Failure::protectedOperationFailed; break;
+        case 13: proof.proximity.failure = Failure::rssiUnavailable; break;
+        }
         PresenceAuthorization rejected;
-        require(!rejected.consume(true, proof, 9'000, 10'001, 39'000, kDefaultThreshold), "cached, missing, low or disconnected evidence must reject");
+        require(!rejected.consume(true, proof, 9'000, 10'001, 39'000, kDefaultThreshold),
+            "stale, missing, low, mismatched, failed or disconnected evidence must reject");
     }
     PresenceAuthorization expired;
     require(!expired.consume(true, fresh, 9'000, 13'001, 39'000, kDefaultThreshold), "communication and RSSI older than three seconds must reject");
     require(!expired.consume(true, fresh, 9'000, 10'001, 10'001, kDefaultThreshold), "request deadline must not extend");
     require(!freshEvidence(10'002, 9'000, 10'001), "future/late evidence must reject");
     require(!freshEvidence(0, 0, 1), "missing evidence must reject even at the clock origin");
+    require(presenceFailure(fresh, 9'000, 13'000, 39'000, kDefaultThreshold) == Failure::none,
+        "three-second evidence boundary remains accepted");
+    require(presenceFailure(fresh, 9'000, 10'001, 39'000, 0) == Failure::internalError,
+        "invalid unlock thresholds must reject");
     Packet packet;
     auto wire = packetBytes(packet);
     wire[4] = static_cast<std::uint8_t>(kProtocolVersion + 1); wire[5] = 0;
@@ -648,6 +669,54 @@ void testPresenceContracts() {
     writeBytes(pipe.client.get(), wire.data(), static_cast<DWORD>(wire.size()));
     require(!readPacket(pipe.server.get(), packet, testContext()) && GetLastError() == ERROR_INVALID_DATA,
         "unsupported packet versions must reject");
+}
+
+void testRssiSamples() {
+    using namespace unlock_windows::system_ble;
+    using winrt::Windows::Devices::Bluetooth::BluetoothAddressType;
+    const ConnectionTarget target{L"selected-ble-id", 42, BluetoothAddressType::Random, 7};
+    const CommunicationEvidence communication{Failure::none, 10'000, 7};
+    detail::RssiSamples samples(target, 9'000);
+    require(communicationFailure(communication, 9'000, 10'001) == Failure::none && samples.evidence(target).sampledAt == 0,
+        "binding communication can succeed without any RSSI sample");
+    require(communicationFailure(communication, 9'000, 13'001) == Failure::evidenceExpired,
+        "binding still rejects expired communication");
+    require(communicationFailure({Failure::bondRejected, 10'000, 7}, 9'000, 10'001) == Failure::bondRejected,
+        "binding still rejects an invalid secure bond");
+    samples.record(43, BluetoothAddressType::Random, 10'000, -50, 10'001);
+    samples.record(42, BluetoothAddressType::Public, 10'000, -50, 10'001);
+    samples.record(42, BluetoothAddressType::Random, 8'999, -50, 10'001);
+    samples.record(42, BluetoothAddressType::Random, 10'002, -50, 10'001);
+    samples.record(42, BluetoothAddressType::Random, 10'000, 0, 10'001);
+    require(samples.evidence(target).sampledAt == 0, "wrong targets, old/future timestamps and invalid signals cannot create evidence");
+    samples.record(42, BluetoothAddressType::Random, 10'000, -50, 10'001);
+    samples.record(42, BluetoothAddressType::Random, 9'999, -80, 10'001);
+    require(samples.evidence(target).rssi == -50, "a delayed sample cannot replace newer evidence");
+    auto changed = target;
+    ++changed.revision;
+    require(samples.evidence(changed).sampledAt == 0, "reading against a changed connection rejects old samples before target update");
+    samples.updateTarget(changed, 10'100);
+    samples.record(42, BluetoothAddressType::Random, 10'000, -50, 10'101);
+    require(samples.evidence(changed).sampledAt == 0, "a previous connection's queued advertisement cannot refill cleared evidence");
+    samples.record(42, BluetoothAddressType::Random, 10'100, -55, 10'101);
+    require(samples.evidence(changed).rssi == -55, "fresh evidence can be collected after a target revision change");
+    changed.address = 43;
+    samples.updateTarget(changed, 10'200);
+    require(samples.evidence(changed).sampledAt == 0, "address rotation clears the old sample");
+    samples.fail();
+    require(samples.evidence(changed).failure == Failure::rssiUnavailable &&
+        communicationFailure(communication, 9'000, 10'201) == Failure::none,
+        "RSSI collection failure does not invalidate protected communication");
+    samples.stop();
+    detail::RssiSamples next(changed, 10'300);
+    samples.record(43, BluetoothAddressType::Random, 10'301, -40, 10'302);
+    samples.fail();
+    require(samples.evidence(changed).failure == Failure::cancelled && samples.evidence(changed).sampledAt == 0 &&
+        next.evidence(changed).failure == Failure::none && next.evidence(changed).sampledAt == 0,
+        "callbacks from a stopped request cannot revive its evidence or modify the next request");
+    next.record(43, BluetoothAddressType::Random, 10'301, -40, 10'302);
+    next.updateTarget(changed, 10'303);
+    require(next.evidence(changed).sampledAt == 10'301, "an unchanged target preserves a current sample");
 }
 
 struct EndpointFixture : winrt::implements<EndpointFixture, winrt::Windows::Devices::Enumeration::IDeviceInformation> {
@@ -776,6 +845,7 @@ int main() {
     testAutoSubmitOffer();
     testAuthenticationOperationPackets();
     testPresenceContracts();
+    testRssiSamples();
     std::cout << "Saved credential protocol tests passed.\n";
     return EXIT_SUCCESS;
 }

@@ -4,6 +4,7 @@
 #undef GetCurrentTime
 #include <wtsapi32.h>
 #include "../Bluetooth/SystemBleSession.h"
+#include "../Bluetooth/PresenceAuthorization.h"
 #include <winrt/Windows.Devices.Bluetooth.h>
 #include <winrt/Windows.Devices.Bluetooth.Advertisement.h>
 #include <winrt/Windows.Devices.Bluetooth.GenericAttributeProfile.h>
@@ -117,22 +118,24 @@ IAsyncAction probe(const std::shared_ptr<Run> run, std::wstring target, int thre
     const auto cancellation = co_await get_cancellation_token();
     try {
         const auto ble = uniqueEndpoint(pairedEndpoints().get(), hstring(target));
-        BindingRecord record{L"diagnostic", {}, std::wstring(ble.Id()), {}, std::wstring(ble.Name()), threshold};
         run->log->write(L"BEGIN shared system BLE verification; selected BLE endpoint; threshold=" + std::to_wstring(threshold));
-        Session session(record, [run](const std::string& message) { run->log->write(std::wstring(winrt::to_hstring(message))); });
+        const auto report = [run](const std::string& message) { run->log->write(std::wstring(winrt::to_hstring(message))); };
+        Session session(std::wstring(ble.Id()), report);
+        RssiSampler sampler;
         session.beginRequest(run->started, [run, cancellation] {
             return !run->invalid && !cancellation() && generation.load() == run->ticket &&
                 WTSGetActiveConsoleSessionId() == consoleSession.load() && !run->log->failed;
         });
-        session.verify();
-        const auto proof = session.evidence();
+        verifyUnlockPresence(session, sampler, run->started, run->deadline, threshold, report);
+        const auto proof = presenceEvidence(session, sampler);
         run->log->write(L"Cached-mode ANCS structure and protected Uncached CCCD verification/unsubscribe completed; RSSI=" +
-            std::to_wstring(proof.rssi) + L" dBm; age=" + std::to_wstring(GetTickCount64() - proof.rssiAt) + L" ms");
+            std::to_wstring(proof.proximity.rssi) + L" dBm; age=" + std::to_wstring(GetTickCount64() - proof.proximity.sampledAt) + L" ms");
+        sampler.stop();
         session.close();
         require(!run->invalid && generation.load() == run->ticket && GetTickCount64() < run->deadline && !cancellation(),
             L"Diagnostic invalidated before completion");
-        require(proof.failure == Failure::none && freshEvidence(proof.communicationAt, run->started, GetTickCount64()) &&
-            freshEvidence(proof.rssiAt, run->started, GetTickCount64()), L"Evidence expired before diagnostic completion");
+        require(presenceFailure(proof, run->started, GetTickCount64(), run->deadline, threshold) == Failure::none,
+            L"Evidence expired before diagnostic completion");
         run->passed = true;
         run->log->write(L"PASS: diagnostic evidence only; no credential or Windows unlock was requested");
     } catch (...) { run->log->write(L"FAIL: " + exceptionText()); run->invalid = true; }

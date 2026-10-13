@@ -46,6 +46,16 @@ struct ConnectionTarget final {
     bool operator==(const ConnectionTarget&) const = default;
 };
 
+namespace detail {
+inline Failure communicationStateFailure(const CommunicationEvidence& proof, const ConnectionTarget& current,
+    const ConnectionTarget* expected = nullptr) noexcept {
+    if (proof.failure != Failure::none) return proof.failure;
+    if (!proof.communicationAt || proof.revision != current.revision) return Failure::protectedOperationFailed;
+    if (expected && *expected != current) return Failure::rssiUnavailable;
+    return Failure::none;
+}
+}
+
 class PreparationState final {
 public:
     void reset() noexcept { failed_ = false; }
@@ -77,6 +87,7 @@ public:
     bool healthy() const;
     std::uint64_t revision() const;
     CommunicationEvidence evidence() const;
+    CommunicationEvidence evidence(const ConnectionTarget& expected) const;
     ConnectionTarget target() const;
 private:
     struct State;

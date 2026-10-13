@@ -719,6 +719,219 @@ void testRssiSamples() {
     require(next.evidence(changed).sampledAt == 10'301, "an unchanged target preserves a current sample");
 }
 
+struct PresenceSessionFixture {
+    using Failure = unlock_windows::system_ble::Failure;
+    unlock_windows::system_ble::ConnectionTarget current{L"selected-ble-id", 42,
+        winrt::Windows::Devices::Bluetooth::BluetoothAddressType::Random, 7};
+    unlock_windows::system_ble::CommunicationEvidence proof{Failure::none, 10'000, 7};
+    std::uint64_t now = 10'001;
+    std::uint64_t started = 9'000;
+    std::uint64_t deadline = 39'000;
+    std::function<void()> onVerify;
+
+    unlock_windows::system_ble::ConnectionTarget target() const { return current; }
+    unlock_windows::system_ble::CommunicationEvidence currentEvidence(
+        const unlock_windows::system_ble::ConnectionTarget* expected = nullptr) const {
+        auto result = proof;
+        result.failure = unlock_windows::system_ble::detail::communicationStateFailure(result, current, expected);
+        if (result.failure == Failure::none && now >= deadline) result.failure = Failure::expired;
+        return result;
+    }
+    unlock_windows::system_ble::CommunicationEvidence evidence(
+        const unlock_windows::system_ble::ConnectionTarget& expected) const {
+        auto result = currentEvidence(&expected);
+        result.failure = unlock_windows::system_ble::communicationFailure(result, started, now);
+        return result;
+    }
+    void connect() { refresh(); }
+    void refresh() const {
+        if (now >= deadline) throw unlock_windows::system_ble::VerificationError(Failure::expired, "Fixture deadline");
+        if (proof.failure != Failure::none)
+            throw unlock_windows::system_ble::VerificationError(proof.failure, "Fixture invalidated");
+    }
+    void verifyCommunication() {
+        refresh();
+        if (onVerify) onVerify();
+        const auto result = currentEvidence();
+        if (result.failure != Failure::none)
+            throw unlock_windows::system_ble::VerificationError(result.failure, "Fixture communication invalidated");
+    }
+};
+
+struct PresenceSamplerFixture {
+    PresenceSessionFixture& session;
+    mutable std::optional<unlock_windows::system_ble::detail::RssiSamples> samples;
+    std::function<void()> beforeEvidence, afterEvidence;
+    bool recordSamples = true;
+    int rssi = unlock_windows::system_ble::kDefaultThreshold;
+
+    void start(unlock_windows::system_ble::ConnectionTarget target, std::uint64_t started) {
+        samples.emplace(std::move(target), started);
+    }
+    void updateTarget(unlock_windows::system_ble::ConnectionTarget target) {
+        samples->updateTarget(std::move(target), session.now);
+    }
+    unlock_windows::system_ble::RssiEvidence evidence(const unlock_windows::system_ble::ConnectionTarget& expected) const {
+        if (beforeEvidence) beforeEvidence();
+        if (recordSamples) samples->record(session.current.address, session.current.addressType, session.now, rssi, session.now);
+        const auto result = samples->evidence(expected);
+        if (afterEvidence) afterEvidence();
+        return result;
+    }
+};
+
+void testCommunicationStateAndFreshness() {
+    using namespace unlock_windows::system_ble;
+    PresenceSessionFixture session;
+    session.now = 13'001;
+    require(session.currentEvidence().failure == Failure::none,
+        "completed communication remains successful after slow unsubscribe");
+    require(session.evidence(session.current).failure == Failure::evidenceExpired,
+        "the same stale communication cannot authorize binding or a claim");
+    ++session.current.revision;
+    require(session.currentEvidence().failure == Failure::protectedOperationFailed,
+        "communication from an invalidated revision is a state failure, not renewable time expiry");
+    session.proof.failure = Failure::associationInvalid;
+    require(session.currentEvidence().failure == Failure::associationInvalid,
+        "the real failure takes precedence over revision mismatch and time expiry");
+    session.proof = {Failure::none, 0, session.current.revision};
+    require(session.currentEvidence().failure == Failure::protectedOperationFailed,
+        "missing communication is not a successful operation awaiting time renewal");
+}
+
+void testPresenceEvidenceInterleaving() {
+    using namespace unlock_windows::system_ble;
+    for (unsigned timing = 0; timing < 2; ++timing) {
+        for (unsigned scenario = 0; scenario < 8; ++scenario) {
+            PresenceSessionFixture session;
+            PresenceSamplerFixture sampler{session};
+            sampler.start(session.current, session.started);
+            const auto invalidate = [&] {
+                switch (scenario) {
+                case 0: ++session.current.revision; session.proof.failure = Failure::connectionLost; break;
+                case 1: ++session.current.revision; session.proof.failure = Failure::protectedOperationFailed; break;
+                case 2: ++session.current.address; break;
+                case 3: session.current.addressType = winrt::Windows::Devices::Bluetooth::BluetoothAddressType::Public; break;
+                case 4: ++session.current.revision; session.proof.revision = session.current.revision; break;
+                case 5: session.proof.failure = Failure::associationInvalid; break;
+                case 6: session.proof.failure = Failure::cancelled; break;
+                case 7: ++session.current.revision; break;
+                }
+            };
+            if (timing == 0) sampler.beforeEvidence = invalidate;
+            else sampler.afterEvidence = invalidate;
+            const auto evidence = detail::collectPresenceEvidence(session, sampler);
+            const auto expected = scenario == 0 ? Failure::connectionLost :
+                scenario == 1 || scenario == 7 ? Failure::protectedOperationFailed :
+                scenario == 5 ? Failure::associationInvalid : scenario == 6 ? Failure::cancelled : Failure::rssiUnavailable;
+            require(evidence.communication.failure == expected,
+                "final session validation must observe invalidation before or after the RSSI snapshot");
+            PresenceAuthorization authorization;
+            require(!authorization.consume(true, evidence, session.started, session.now, session.deadline, kDefaultThreshold),
+                "an interleaved state change must prevent consumption of the old combined evidence");
+        }
+    }
+}
+
+void testPresenceRenewal() {
+    using namespace unlock_windows::system_ble;
+    for (unsigned scenario = 0; scenario < 3; ++scenario) {
+        PresenceSessionFixture session;
+        PresenceSamplerFixture sampler{session};
+        unsigned verifications = 0;
+        session.onVerify = [&] {
+            ++verifications;
+            session.proof.communicationAt = session.now;
+            session.now += ((scenario == 0 && verifications == 1) || (scenario == 2 && verifications == 2)) ? 3'001 : 1;
+        };
+        bool delayed = false;
+        sampler.beforeEvidence = [&] {
+            if (scenario != 0 && !delayed) { session.now += 3'001; delayed = true; }
+        };
+        detail::verifyUnlockPresence(session, sampler, session.started, session.deadline, kDefaultThreshold, {},
+            [&] { return session.now; }, [&] { session.now += 20; });
+        require(verifications == (scenario == 2 ? 3u : 2u),
+            "both initially stale communication and a slow renewal must permit another verification");
+        const auto evidence = detail::collectPresenceEvidence(session, sampler);
+        PresenceAuthorization authorization;
+        require(authorization.consume(true, evidence, session.started, session.now, session.deadline, kDefaultThreshold) &&
+            !authorization.consume(true, evidence, session.started, session.now, session.deadline, kDefaultThreshold),
+            "renewed communication and current RSSI authorize exactly one claim");
+    }
+
+    const auto rejected = [](auto& session, auto& sampler) {
+        try {
+            detail::verifyUnlockPresence(session, sampler, session.started, session.deadline, kDefaultThreshold, {},
+                [&] { return session.now; }, [&] { session.now += 20; });
+        } catch (const VerificationError& error) { return error.reason; }
+        return Failure::none;
+    };
+    {
+        PresenceSessionFixture session;
+        PresenceSamplerFixture sampler{session};
+        session.onVerify = [&] { session.proof.communicationAt = session.now; session.now += 3'001; };
+        require(rejected(session, sampler) == Failure::expired && session.deadline == 39'000,
+            "repeated slow operations terminate at the original deadline without extending it");
+    }
+    {
+        PresenceSessionFixture session;
+        PresenceSamplerFixture sampler{session};
+        sampler.recordSamples = false;
+        require(rejected(session, sampler) == Failure::expired,
+            "missing RSSI waits only within the original deadline");
+    }
+    {
+        PresenceSessionFixture session;
+        PresenceSamplerFixture sampler{session};
+        sampler.rssi = kDefaultThreshold - 1;
+        unsigned verifications = 0;
+        session.onVerify = [&] { ++verifications; session.now += 3'001; };
+        require(rejected(session, sampler) == Failure::rssiTooLow && verifications == 1,
+            "fresh low RSSI rejects instead of renewing expired communication");
+    }
+    for (auto failure : {Failure::protectedOperationFailed, Failure::connectionLost, Failure::cancelled}) {
+        for (unsigned failedVerification : {1u, 2u}) {
+            PresenceSessionFixture session;
+            PresenceSamplerFixture sampler{session};
+            unsigned verifications = 0;
+            session.onVerify = [&] {
+                if (++verifications == failedVerification) session.proof.failure = failure;
+                else session.now += 3'001;
+            };
+            require(rejected(session, sampler) == failure && verifications == failedVerification,
+                "real failures during initial communication or renewal terminate without another attempt");
+        }
+    }
+    {
+        PresenceSessionFixture session;
+        PresenceSamplerFixture sampler{session};
+        sampler.recordSamples = false;
+        unsigned verifications = 0, waits = 0;
+        session.onVerify = [&] {
+            if (++verifications == 1) session.now += 3'001;
+            else session.proof.communicationAt = session.now;
+        };
+        detail::verifyUnlockPresence(session, sampler, session.started, session.deadline, kDefaultThreshold, {},
+            [&] { return session.now; }, [&] {
+                require(verifications == 1, "missing RSSI cannot trigger communication renewal");
+                ++waits; session.now += 20; sampler.recordSamples = true;
+            });
+        require(waits == 1 && verifications == 2, "communication renewal waits for a fresh qualifying RSSI sample");
+    }
+    {
+        PresenceSessionFixture session;
+        PresenceSamplerFixture sampler{session};
+        bool changed = false;
+        unsigned waits = 0, verifications = 0;
+        session.onVerify = [&] { ++verifications; };
+        sampler.afterEvidence = [&] { if (!changed) { ++session.current.address; changed = true; } };
+        detail::verifyUnlockPresence(session, sampler, session.started, session.deadline, kDefaultThreshold, {},
+            [&] { return session.now; }, [&] { ++waits; session.now += 20; });
+        require(waits == 1 && verifications == 1 && sampler.samples->evidence(session.current).target == session.current,
+            "a changed address requires a new sample without needless communication renewal");
+    }
+}
+
 struct EndpointFixture : winrt::implements<EndpointFixture, winrt::Windows::Devices::Enumeration::IDeviceInformation> {
     winrt::hstring endpointId;
     explicit EndpointFixture(winrt::hstring value) : endpointId(std::move(value)) {}
@@ -846,6 +1059,9 @@ int main() {
     testAuthenticationOperationPackets();
     testPresenceContracts();
     testRssiSamples();
+    testCommunicationStateAndFreshness();
+    testPresenceEvidenceInterleaving();
+    testPresenceRenewal();
     std::cout << "Saved credential protocol tests passed.\n";
     return EXIT_SUCCESS;
 }

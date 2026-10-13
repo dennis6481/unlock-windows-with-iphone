@@ -104,13 +104,17 @@ struct Session::State final : std::enable_shared_from_this<State> {
         }
     }
 
-    void check(const char* operation = "BLE evidence validation") const {
-        if (!valid()) throw VerificationError(Failure::cancelled, "Request invalidated");
+    void checkLocked(const char* operation = "BLE evidence validation") const {
         if (GetTickCount64() >= deadline)
             throw VerificationError(Failure::expired, (std::string("BLE deadline exceeded during ") + operation).c_str());
-        std::lock_guard lock(mutex);
         if (transportFailure != Failure::none) throw VerificationError(transportFailure, failureDetail);
         if (proof.failure != Failure::none) throw VerificationError(proof.failure, failureDetail);
+    }
+
+    void check(const char* operation = "BLE evidence validation") const {
+        if (!valid()) throw VerificationError(Failure::cancelled, "Request invalidated");
+        std::lock_guard lock(mutex);
+        checkLocked(operation);
     }
 
     template<class Operation> auto await(Operation operation, const char* name) {
@@ -406,31 +410,44 @@ struct Session::State final : std::enable_shared_from_this<State> {
             discardStructure();
         }
         refresh();
-        const auto result = evidence();
+        std::lock_guard lock(mutex);
+        const auto result = currentEvidenceLocked();
         if (result.failure != Failure::none)
             throw VerificationError(result.failure, "Protected communication evidence rejected");
     }
 
-    CommunicationEvidence evidence() const {
-        std::lock_guard lock(mutex);
+    // Caller holds mutex; time freshness belongs to evidence consumers.
+    CommunicationEvidence currentEvidenceLocked(const ConnectionTarget* expected = nullptr) const {
         auto result = proof;
         if (!requestActive) { result.failure = Failure::cancelled; return result; }
         if (closing) { result.failure = Failure::connectionLost; return result; }
-        if (transportFailure != Failure::none) result.failure = transportFailure;
         try {
-            if (result.failure == Failure::none && (!device || device.ConnectionStatus() != BluetoothConnectionStatus::Connected))
+            checkLocked();
+            if (!device || !session || device.ConnectionStatus() != BluetoothConnectionStatus::Connected ||
+                session.SessionStatus() != GattSessionStatus::Active)
                 result.failure = Failure::connectionLost;
-        } catch (...) { result.failure = Failure::connectionLost; }
-        if (result.failure == Failure::none && result.revision != revision) result.failure = Failure::evidenceExpired;
+            else result.failure = detail::communicationStateFailure(result, targetLocked(), expected);
+        } catch (const VerificationError& error) { result.failure = error.reason; }
+        catch (const hresult_error&) { result.failure = Failure::connectionLost; }
+        return result;
+    }
+
+    CommunicationEvidence evidence(const ConnectionTarget* expected = nullptr) const {
+        std::lock_guard lock(mutex);
+        auto result = currentEvidenceLocked(expected);
         result.failure = communicationFailure(result, started, GetTickCount64());
         return result;
     }
 
-    ConnectionTarget target() const {
-        std::lock_guard lock(mutex);
+    ConnectionTarget targetLocked() const {
         if (!device || closing) throw VerificationError(Failure::connectionLost, "BLE target unavailable");
         try { return {endpointId, device.BluetoothAddress(), device.BluetoothAddressType(), revision}; }
-        catch (...) { throw VerificationError(Failure::connectionLost, "Reading current BLE target failed"); }
+        catch (const hresult_error&) { throw VerificationError(Failure::connectionLost, "Reading current BLE target failed"); }
+    }
+
+    ConnectionTarget target() const {
+        std::lock_guard lock(mutex);
+        return targetLocked();
     }
 
     void refresh() {
@@ -510,5 +527,6 @@ void Session::close() { state_->close(); }
 bool Session::healthy() const { return state_->healthy(); }
 std::uint64_t Session::revision() const { std::lock_guard lock(state_->mutex); return state_->revision; }
 CommunicationEvidence Session::evidence() const { return state_->evidence(); }
+CommunicationEvidence Session::evidence(const ConnectionTarget& expected) const { return state_->evidence(&expected); }
 ConnectionTarget Session::target() const { return state_->target(); }
 }

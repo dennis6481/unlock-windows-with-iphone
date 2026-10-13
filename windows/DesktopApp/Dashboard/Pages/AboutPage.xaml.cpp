@@ -4,31 +4,56 @@
 #include "AboutPage.g.cpp"
 #include "PageControls.h"
 #include "../../../ProductVersion.h"
-#include "../../../Resources/resource.h"
 #include <winrt/Windows.Data.Json.h>
+#include <winrt/Microsoft.UI.Xaml.Automation.h>
 #include <winrt/Windows.Web.Http.h>
 #include <winrt/Windows.Web.Http.Headers.h>
 #include <utility>
 
 namespace winrt::UnlockDesktop::implementation {
 using namespace unlock_windows::desktop_app::dashboard_ui;
-namespace { constexpr wchar_t kProjectUrl[] = L"https://github.com/dennis6481/unlock-windows-with-iphone"; }
+namespace {
+constexpr wchar_t kProjectUrl[] = L"https://github.com/dennis6481/unlock-windows-with-iphone";
+
+HyperlinkButton externalLink(const wchar_t* label, const wchar_t* glyph, const std::wstring& url) {
+    auto link = Markup::XamlReader::Load(LR"(<HyperlinkButton
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+        HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
+        MinHeight="68" Padding="16"/>)").as<HyperlinkButton>();
+    Grid row;
+    ColumnDefinition iconColumn, labelColumn, launchColumn;
+    iconColumn.Width(automatic());
+    labelColumn.Width(star());
+    launchColumn.Width(automatic());
+    row.ColumnDefinitions().Append(iconColumn);
+    row.ColumnDefinitions().Append(labelColumn);
+    row.ColumnDefinitions().Append(launchColumn);
+    auto leadingIcon = icon(glyph);
+    leadingIcon.Margin({0, 0, 20, 0});
+    leadingIcon.VerticalAlignment(VerticalAlignment::Center);
+    auto caption = text(label);
+    caption.VerticalAlignment(VerticalAlignment::Center);
+    caption.Margin({0, 0, 16, 0});
+    auto launchIcon = icon(L"\xE8A7", 16);
+    launchIcon.VerticalAlignment(VerticalAlignment::Center);
+    Grid::SetColumn(caption, 1);
+    Grid::SetColumn(launchIcon, 2);
+    row.Children().Append(leadingIcon);
+    row.Children().Append(caption);
+    row.Children().Append(launchIcon);
+    link.Content(row);
+    link.NavigateUri(Windows::Foundation::Uri(url));
+    Automation::AutomationProperties::SetName(link, label);
+    return link;
+}
+}
 
 void AboutPage::OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEventArgs const&) {
     if (aboutPanel_) return;
     aboutPanel_ = StackPanel{};
-    aboutPanel_.Spacing(16);
-    aboutPanel_.Children().Append(text(UNLOCK_PRODUCT_DISPLAY_NAME, 24));
+    aboutPanel_.Spacing(24);
     const auto version = L"Version " + unlock::components::kProductVersion.text();
-    aboutPanel_.Children().Append(text(version.c_str()));
-    HyperlinkButton project;
-    project.Content(box_value(L"GitHub project"));
-    project.NavigateUri(Windows::Foundation::Uri(kProjectUrl));
-    aboutPanel_.Children().Append(project);
-    HyperlinkButton license;
-    license.Content(box_value(L"MIT License"));
-    license.NavigateUri(Windows::Foundation::Uri(std::wstring(kProjectUrl) + L"/blob/main/LICENSE.md"));
-    aboutPanel_.Children().Append(license);
     checkUpdates_ = Button{};
     checkUpdates_.Content(box_value(L"Check for updates"));
     checkUpdates_.Click([weak = get_weak()](const auto&, const auto&) {
@@ -36,6 +61,7 @@ void AboutPage::OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEventAr
             try {
                 page->checkUpdates_.IsEnabled(false);
                 page->updateStatus_.Text(L"Checking for updates...");
+                page->updateStatus_.Visibility(Visibility::Visible);
                 page->release_.Visibility(Visibility::Collapsed);
                 page->updateCheck_ = checkForUpdates(weak, page->DispatcherQueue(), page->reportError_);
             } catch (const hresult_error& error) {
@@ -45,13 +71,41 @@ void AboutPage::OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEventAr
             }
         }
     });
-    aboutPanel_.Children().Append(checkUpdates_);
+    auto versionCard = settingsCard(version.c_str(), checkUpdates_, L"\xE946", false);
+    StackPanel versionContent;
+    versionContent.Spacing(16);
+    const auto versionRow = versionCard.Child();
+    versionCard.Child(nullptr);
+    versionContent.Children().Append(versionRow);
     updateStatus_ = text(L"");
-    aboutPanel_.Children().Append(updateStatus_);
+    updateStatus_.Visibility(Visibility::Collapsed);
+    versionContent.Children().Append(updateStatus_);
     release_ = HyperlinkButton{};
     release_.Content(box_value(L"View release"));
     release_.Visibility(Visibility::Collapsed);
-    aboutPanel_.Children().Append(release_);
+    versionContent.Children().Append(release_);
+    versionCard.Child(versionContent);
+    aboutPanel_.Children().Append(versionCard);
+
+    auto linksCard = Markup::XamlReader::Load(LR"(<Border
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+        BorderThickness="1" CornerRadius="{ThemeResource ControlCornerRadius}"/>)").as<Border>();
+    StackPanel links;
+    for (const auto& link : {
+        externalLink(L"GitHub Page", L"\xE71B", kProjectUrl),
+        externalLink(L"MIT License", L"\xE8A5", std::wstring(kProjectUrl) + L"/blob/main/LICENSE.md"),
+        externalLink(L"Buy me a coffee", L"\xEB51", L"https://www.buymeacoffee.com/dennis6481")}) {
+        if (links.Children().Size()) {
+            links.Children().Append(Markup::XamlReader::Load(LR"(<Border
+                xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                Height="1" Background="{ThemeResource CardStrokeColorDefaultBrush}"/>)").as<Border>());
+        }
+        links.Children().Append(link);
+    }
+    linksCard.Child(links);
+    aboutPanel_.Children().Append(linksCard);
 
     BodyHost().Content(aboutPanel_);
 }

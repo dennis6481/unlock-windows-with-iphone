@@ -243,16 +243,15 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
         status = TextBlock{}; empty = TextBlock{};
         bind = Button{}; settings = Button{};
         root.Spacing(12);
-        auto card = Markup::XamlReader::Load(LR"(<Border
-            xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-            BorderThickness="1" CornerRadius="8" Padding="20,18"/>)").as<Border>();
-        StackPanel guidance; guidance.Spacing(12);
-        guidance.Children().Append(text(L"Pair your iPhone in Windows Bluetooth settings", 16));
-        guidance.Children().Append(text(L"Complete pairing in Windows, then select your iPhone below and bind it to this PC."));
+        InfoBar guidance;
+        guidance.IsOpen(true);
+        guidance.IsClosable(false);
+        guidance.Severity(InfoBarSeverity::Informational);
+        guidance.Title(L"iPhone not listed?");
+        guidance.Message(L"If your iPhone isn't listed below, pair it in Windows Bluetooth settings.");
         settings.Content(box_value(L"Open Bluetooth settings"));
-        guidance.Children().Append(settings); card.Child(guidance); root.Children().Append(card);
+        guidance.ActionButton(settings);
+        root.Children().Append(guidance);
         root.Children().Append(text(L"Paired BLE devices", 16));
         devices.SelectionMode(ListViewSelectionMode::Single);
         ScrollViewer::SetVerticalScrollBarVisibility(devices, ScrollBarVisibility::Disabled);

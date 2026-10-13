@@ -9,6 +9,7 @@
 #include <commctrl.h>
 #include <microsoft.ui.xaml.window.h>
 #include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/Windows.ApplicationModel.DataTransfer.h>
 #include "Pages/StatusPage.xaml.h"
 #include "Pages/PasswordPage.xaml.h"
 #include "Pages/DiagnosticsPage.xaml.h"
@@ -165,9 +166,37 @@ private:
         bodyRow.Height(automatic());
         root_.RowDefinitions().Append(bodyRow);
 
+        Grid header;
+        ColumnDefinition titleColumn, actionColumn;
+        titleColumn.Width(star());
+        actionColumn.Width(automatic());
+        header.ColumnDefinitions().Append(titleColumn);
+        header.ColumnDefinitions().Append(actionColumn);
         title_ = text(L"Status", 28);
         title_.VerticalAlignment(VerticalAlignment::Center);
-        root_.Children().Append(title_);
+        header.Children().Append(title_);
+        copy_ = Button{};
+        copy_.Content(box_value(L"Copy"));
+        copy_.VerticalAlignment(VerticalAlignment::Center);
+        copy_.Margin({16, 0, 0, 0});
+        copy_.Visibility(Visibility::Collapsed);
+        ToolTipService::SetToolTip(copy_, box_value(L"Copy all logs"));
+        copyToken_ = copy_.Click([this](const auto&, const auto&) {
+            try {
+                using namespace winrt::Windows::ApplicationModel::DataTransfer;
+                DataPackage content;
+                content.RequestedOperation(DataPackageOperation::Copy);
+                content.SetText(state_->snapshot.diagnostics);
+                Clipboard::SetContent(content);
+                Clipboard::Flush();
+            } catch (const hresult_error& error) {
+                rethrowNonlocalUiError(error);
+                state_->reportError(L"Failed to copy diagnostic logs: " + currentException());
+            }
+        });
+        Grid::SetColumn(copy_, 1);
+        header.Children().Append(copy_);
+        root_.Children().Append(header);
 
         frame_ = Frame{};
         Media::Animation::TransitionCollection transitions;
@@ -215,6 +244,8 @@ private:
                         state_->reportError);
                 } else throw hresult_invalid_argument(L"Unknown Dashboard page.");
                 title_.Text(unbox_value<hstring>(item.Content()));
+                copy_.Visibility(diagnosticsPage ? Visibility::Visible : Visibility::Collapsed);
+                copy_.IsEnabled(!state_->snapshot.diagnostics.empty());
                 scroll_.UpdateLayout();
                 scroll_.ChangeView(nullptr, scrollOffsets_[pageId], nullptr, true);
             } catch (const hresult_error& error) { state_->fail(error); }
@@ -249,6 +280,7 @@ private:
 
     void applySnapshot() {
         const auto& snapshot = state_->snapshot;
+        copy_.IsEnabled(!snapshot.diagnostics.empty());
         if (statusPage_) get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->Update(snapshot);
         if (diagnosticsPage_) get_self<winrt::UnlockDesktop::implementation::DiagnosticsPage>(diagnosticsPage_)->Update(snapshot.diagnostics);
     }
@@ -260,6 +292,7 @@ public:
         if (appWindow_ && closingToken_.value) appWindow_.Closing(closingToken_);
         if (window_ && activatedToken_.value) window_.Activated(activatedToken_);
         if (nav_ && navigationToken_.value) nav_.SelectionChanged(navigationToken_);
+        if (copy_ && copyToken_.value) copy_.Click(copyToken_);
         if (aboutPage_) get_self<winrt::UnlockDesktop::implementation::AboutPage>(aboutPage_)->Stop();
         if (passwordPage_) get_self<winrt::UnlockDesktop::implementation::PasswordPage>(passwordPage_)->Stop();
         if (statusPage_) get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->Stop();
@@ -286,9 +319,11 @@ private:
     winrt::UnlockDesktop::AboutPage aboutPage_{nullptr};
     winrt::UnlockDesktop::PasswordPage passwordPage_{nullptr};
     TextBlock title_{nullptr};
+    Button copy_{nullptr};
     bool exiting_ = false;
     event_token closingToken_{}, navigationToken_{};
     event_token activatedToken_{};
+    event_token copyToken_{};
 };
 
 Dashboard::Dashboard(RefreshAction refresh, ReportError reportError, ReportError passwordReport) : state_(std::make_unique<State>()) {

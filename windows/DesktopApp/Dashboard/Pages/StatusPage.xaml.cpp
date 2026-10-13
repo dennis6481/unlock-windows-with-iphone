@@ -48,9 +48,22 @@ void StatusPage::OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEventA
     remove_ = Button{};
     remove_.Content(box_value(L"Remove"));
     remove_.HorizontalAlignment(HorizontalAlignment::Right);
-    remove_.Click([weak = get_weak()](const auto&, const auto&) {
-        if (auto page = weak.get()) page->Remove();
+    removalFlyout_ = Flyout{};
+    removalFlyout_.Placement(Microsoft::UI::Xaml::Controls::Primitives::FlyoutPlacementMode::TopEdgeAlignedRight);
+    StackPanel confirmation; confirmation.Spacing(12); confirmation.MaxWidth(320);
+    confirmation.Children().Append(text(L"Remove this iPhone binding?", 16));
+    confirmation.Children().Append(text(L"Your iPhone will remain paired in Windows Bluetooth settings."));
+    Button confirmRemoval;
+    confirmRemoval.Content(box_value(L"Remove binding"));
+    confirmRemoval.Click([weak = get_weak()](const auto&, const auto&) {
+        if (auto page = weak.get()) {
+            page->removalFlyout_.Hide();
+            page->Remove();
+        }
     });
+    confirmation.Children().Append(confirmRemoval);
+    removalFlyout_.Content(confirmation);
+    remove_.Flyout(removalFlyout_);
     const auto removeGlyph = std::wstring(1, static_cast<wchar_t>(Symbol::Delete));
     removalCard_ = settingsCard(L"Remove bound iPhone", remove_, removeGlyph.c_str());
     statusPanel_.Children().Append(removalCard_);
@@ -67,6 +80,7 @@ void StatusPage::Update(unlock_windows::desktop_app::DashboardSnapshot const& sn
     hostBusy_ = snapshot.busy;
     const bool known = snapshot.binding.has_value();
     const bool bound = snapshot.binding && snapshot.binding->state == unlock_windows::system_ble::BindingState::bound;
+    if (!bound || snapshot.busy || Busy() || stopped_) removalFlyout_.Hide();
     lastUnlockCard_.Visibility(bound ? Visibility::Visible : Visibility::Collapsed);
     lastUnlockText_.Text(unlock_windows::desktop_app::lastUnlockText(snapshot.lastUnlock, GetTickCount64()));
     name_.Text(!known ? L"Binding status unavailable" : bound ?
@@ -164,11 +178,7 @@ fire_and_forget StatusPage::save(weak_ref<StatusPage> weak) {
 
 void StatusPage::EnsureBindingView() {
     if (bindingView_) return;
-    bindingView_ = unlock_windows::desktop_app::createBindingView([weak = get_weak()] {
-        const auto page = weak.get();
-        if (!page || page->stopped_) throw hresult_error(RO_E_CLOSED);
-        return page->XamlRoot();
-    }, [weak = get_weak()](std::wstring failure) {
+    bindingView_ = unlock_windows::desktop_app::createBindingView([weak = get_weak()](std::wstring failure) {
         if (auto page = weak.get(); page && !page->stopped_) {
             page->saveError_ = std::move(failure);
             page->error_.Message(page->saveError_); page->error_.IsOpen(!page->saveError_.empty());
@@ -196,7 +206,7 @@ bool StatusPage::Busy() const {
 }
 
 void StatusPage::Remove() {
-    if (stopped_ || Busy() || !binding_ || binding_->state != unlock_windows::system_ble::BindingState::bound) return;
+    if (stopped_ || hostBusy_ || Busy() || !binding_ || binding_->state != unlock_windows::system_ble::BindingState::bound) return;
     try {
         EnsureBindingView();
         bindingView_->content.Visibility(Visibility::Collapsed);
@@ -210,6 +220,7 @@ void StatusPage::Remove() {
 }
 void StatusPage::Stop() {
     stopped_ = true;
+    if (removalFlyout_) removalFlyout_.Hide();
     if (bindingView_) bindingView_->stop();
     if (cancellation_ && !SetEvent(cancellation_.get())) OutputDebugStringW(L"Binding management cancellation failed\n");
 }

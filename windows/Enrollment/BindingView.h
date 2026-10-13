@@ -16,7 +16,6 @@ struct BindingView final {
 };
 
 BindingView createBindingView(
-    std::function<winrt::Microsoft::UI::Xaml::XamlRoot()> dialogRoot,
     std::function<void(std::wstring)> reportError,
     std::function<void(const saved_credential::BindingSummary&)> changed);
 }

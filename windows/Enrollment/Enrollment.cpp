@@ -37,12 +37,10 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
     std::map<std::wstring, Choice> choices;
     std::wstring selectedKey;
     std::vector<std::function<void()>> revoke;
-    ContentDialog dialog{nullptr};
     winrt::handle cancelEvent;
     std::wstring eventName;
     enrollment::Console target;
     BindingSummary original;
-    std::function<XamlRoot()> dialogRoot;
     std::function<void(std::wstring)> reportError;
     std::function<void(const BindingSummary&)> changed;
     bool busy = false, scanning = false, scanAgain = false, rendering = false, stopping = false;
@@ -141,6 +139,12 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
         if (busy || stopping) return;
         remove = clear;
         busy = true; bind.IsEnabled(false); devices.IsEnabled(false);
+        if (!remove) {
+            bindText.Text(L"Binding\u2026");
+            Automation::AutomationProperties::SetName(bind, L"Binding in progress");
+            bindingProgress.Visibility(Visibility::Visible);
+            bindingProgress.IsActive(true);
+        }
         reportError(L""); message(L"");
         run();
     }
@@ -157,18 +161,11 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
             co_await resume_background(); original = enrollment::readBinding(); co_await foreground;
             check(ticket);
             if (remove) {
-                dialog = ContentDialog{}; dialog.XamlRoot(dialogRoot()); dialog.Title(box_value(L"Remove iPhone?"));
-                dialog.Content(box_value(L"Remove this iPhone binding from the app? Windows Bluetooth pairing and the saved password will remain."));
-                dialog.PrimaryButtonText(L"Remove"); dialog.CloseButtonText(L"Cancel");
-                dialog.DefaultButton(ContentDialogButton::Close);
-                if (co_await dialog.ShowAsync() == ContentDialogResult::Primary) {
-                    dialog = nullptr; check(ticket);
-                    SensitiveBytes bytes;
-                    if (!encodeBindingRemoval({original, eventName}, bytes)) throw hresult_error(E_INVALIDARG);
-                    co_await resume_background(); enrollment::manageBinding(Operation::removeBinding, bytes); co_await foreground;
-                    bindingChanged = true;
-                    message(L"Product binding removed. Windows pairing is unchanged.");
-                }
+                SensitiveBytes bytes;
+                if (!encodeBindingRemoval({original, eventName}, bytes)) throw hresult_error(E_INVALIDARG);
+                co_await resume_background(); enrollment::manageBinding(Operation::removeBinding, bytes); co_await foreground;
+                bindingChanged = true;
+                message(L"Product binding removed. Windows pairing is unchanged.");
             } else {
                 if (original.state == system_ble::BindingState::bound)
                     throw hresult_error(E_FAIL, L"Remove the current iPhone binding before binding another device");
@@ -184,41 +181,29 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
                     throw hresult_error(E_FAIL, L"The selected BLE endpoint is no longer paired. Pair it in Windows Bluetooth settings, then select it again.");
                 BindingChange change{original, {target.sid, {}, std::wstring(bleItem.Id()),
                     {}, std::wstring(bleItem.Name()), system_ble::kDefaultThreshold}, eventName};
-                dialog = ContentDialog{}; dialog.XamlRoot(dialogRoot());
-                dialog.Title(box_value(L"Bind selected iPhone?"));
-                dialog.Content(box_value(hstring(change.candidate.displayName + L"\nThe service will verify pairing and protected BLE communication before saving.")));
-                dialog.PrimaryButtonText(L"Confirm binding"); dialog.CloseButtonText(L"Cancel");
-                dialog.DefaultButton(ContentDialogButton::Close);
-                if (co_await dialog.ShowAsync() == ContentDialogResult::Primary) {
-                    dialog = nullptr; check(ticket);
-                    SensitiveBytes bytes;
-                    if (!encodeBindingChange(change, bytes)) throw hresult_error(E_INVALIDARG, L"Invalid system binding");
-                    bindText.Text(L"Binding\u2026");
-                    Automation::AutomationProperties::SetName(bind, L"Binding in progress");
-                    bindingProgress.Visibility(Visibility::Visible);
-                    bindingProgress.IsActive(true);
-                    co_await resume_background(); enrollment::manageBinding(Operation::beginBinding, bytes); co_await foreground;
-                    for (;;) {
-                        check(ticket); co_await resume_background();
-                        Packet response;
-                        if (!call(Operation::bindingTaskStatus, SensitiveBytes{}, response)) throw std::runtime_error("Binding task status unavailable");
-                        AuthenticationStatus progress;
-                        if (response.result != Result::success || !decodeAuthenticationStatus(response.payload.value.data(), response.payload.value.size(), progress))
-                            throw std::runtime_error("Binding status rejected or malformed");
-                        co_await foreground;
-                        if (progress.stage == AuthenticationStage::failed) throw hresult_error(E_FAIL, authenticationStatusText(progress));
-                        if (progress.stage == AuthenticationStage::completed) { message(L"iPhone binding saved. Lock this PC and click Unlock to try it."); break; }
-                        if (progress.stage != AuthenticationStage::verifying) throw hresult_error(E_FAIL, L"No active binding task");
-                        co_await resume_after(std::chrono::milliseconds(100)); co_await foreground;
-                    }
-                    bindingChanged = true;
+                SensitiveBytes bytes;
+                if (!encodeBindingChange(change, bytes)) throw hresult_error(E_INVALIDARG, L"Invalid system binding");
+                co_await resume_background(); enrollment::manageBinding(Operation::beginBinding, bytes); co_await foreground;
+                for (;;) {
+                    check(ticket); co_await resume_background();
+                    Packet response;
+                    if (!call(Operation::bindingTaskStatus, SensitiveBytes{}, response)) throw std::runtime_error("Binding task status unavailable");
+                    AuthenticationStatus progress;
+                    if (response.result != Result::success || !decodeAuthenticationStatus(response.payload.value.data(), response.payload.value.size(), progress))
+                        throw std::runtime_error("Binding status rejected or malformed");
+                    co_await foreground;
+                    if (progress.stage == AuthenticationStage::failed) throw hresult_error(E_FAIL, authenticationStatusText(progress));
+                    if (progress.stage == AuthenticationStage::completed) { message(L"iPhone binding saved. Lock this PC and click Unlock to try it."); break; }
+                    if (progress.stage != AuthenticationStage::verifying) throw hresult_error(E_FAIL, L"No active binding task");
+                    co_await resume_after(std::chrono::milliseconds(100)); co_await foreground;
                 }
+                bindingChanged = true;
             }
             co_await resume_background(); original = enrollment::readBinding(); co_await foreground;
         } catch (...) { failure = currentException(); }
         co_await foreground;
         if (!failure.empty()) { message(failure); reportError(failure); }
-        busy = false; dialog = nullptr;
+        busy = false;
         bindingProgress.IsActive(false);
         bindingProgress.Visibility(Visibility::Collapsed);
         bindText.Text(L"Bind selected device");
@@ -235,7 +220,6 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
         if (stopping) return;
         stopping = true; ++generation;
         if (cancelEvent && !SetEvent(cancelEvent.get())) message(L"Binding cancellation event could not be signalled");
-        if (dialog) dialog.Hide();
         if (!busy && !scanning) finish();
     }
 
@@ -320,11 +304,9 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
 };
 }
 
-BindingView createBindingView(std::function<XamlRoot()> dialogRoot,
-    std::function<void(std::wstring)> reportError,
+BindingView createBindingView(std::function<void(std::wstring)> reportError,
     std::function<void(const BindingSummary&)> changed) {
     auto panel = std::make_shared<BindingPanel>();
-    panel->dialogRoot = std::move(dialogRoot);
     panel->reportError = std::move(reportError);
     panel->changed = std::move(changed);
     try { panel->show(); }

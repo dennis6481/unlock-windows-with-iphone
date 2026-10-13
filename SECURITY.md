@@ -13,7 +13,7 @@
 
 The user explicitly clicks **Unlock** on the PC. The phone needs no fresh Face ID, Touch ID, tap or app interaction. Locking the PC alone does not initiate unlock.
 
-The service checks a unique Windows ContainerId relationship, authenticated Secure Connections pairing records, fresh protected ANCS/CCCD operations and current address/type-associated RSSI. Full account identity, request, binding, connection, session, logon and lock generation remain bound to one short-lived, single-use authorization.
+The service checks the selected system-paired BLE endpoint ID, authenticated Secure Connections pairing records, fresh protected ANCS/CCCD operations and current address/type-associated RSSI. Full account identity, request, binding, connection, session, logon and lock generation remain bound to one short-lived, single-use authorization.
 
 Connections and Windows-cached service structure may persist across unlocks. They are not authorization: every request resets its evidence and performs new protected operations. Background connection/reconnection never releases credentials.
 
@@ -29,5 +29,5 @@ IPC version 3 removes all signature/phone transport operations. Ordinary process
 
 Ordinary clients cannot report successful unlocks. Only the original pinned LogonUI claim with matching nonce and current identity/session/binding may report its native result. The last unlock time and RSSI are non-sensitive history held in service memory and cannot create or restore authorization.
 
-Cancellation, expiry, disconnect, suspend, unlock, logoff, account/session change, binding mutation and invalid system association invalidate related authorization. Cached communication, old/missing RSSI, late callbacks and repeated claims cannot authorize release. If RSSI is missing or stale, verification may wait for a fresh reading within the original request deadline; claiming the password still requires fresh communication and signal evidence. Native password failure never restores a consumed grant.
+Cancellation, expiry, disconnect, suspend, unlock, logoff, account/session change, binding mutation and invalid selected BLE pairing invalidate related authorization. Cached communication, old/missing RSSI, late callbacks and repeated claims cannot authorize release. If RSSI is missing or stale, verification may wait for a fresh reading within the original request deadline; claiming the password still requires fresh communication and signal evidence. Native password failure never restores a consumed grant.
 

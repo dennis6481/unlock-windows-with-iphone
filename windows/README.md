@@ -66,7 +66,7 @@ It does not start services/tasks, repair installations or mount offline user hiv
 
 ## Module index
 
-The system BLE diagnostic uses a separate `SystemBleDiagnostic` target and shared `Bluetooth` definitions. It is not installed or built with the product and cannot unlock Windows.
+The system BLE diagnostic uses a separate `SystemBleDiagnostic` target and shared `Bluetooth` definitions. It is not installed or built with the product and cannot unlock Windows. After an explicitly requested diagnostic build, use `--list` to obtain paired BLE IDs; the temporary service accepts `--service "BLE-ENDPOINT-ID" [RSSI-threshold]`.
 
 ```text
 windows/
@@ -101,7 +101,7 @@ The main WinUI window and tray retain the desktop STA. A desktop worker handles 
 
 Navigation remains **Status**, **Password**, **Diagnostics**, with **About** at the bottom. Switching pages uses the native WinUI upward entrance/fade transition. Password management, notifications and update checks retain their existing roles. All pages share an outer scroller for headers, actions and content, with per-page positions. Diagnostics preserves text selection/scrolling and no longer embeds BLE probe code.
 
-**Status** shows pairing guidance and a paired-device list when no iPhone is bound. Open Windows Bluetooth settings to pair, return, select a device and click **Bind selected device**. Binding/removal require confirmation and UAC. A bound iPhone keeps its existing status layout with removal only; remove it before binding another. The WinUI removal confirmation defaults to Cancel; successful removal returns to device selection and keeps Windows pairing and the saved password. Paired Classic/BLE entries share one row per valid ContainerId, showing only the device name. There is no separate binding window.
+**Status** shows pairing guidance and a paired BLE list when no iPhone is bound. Open Windows Bluetooth settings to pair, return, select a device and click **Bind selected device**. Binding/removal require confirmation and UAC. A bound iPhone keeps its existing status layout with removal only; remove it before binding another. The WinUI removal confirmation defaults to Cancel; successful removal returns to device selection and keeps Windows pairing and the saved password. Each paired BLE endpoint has its own named row, selected by endpoint ID. There is no separate binding window.
 
 The main window uses system Mica and theme colors across the WinUI title bar, sidebar and page background; Windows 10 uses the framework's solid backdrop. The minimum window width is 800 effective pixels. Pages have no outer panel and fill the available width up to a centered 800 effective pixels. The sidebar uses native Auto layout without a manual toggle button. **Status** uses icon cards for **Last Unlock**, **Signal threshold** and **Remove bound iPhone**. Devices update automatically and on activation. Dragging edits a pending value; the right-side **Save** requests UAC. Refusal/failure restores the saved value and shows the reason. **Initial signal threshold** uses the same range/default, with binding below it. Only confirmation dialogs show Cancel; app-shutdown cancellation remains. No hardware acceptance is claimed.
 

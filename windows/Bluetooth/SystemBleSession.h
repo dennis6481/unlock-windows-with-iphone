@@ -9,20 +9,18 @@
 #include <winrt/Windows.Devices.Enumeration.h>
 #include <functional>
 #include <memory>
-#include <optional>
 #include <string>
 
 namespace unlock_windows::system_ble {
 using Failure = saved_credential::AuthenticationFailure;
 
-std::optional<winrt::guid> containerId(const winrt::Windows::Devices::Enumeration::DeviceInformation& item);
-winrt::hstring deviceSelector(bool ble);
+winrt::hstring deviceSelector();
 winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Devices::Enumeration::DeviceInformationCollection>
-    pairedEndpoints(bool ble);
+    pairedEndpoints();
 winrt::Windows::Devices::Enumeration::DeviceInformation findUniqueEndpoint(
-    const winrt::Windows::Devices::Enumeration::DeviceInformationCollection& items, const winrt::guid& container);
+    const winrt::Windows::Devices::Enumeration::DeviceInformationCollection& items, const winrt::hstring& endpointId);
 winrt::Windows::Devices::Enumeration::DeviceInformation uniqueEndpoint(
-    const winrt::Windows::Devices::Enumeration::DeviceInformationCollection& items, const winrt::guid& container);
+    const winrt::Windows::Devices::Enumeration::DeviceInformationCollection& items, const winrt::hstring& endpointId);
 
 struct VerificationError final : std::runtime_error {
     Failure reason;

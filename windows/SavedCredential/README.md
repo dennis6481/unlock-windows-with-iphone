@@ -8,7 +8,7 @@ The LocalSystem service is the Windows authority for bindings, presence verifica
 
 The vault uses **LocalSystem user-scope DPAPI**, with `CRYPTPROTECT_UI_FORBIDDEN`, not `CRYPTPROTECT_LOCAL_MACHINE`. Password files/directories have SYSTEM-only ACLs. Controlled plaintext is cleared as early as practical. Credentials are packed by CP inside LogonUI, not by the service in Session 0.
 
-This protection does not resist an administrator who obtains SYSTEM or a compromised kernel. Binding stores SID, system endpoints, ContainerId, display name and threshold using machine-scope DPAPI with SYSTEM/administrator-only writes. Read [SECURITY.md](../../SECURITY.md) for limits.
+This protection does not resist an administrator who obtains SYSTEM or a compromised kernel. Binding stores SID, BLE endpoint ID, display name and threshold (with unused legacy layout fields) using machine-scope DPAPI with SYSTEM/administrator-only writes. Read [SECURITY.md](../../SECURITY.md) for limits.
 
 ## Authentication and IPC
 
@@ -20,9 +20,9 @@ IPC version **3** uses one pipe. Unsupported versions and operations are rejecte
 
 All pipe I/O is overlapped and cancellable. One absolute 2000 ms deadline covers each connected client's request, response and ACK; client calls share their `waitMs` deadline across all stages. STOP cancels pending I/O and waits for completion before releasing resources. Abnormal clients are disconnected; subsequent requests use the same single pipe instance.
 
-One MTA worker owns BLE and maintains the bound phone after native sign-in; IPC only validates, queues and reads status. Pending cleanup keeps the worker busy, but an idle retained connection does not. The shared [BLE operations](../Bluetooth/SystemBleSession.cpp) use Windows-cached service structure, verify unique system endpoints and pairing history, then perform new protected subscription/Uncached CCCD read/unsubscribe for every request. Missing/stale RSSI waits within the original deadline; fresh low signal fails. Communication and RSSI must still be within 3 seconds at claim.
+One MTA worker owns BLE and maintains the bound phone after native sign-in; IPC only validates, queues and reads status. Pending cleanup keeps the worker busy, but an idle retained connection does not. The shared [BLE operations](../Bluetooth/SystemBleSession.cpp) use Windows-cached service structure, verify the selected paired BLE endpoint ID and pairing history, then perform new protected subscription/Uncached CCCD read/unsubscribe for every request. Missing/stale RSSI waits within the original deadline; fresh low signal fails. Communication and RSSI must still be within 3 seconds at claim.
 
-States distinguish idle, verifying, approved, failed, consumed and completed binding. Reasons distinguish pairing/association, protected operation, connection, RSSI, timeout, cancellation, storage and context failures. Request deadlines remain 30 seconds; no retry or callback extends them.
+States distinguish idle, verifying, approved, failed, consumed and completed binding. Reasons distinguish BLE endpoint/pairing, protected operation, connection, RSSI, timeout, cancellation, storage and context failures. Request deadlines remain 30 seconds; no retry or callback extends them.
 
 `serviceDiagnostics` exposes the latest request's bounded verification trace to the verified unlocked target console user. Diagnostics records request IDs, watcher status/counts, pairing properties, GATT results, operation timings and failures. Cleanup failures preserve an earlier verification failure.
 
@@ -30,7 +30,7 @@ States distinguish idle, verifying, approved, failed, consumed and completed bin
 
 Request completion clears evidence while retaining a valid connection. Disconnect invalidates evidence/structure and leaves Windows reconnection intent active; reconnection never approves a request. Logoff, account/binding change, suspend and service stop close the connection. Preparation errors are explicit; stable failures wait for an explicit request or changed context rather than retrying indefinitely.
 
-The service consumes authorization before decrypting. CP rebuild, packing failure and native password rejection cannot restore it. Connection, system association, console/power/account and registration changes invalidate affected requests. Actual native Windows session recovery remains the acceptance result.
+The service consumes authorization before decrypting. CP rebuild, packing failure and native password rejection cannot restore it. Connection, selected BLE pairing/removal, console/power/account and registration changes invalidate affected requests. Actual native Windows session recovery remains the acceptance result.
 ## Password management
 
 After the first native sign-in, choose **Start setup** on the installation result page or launch `--setup`. The elevated WinUI password window verifies the installed target account. Only a saved copy matching the complete verified identity permits skipping the password step. Saving a copy successfully enables binding on the ordinary Status page; cancellation and failure do not. For independent maintenance, open tray **Password…** and choose save, update or removal.

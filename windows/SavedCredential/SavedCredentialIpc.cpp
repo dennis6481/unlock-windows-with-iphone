@@ -507,7 +507,7 @@ bool encodeAutoSubmitOffer(const AutoSubmitOffer& offer, SensitiveBytes& output)
 
 bool encodeBinding(const system_ble::BindingRecord& record, SensitiveBytes& output) {
     output.clear();
-    if (!system_ble::validThreshold(record.threshold) || record.containerId == winrt::guid{}) return false;
+    if (!system_ble::validThreshold(record.threshold)) return false;
     PSID sid = nullptr;
     if (!ConvertStringSidToSidW(record.accountSid.c_str(), &sid)) return false;
     LocalFree(sid);
@@ -515,7 +515,7 @@ bool encodeBinding(const system_ble::BindingRecord& record, SensitiveBytes& outp
     const auto threshold = static_cast<std::int32_t>(record.threshold);
     append(output, &threshold, sizeof(threshold));
     for (const auto* value : {&record.accountSid, &record.classicId, &record.bleId, &record.displayName}) {
-        if ((value->empty() && value != &record.displayName) || value->size() > 2048 || value->find(L'\0') != std::wstring::npos) return false;
+        if ((value->empty() && value != &record.displayName && value != &record.classicId) || value->size() > 2048 || value->find(L'\0') != std::wstring::npos) return false;
         const auto length = static_cast<std::uint16_t>(value->size());
         append(output, &length, sizeof(length));
         append(output, value->data(), value->size() * sizeof(wchar_t));
@@ -534,7 +534,8 @@ bool decodeBinding(const std::uint8_t* data, std::size_t size, system_ble::Bindi
     record.threshold = threshold;
     for (auto* value : {&record.accountSid, &record.classicId, &record.bleId, &record.displayName}) {
         std::uint16_t length = 0;
-        if (!take(cursor, left, &length, sizeof(length)) || (length == 0 && value != &record.displayName) || length > 2048) return false;
+        if (!take(cursor, left, &length, sizeof(length)) ||
+            (length == 0 && value != &record.displayName && value != &record.classicId) || length > 2048) return false;
         value->resize(length);
         if (!take(cursor, left, value->data(), length * sizeof(wchar_t))) return false;
     }
@@ -644,7 +645,7 @@ const wchar_t* authenticationStatusText(const AuthenticationStatus& status) noex
     case AuthenticationFailure::protectedOperationFailed: return L"Protected Bluetooth verification failed. Try again.";
     case AuthenticationFailure::expired: return L"Verification timed out. Try again.";
     case AuthenticationFailure::sessionChanged: return L"Your Windows session changed. Start again.";
-    case AuthenticationFailure::associationInvalid: return L"The system device association is missing or ambiguous. Bind again.";
+    case AuthenticationFailure::associationInvalid: return L"The bound BLE endpoint is unavailable or no longer paired. Bind again.";
     case AuthenticationFailure::bondRejected: return L"Authenticated Secure Connections pairing is required.";
     case AuthenticationFailure::cancelled: return L"Verification cancelled.";
     case AuthenticationFailure::bindingChanged: return L"The binding changed. Start again.";

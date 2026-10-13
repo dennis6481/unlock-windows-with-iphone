@@ -73,7 +73,7 @@ if ($guidDefinition.Count -ne 1) { throw 'Missing authoritative Credential Provi
 $guidParts = @([regex]::Matches($guidDefinition[0].Groups[1].Value, '0x([0-9a-fA-F]+)') |
     ForEach-Object { [Convert]::ToUInt32($_.Groups[1].Value, 16) })
 if ($guidParts.Count -ne 11) { throw 'Could not parse the Credential Provider GUID.' }
-$credentialProviderClsid = ('{{{0:x8}-{1:x4}-{2:x4}-{3:x2}{4:x2}-{5:x2}{6:x2}{7:x2}{8:x2}{9:x2}{10:x2}}}' -f $guidParts)
+$credentialProviderClsid = '{' + ('{0:x8}-{1:x4}-{2:x4}-{3:x2}{4:x2}-{5:x2}{6:x2}{7:x2}{8:x2}{9:x2}{10:x2}' -f $guidParts) + '}'
 $credentialProviderPath = (Get-Definition 'kCredentialProviderRegistryRoot') + '\' + $credentialProviderClsid
 $clsidPath = (Get-Definition 'kClsidRegistryRoot') + '\' + $credentialProviderClsid
 $rootPath = Get-Definition 'kProductRegistryPath'

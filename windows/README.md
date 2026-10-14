@@ -111,7 +111,7 @@ The main window uses Mica and system theme colors; Windows 10 uses the framework
 
 Pushing `v1.0.0` publishes a Release; `v1.0.0-rc` publishes a Pre-release without marking it Latest. The numeric tag version must match [ProductVersion.h](ProductVersion.h); `-rc` is GitHub release metadata only, so RC and final installers with the same numeric version use Reinstall.
 
-CI runs all four native Release test programs through `UnlockWindowsTests.proj` on both x64 and ARM64 before building their installers. Any test, build or package verification failure blocks publication. CI uses `WindowsBuild.ps1` without GNU Make. See the [Release workflow](../.github/workflows/release.yml).
+CI uses `WindowsBuild.ps1` without GNU Make. [PR builds](../.github/workflows/pr.yml) compile the Release solution for x64 and ARM64 when targeting `dev` or `main`, without running tests or publishing; require **Build x64** and **Build arm64** in the target branch ruleset to block failed builds from merging. [Release CI](../.github/workflows/release.yml) runs all four native test programs on both architectures before building and verifying installers; any failure blocks publication.
 
 ## References
 

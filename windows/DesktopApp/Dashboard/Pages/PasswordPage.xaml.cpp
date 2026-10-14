@@ -7,6 +7,7 @@
 #include "../../../Enrollment/EnrollmentSession.h"
 #include <shellapi.h>
 #include <utility>
+#include <vector>
 
 namespace winrt::UnlockDesktop::implementation {
 using namespace unlock_windows::desktop_app::dashboard_ui;
@@ -16,12 +17,9 @@ using namespace Microsoft::UI::Xaml;
 void PasswordPage::OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEventArgs const&) {
     if (passwordPanel_) return;
     passwordPanel_ = StackPanel{};
-    passwordPanel_.Spacing(16);
-    account_ = text(L"Windows account: loading...", 20);
-    passwordPanel_.Children().Append(account_);
-    passwordPanel_.Children().Append(text(L"Manage the encrypted password copy saved on this PC. This does not change your Microsoft Account password. Administrator approval is required."));
-    status_ = text(L"Loading saved password status...");
-    passwordPanel_.Children().Append(status_);
+    passwordPanel_.Spacing(kCardSpacing);
+    account_ = text(L"Loading...");
+    passwordPanel_.Children().Append(settingsCard(L"Windows account", account_, L"\xE77B"));
     notice_ = InfoBar{};
     notice_.Severity(InfoBarSeverity::Error);
     retry_ = Button{};
@@ -34,30 +32,153 @@ void PasswordPage::OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEven
         }
     });
     notice_.ActionButton(retry_);
-    passwordPanel_.Children().Append(notice_);
     password_ = Button{};
-    password_.Content(box_value(L"Save password"));
-    password_.Style(Application::Current().Resources().Lookup(box_value(L"AccentButtonStyle")).as<Microsoft::UI::Xaml::Style>());
+    password_.Content(box_value(L"Save"));
     password_.Click([weak = get_weak()](const auto&, const auto&) {
         if (auto page = weak.get(); page && page->summary_) {
             try { page->beginOperation(page->summary_->credentialPresent ? Operation::updateCredential : Operation::setCredential); }
             catch (const hresult_error& error) { page->uiError(error); }
         }
     });
-    StackPanel actions;
-    actions.Orientation(Orientation::Horizontal);
-    actions.Spacing(12);
-    actions.Children().Append(password_);
     remove_ = Button{};
-    remove_.Content(box_value(L"Remove saved password"));
+    remove_.Content(box_value(L"Remove"));
     remove_.Click([weak = get_weak()](const auto&, const auto&) {
         if (auto page = weak.get()) {
             try { page->beginOperation(Operation::clearCredential); }
             catch (const hresult_error& error) { page->uiError(error); }
         }
     });
-    actions.Children().Append(remove_);
-    passwordPanel_.Children().Append(actions);
+    management_ = Markup::XamlReader::Load(LR"(<Expander
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+        <Expander.Resources>
+            <Style x:Key="PasswordExpanderHeaderStyle" TargetType="ToggleButton">
+                <Setter Property="UseSystemFocusVisuals" Value="True"/>
+                <Setter Property="Foreground" Value="{ThemeResource TextFillColorPrimaryBrush}"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ToggleButton">
+                            <Grid x:Name="HeaderRoot" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="{TemplateBinding CornerRadius}" Padding="16"
+                                MinHeight="{TemplateBinding MinHeight}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <VisualStateManager.VisualStateGroups>
+                                    <VisualStateGroup x:Name="CommonStates">
+                                        <VisualState x:Name="Normal"/>
+                                        <VisualState x:Name="PointerOver">
+                                            <VisualState.Setters>
+                                                <Setter Target="HeaderRoot.Background" Value="{ThemeResource SubtleFillColorSecondaryBrush}"/>
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                        <VisualState x:Name="Pressed">
+                                            <VisualState.Setters>
+                                                <Setter Target="HeaderRoot.Background" Value="{ThemeResource SubtleFillColorTertiaryBrush}"/>
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                        <VisualState x:Name="Checked">
+                                            <VisualState.Setters>
+                                                <Setter Target="Chevron.Glyph" Value="&#xE70E;"/>
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                        <VisualState x:Name="CheckedPointerOver">
+                                            <VisualState.Setters>
+                                                <Setter Target="HeaderRoot.Background" Value="{ThemeResource SubtleFillColorSecondaryBrush}"/>
+                                                <Setter Target="Chevron.Glyph" Value="&#xE70E;"/>
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                        <VisualState x:Name="CheckedPressed">
+                                            <VisualState.Setters>
+                                                <Setter Target="HeaderRoot.Background" Value="{ThemeResource SubtleFillColorTertiaryBrush}"/>
+                                                <Setter Target="Chevron.Glyph" Value="&#xE70E;"/>
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                        <VisualState x:Name="Disabled">
+                                            <VisualState.Setters>
+                                                <Setter Target="HeaderContent.Foreground" Value="{ThemeResource TextFillColorDisabledBrush}"/>
+                                                <Setter Target="Chevron.Foreground" Value="{ThemeResource TextFillColorDisabledBrush}"/>
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                    </VisualStateGroup>
+                                </VisualStateManager.VisualStateGroups>
+                                <ContentPresenter x:Name="HeaderContent" Content="{TemplateBinding Content}"
+                                    ContentTemplate="{TemplateBinding ContentTemplate}"
+                                    ContentTemplateSelector="{TemplateBinding ContentTemplateSelector}"
+                                    Foreground="{TemplateBinding Foreground}" VerticalAlignment="Center"/>
+                                <FontIcon x:Name="Chevron" Grid.Column="1" Glyph="&#xE70D;"
+                                    FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12"
+                                    Margin="16,0,0,0" VerticalAlignment="Center" IsHitTestVisible="False"
+                                    AutomationProperties.AccessibilityView="Raw"/>
+                            </Grid>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+        </Expander.Resources>
+    </Expander>)").as<Expander>();
+    management_.MinHeight(kCardMinHeight);
+    management_.HorizontalAlignment(HorizontalAlignment::Stretch);
+    management_.HorizontalContentAlignment(HorizontalAlignment::Stretch);
+    management_.Loaded([weak = get_weak()](const auto&, const auto&) {
+        if (auto page = weak.get()) {
+            try {
+                page->management_.ApplyTemplate();
+                std::vector<DependencyObject> elements{page->management_};
+                while (!elements.empty()) {
+                    auto element = elements.back();
+                    elements.pop_back();
+                    if (auto toggle = element.try_as<Primitives::ToggleButton>();
+                        toggle && toggle.Name() == L"ExpanderHeader") {
+                        toggle.Style(page->management_.Resources().Lookup(
+                            box_value(L"PasswordExpanderHeaderStyle")).as<Microsoft::UI::Xaml::Style>());
+                        return;
+                    }
+                    const auto count = Media::VisualTreeHelper::GetChildrenCount(element);
+                    for (int index = 0; index < count; ++index)
+                        elements.push_back(Media::VisualTreeHelper::GetChild(element, index));
+                }
+                throw hresult_error(E_UNEXPECTED, L"The password Expander header was not found.");
+            } catch (const hresult_error& failure) { page->uiError(failure); }
+        }
+    });
+    auto header = Markup::XamlReader::Load(LR"(<Grid
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+        <FontIcon FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Glyph="&#xE72E;"
+            FontSize="20" Margin="0,0,20,0" VerticalAlignment="Center"/>
+        <TextBlock Grid.Column="1" Text="Manage saved password" TextWrapping="Wrap"
+            VerticalAlignment="Center"/>
+    </Grid>)").as<Grid>();
+    management_.Header(header);
+    StackPanel actions;
+    actions.Spacing(16);
+    actions.Margin({40, 0, 0, 0});
+    const auto actionRow = [](const TextBlock& label, const Button& button) {
+        Grid row;
+        ColumnDefinition labelColumn, buttonColumn;
+        labelColumn.Width(star()); buttonColumn.Width(automatic());
+        row.ColumnDefinitions().Append(labelColumn);
+        row.ColumnDefinitions().Append(buttonColumn);
+        label.VerticalAlignment(VerticalAlignment::Center);
+        label.Margin({0, 0, 16, 0});
+        button.VerticalAlignment(VerticalAlignment::Center);
+        button.MinWidth(100);
+        Grid::SetColumn(button, 1);
+        row.Children().Append(label);
+        row.Children().Append(button);
+        return row;
+    };
+    passwordLabel_ = text(L"Save password");
+    actions.Children().Append(actionRow(passwordLabel_, password_));
+    removeRow_ = actionRow(text(L"Remove saved password"), remove_);
+    actions.Children().Append(removeRow_);
+    management_.Content(actions);
+    passwordPanel_.Children().Append(management_);
+    passwordPanel_.Children().Append(notice_);
     BodyHost().Content(passwordPanel_);
     applyState();
 }
@@ -69,23 +190,27 @@ void PasswordPage::Bind(unlock_windows::desktop_app::Dashboard::ReportError repo
 void PasswordPage::applyState() {
     const bool ready = summary_.has_value() && !loading_ && !managing_ && !stopped_;
     password_.IsEnabled(ready);
-    password_.Content(box_value(hstring(summary_ && summary_->credentialPresent ? L"Update password" : L"Save password")));
-    remove_.Visibility(summary_ && summary_->credentialPresent ? Visibility::Visible : Visibility::Collapsed);
+    password_.Content(box_value(hstring(summary_ && summary_->credentialPresent ? L"Update" : L"Save")));
+    passwordLabel_.Text(summary_ && summary_->credentialPresent ? L"Update saved password" : L"Save password");
+    removeRow_.Visibility(summary_ && summary_->credentialPresent ? Visibility::Visible : Visibility::Collapsed);
     remove_.IsEnabled(ready && summary_->credentialPresent);
     if (!summary_) {
-        account_.Text(L"Windows account: not yet verified");
-        status_.Text(loading_ ? L"Loading saved password status..." : L"Saved password status is unavailable.");
+        account_.Text(loading_ ? L"Loading..." : L"Not yet verified");
         return;
     }
     const auto& name = summary_->identity.qualifiedUserName;
     const auto separator = name.find_last_of(L'\\');
-    account_.Text(L"Windows account: " + name.substr(separator == std::wstring::npos ? 0 : separator + 1));
-    status_.Text(!summary_->credentialPresent ? L"No password copy is saved. Save your Microsoft Account password to enable iPhone unlock."
-        : summary_->credentialMatches ? L"An encrypted password copy is saved. Update it when your Microsoft Account password changes."
-        : L"The saved copy does not match this verified Windows identity. Update it before using iPhone unlock.");
+    account_.Text(name.substr(separator == std::wstring::npos ? 0 : separator + 1));
+    if (!summary_->credentialPresent) management_.IsExpanded(true);
+    else if (!summary_->credentialMatches) {
+        notice_.Severity(InfoBarSeverity::Warning);
+        notice_.Message(L"The saved copy does not match this verified Windows identity. Update it before using iPhone unlock.");
+        notice_.IsOpen(true);
+    }
 }
 
 void PasswordPage::error(const std::wstring& message) {
+    notice_.Severity(InfoBarSeverity::Error);
     notice_.Message(message);
     notice_.IsOpen(true);
     reportError_(L"Password: " + message);

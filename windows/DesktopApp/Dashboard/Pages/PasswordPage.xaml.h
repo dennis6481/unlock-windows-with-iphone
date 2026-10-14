@@ -30,7 +30,9 @@ private:
         unlock_windows::saved_credential::Operation operation,
         unlock_windows::desktop_app::Dashboard::ReportError reportError);
     Microsoft::UI::Xaml::Controls::StackPanel passwordPanel_{nullptr};
-    Microsoft::UI::Xaml::Controls::TextBlock account_{nullptr}, status_{nullptr};
+    Microsoft::UI::Xaml::Controls::TextBlock account_{nullptr}, passwordLabel_{nullptr};
+    Microsoft::UI::Xaml::Controls::Expander management_{nullptr};
+    Microsoft::UI::Xaml::Controls::Grid removeRow_{nullptr};
     Microsoft::UI::Xaml::Controls::Button password_{nullptr}, retry_{nullptr};
     Microsoft::UI::Xaml::Controls::Button remove_{nullptr};
     Microsoft::UI::Xaml::Controls::InfoBar notice_{nullptr};

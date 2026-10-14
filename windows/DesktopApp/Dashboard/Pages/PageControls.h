@@ -21,7 +21,8 @@ using namespace winrt;
 using namespace Microsoft::UI::Xaml;
 using namespace Microsoft::UI::Xaml::Controls;
 
-inline constexpr double kCardSpacing = 6;
+inline constexpr double kCardSpacing = 3;
+inline constexpr double kCardMinHeight = 68;
 
 inline InfoBarSeverity infoBarSeverity(NoticeSeverity severity) {
     switch (severity) {
@@ -61,7 +62,8 @@ inline Border settingsCard(const wchar_t* title, const FrameworkElement& content
         Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
         BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
         BorderThickness="1" CornerRadius="{ThemeResource ControlCornerRadius}"
-        MinHeight="68" Padding="16"/>)").as<Border>();
+        Padding="16"/>)").as<Border>();
+    card.MinHeight(kCardMinHeight);
     Grid layout;
     ColumnDefinition iconColumn, headerColumn, contentColumn;
     iconColumn.Width(automatic());

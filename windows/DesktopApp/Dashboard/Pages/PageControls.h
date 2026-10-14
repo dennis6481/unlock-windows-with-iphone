@@ -21,6 +21,8 @@ using namespace winrt;
 using namespace Microsoft::UI::Xaml;
 using namespace Microsoft::UI::Xaml::Controls;
 
+inline constexpr double kCardSpacing = 6;
+
 inline InfoBarSeverity infoBarSeverity(NoticeSeverity severity) {
     switch (severity) {
     case NoticeSeverity::information: return InfoBarSeverity::Informational;

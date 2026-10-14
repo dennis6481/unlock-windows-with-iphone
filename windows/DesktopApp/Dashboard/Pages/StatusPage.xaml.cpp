@@ -40,7 +40,7 @@ void StatusPage::OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEventA
     visible_ = true;
     if (statusPanel_) return;
     statusPanel_ = StackPanel{};
-    statusPanel_.Spacing(12);
+    statusPanel_.Spacing(kCardSpacing);
     success_ = InfoBar{};
     success_.Severity(InfoBarSeverity::Success);
     success_.IsClosable(true);

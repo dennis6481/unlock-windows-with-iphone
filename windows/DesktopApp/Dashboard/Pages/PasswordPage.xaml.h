@@ -18,7 +18,7 @@ struct PasswordPage : PasswordPageT<PasswordPage> {
     void Refresh();
     void Stop();
     void DismissRemoval();
-    void DismissRemovalSuccess();
+    void DismissPasswordSuccess();
 
 private:
     void applyState();
@@ -44,7 +44,7 @@ private:
     unlock_windows::desktop_app::Dashboard::ReportError reportError_;
     winrt::Windows::Foundation::IAsyncAction query_{nullptr}, operation_{nullptr};
     bool loading_ = false, managing_ = false, stopped_ = false;
-    bool removalSuccessPending_ = false;
+    bool passwordSuccessPending_ = false;
 };
 }
 

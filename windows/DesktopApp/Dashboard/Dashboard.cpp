@@ -128,7 +128,7 @@ private:
                 if (passwordPage_) {
                     auto* page = get_self<winrt::UnlockDesktop::implementation::PasswordPage>(passwordPage_);
                     page->DismissRemoval();
-                    page->DismissRemovalSuccess();
+                    page->DismissPasswordSuccess();
                 }
                 appWindow_.Hide();
             } catch (const hresult_error& error) { state_->fail(error); }

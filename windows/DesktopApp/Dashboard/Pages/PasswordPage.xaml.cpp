@@ -23,7 +23,6 @@ void PasswordPage::OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEven
     success_.IsClosable(true);
     success_.IsOpen(false);
     success_.Visibility(Visibility::Collapsed);
-    success_.Title(L"Saved password removed successfully");
     success_.Closed([weak = get_weak()](const auto&, const auto&) {
         if (auto page = weak.get()) page->success_.Visibility(Visibility::Collapsed);
     });
@@ -217,15 +216,15 @@ void PasswordPage::Bind(unlock_windows::desktop_app::Dashboard::ReportError repo
 
 void PasswordPage::OnNavigatedFrom(Microsoft::UI::Xaml::Navigation::NavigationEventArgs const&) {
     DismissRemoval();
-    DismissRemovalSuccess();
+    DismissPasswordSuccess();
 }
 
 void PasswordPage::DismissRemoval() {
     if (removalFlyout_) removalFlyout_.Hide();
 }
 
-void PasswordPage::DismissRemovalSuccess() {
-    removalSuccessPending_ = false;
+void PasswordPage::DismissPasswordSuccess() {
+    passwordSuccessPending_ = false;
     if (success_) success_.IsOpen(false);
 }
 
@@ -253,7 +252,7 @@ void PasswordPage::applyState() {
 }
 
 void PasswordPage::error(const std::wstring& message) {
-    DismissRemovalSuccess();
+    DismissPasswordSuccess();
     notice_.Severity(InfoBarSeverity::Error);
     notice_.Message(message);
     notice_.IsOpen(true);
@@ -282,8 +281,8 @@ void PasswordPage::uiError(const hresult_error& failure) {
 void PasswordPage::beginOperation(Operation operation) {
     if (stopped_ || loading_ || managing_ || !summary_ ||
         (operation == Operation::clearCredential && !summary_->credentialPresent)) return;
-    DismissRemovalSuccess();
-    removalSuccessPending_ = operation == Operation::clearCredential;
+    DismissPasswordSuccess();
+    passwordSuccessPending_ = true;
     managing_ = true;
     notice_.IsOpen(false);
     retry_.Visibility(Visibility::Collapsed);
@@ -294,7 +293,7 @@ void PasswordPage::beginOperation(Operation operation) {
 void PasswordPage::Stop() {
     stopped_ = true;
     DismissRemoval();
-    DismissRemovalSuccess();
+    DismissPasswordSuccess();
     if (query_) query_.Cancel();
     if (operation_) operation_.Cancel();
 }
@@ -350,7 +349,7 @@ Windows::Foundation::IAsyncAction PasswordPage::launch(weak_ref<PasswordPage> we
     if (cancellation()) co_return;
     std::wstring failure;
     unlock_windows::enrollment::Handle process;
-    bool removed = false;
+    bool completed = false;
     try {
         init_apartment(apartment_type::multi_threaded);
         struct Apartment final { ~Apartment() { uninit_apartment(); } } apartment;
@@ -382,23 +381,30 @@ Windows::Foundation::IAsyncAction PasswordPage::launch(weak_ref<PasswordPage> we
             if (operation == Operation::clearCredential && result != ERROR_SUCCESS)
                 failure = L"The saved password removal did not complete successfully (Win32 " + std::to_wstring(result) +
                     L"). Check the current state and try again.";
-            else if (operation != Operation::clearCredential && result == static_cast<DWORD>(unlock_windows::desktop_app::SetupResult::error))
-                failure = L"The password window did not complete successfully. Try the password action again.";
-            removed = operation == Operation::clearCredential && result == ERROR_SUCCESS;
+            else if (operation != Operation::clearCredential &&
+                result != static_cast<DWORD>(unlock_windows::desktop_app::SetupResult::cancelled) &&
+                result != static_cast<DWORD>(unlock_windows::desktop_app::SetupResult::credentialReady))
+                failure = L"The password window did not complete successfully (exit code " +
+                    std::to_wstring(result) + L"). Try the password action again.";
+            completed = operation == Operation::clearCredential ? result == ERROR_SUCCESS
+                : result == static_cast<DWORD>(unlock_windows::desktop_app::SetupResult::credentialReady);
         } catch (...) { failure = currentException(); }
     }
     if (cancellation()) co_return;
-    if (!dispatcher.TryEnqueue([weak, failure = std::move(failure), removed] {
+    if (!dispatcher.TryEnqueue([weak, failure = std::move(failure), completed, operation] {
         if (auto page = weak.get(); page && !page->stopped_) {
             try {
                 page->managing_ = false;
                 page->Refresh();
                 if (!failure.empty()) page->error(failure);
-                else if (removed && page->removalSuccessPending_) {
+                else if (completed && page->passwordSuccessPending_) {
+                    page->success_.Title(operation == Operation::clearCredential ? L"Saved password removed successfully"
+                        : operation == Operation::updateCredential ? L"Saved password updated successfully"
+                        : L"Password saved successfully");
                     page->success_.Visibility(Visibility::Visible);
                     page->success_.IsOpen(true);
                 }
-                page->removalSuccessPending_ = false;
+                page->passwordSuccessPending_ = false;
             } catch (const hresult_error& error) {
                 page->uiError(error);
             }

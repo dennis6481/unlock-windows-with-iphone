@@ -125,6 +125,11 @@ private:
                     page->ResetThresholdPreview();
                     page->DismissBindingSuccess();
                 }
+                if (passwordPage_) {
+                    auto* page = get_self<winrt::UnlockDesktop::implementation::PasswordPage>(passwordPage_);
+                    page->DismissRemoval();
+                    page->DismissRemovalSuccess();
+                }
                 appWindow_.Hide();
             } catch (const hresult_error& error) { state_->fail(error); }
         });

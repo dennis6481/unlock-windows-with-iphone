@@ -18,6 +18,16 @@ void PasswordPage::OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEven
     if (passwordPanel_) return;
     passwordPanel_ = StackPanel{};
     passwordPanel_.Spacing(kCardSpacing);
+    success_ = InfoBar{};
+    success_.Severity(InfoBarSeverity::Success);
+    success_.IsClosable(true);
+    success_.IsOpen(false);
+    success_.Visibility(Visibility::Collapsed);
+    success_.Title(L"Saved password removed successfully");
+    success_.Closed([weak = get_weak()](const auto&, const auto&) {
+        if (auto page = weak.get()) page->success_.Visibility(Visibility::Collapsed);
+    });
+    passwordPanel_.Children().Append(success_);
     account_ = text(L"Loading...");
     passwordPanel_.Children().Append(settingsCard(L"Windows account", account_, L"\xE77B"));
     notice_ = InfoBar{};
@@ -42,12 +52,27 @@ void PasswordPage::OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEven
     });
     remove_ = Button{};
     remove_.Content(box_value(L"Remove"));
-    remove_.Click([weak = get_weak()](const auto&, const auto&) {
+    removalFlyout_ = Flyout{};
+    removalFlyout_.Placement(Primitives::FlyoutPlacementMode::TopEdgeAlignedRight);
+    StackPanel confirmation;
+    confirmation.Spacing(12);
+    confirmation.MaxWidth(320);
+    confirmation.Children().Append(text(L"Remove your saved password copy?", 16));
+    confirmation.Children().Append(text(L"iPhone unlock will be unavailable until you save a password again. Your Microsoft Account password will not change."));
+    Button confirmRemoval;
+    confirmRemoval.Content(box_value(L"Remove saved password"));
+    confirmRemoval.Click([weak = get_weak()](const auto&, const auto&) {
         if (auto page = weak.get()) {
-            try { page->beginOperation(Operation::clearCredential); }
+            try {
+                page->DismissRemoval();
+                page->beginOperation(Operation::clearCredential);
+            }
             catch (const hresult_error& error) { page->uiError(error); }
         }
     });
+    confirmation.Children().Append(confirmRemoval);
+    removalFlyout_.Content(confirmation);
+    remove_.Flyout(removalFlyout_);
     management_ = Markup::XamlReader::Load(LR"(<Expander
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
@@ -121,6 +146,9 @@ void PasswordPage::OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEven
     management_.MinHeight(kCardMinHeight);
     management_.HorizontalAlignment(HorizontalAlignment::Stretch);
     management_.HorizontalContentAlignment(HorizontalAlignment::Stretch);
+    management_.Collapsed([weak = get_weak()](const auto&, const auto&) {
+        if (auto page = weak.get()) page->DismissRemoval();
+    });
     management_.Loaded([weak = get_weak()](const auto&, const auto&) {
         if (auto page = weak.get()) {
             try {
@@ -187,8 +215,23 @@ void PasswordPage::Bind(unlock_windows::desktop_app::Dashboard::ReportError repo
     reportError_ = std::move(reportError);
 }
 
+void PasswordPage::OnNavigatedFrom(Microsoft::UI::Xaml::Navigation::NavigationEventArgs const&) {
+    DismissRemoval();
+    DismissRemovalSuccess();
+}
+
+void PasswordPage::DismissRemoval() {
+    if (removalFlyout_) removalFlyout_.Hide();
+}
+
+void PasswordPage::DismissRemovalSuccess() {
+    removalSuccessPending_ = false;
+    if (success_) success_.IsOpen(false);
+}
+
 void PasswordPage::applyState() {
     const bool ready = summary_.has_value() && !loading_ && !managing_ && !stopped_;
+    if (!ready || !summary_->credentialPresent) DismissRemoval();
     password_.IsEnabled(ready);
     password_.Content(box_value(hstring(summary_ && summary_->credentialPresent ? L"Update" : L"Save")));
     passwordLabel_.Text(summary_ && summary_->credentialPresent ? L"Update saved password" : L"Save password");
@@ -210,6 +253,7 @@ void PasswordPage::applyState() {
 }
 
 void PasswordPage::error(const std::wstring& message) {
+    DismissRemovalSuccess();
     notice_.Severity(InfoBarSeverity::Error);
     notice_.Message(message);
     notice_.IsOpen(true);
@@ -238,6 +282,8 @@ void PasswordPage::uiError(const hresult_error& failure) {
 void PasswordPage::beginOperation(Operation operation) {
     if (stopped_ || loading_ || managing_ || !summary_ ||
         (operation == Operation::clearCredential && !summary_->credentialPresent)) return;
+    DismissRemovalSuccess();
+    removalSuccessPending_ = operation == Operation::clearCredential;
     managing_ = true;
     notice_.IsOpen(false);
     retry_.Visibility(Visibility::Collapsed);
@@ -247,6 +293,8 @@ void PasswordPage::beginOperation(Operation operation) {
 
 void PasswordPage::Stop() {
     stopped_ = true;
+    DismissRemoval();
+    DismissRemovalSuccess();
     if (query_) query_.Cancel();
     if (operation_) operation_.Cancel();
 }
@@ -302,6 +350,7 @@ Windows::Foundation::IAsyncAction PasswordPage::launch(weak_ref<PasswordPage> we
     if (cancellation()) co_return;
     std::wstring failure;
     unlock_windows::enrollment::Handle process;
+    bool removed = false;
     try {
         init_apartment(apartment_type::multi_threaded);
         struct Apartment final { ~Apartment() { uninit_apartment(); } } apartment;
@@ -316,7 +365,7 @@ Windows::Foundation::IAsyncAction PasswordPage::launch(weak_ref<PasswordPage> we
         request.lpVerb = L"runas";
         request.lpFile = executable.c_str();
         request.lpParameters = arguments.c_str();
-        request.nShow = SW_SHOWNORMAL;
+        request.nShow = operation == Operation::clearCredential ? SW_HIDE : SW_SHOWNORMAL;
         if (!ShellExecuteExW(&request)) {
             const auto code = GetLastError();
             if (code != ERROR_CANCELLED) throw std::runtime_error("Open password window: Win32=" + std::to_string(code));
@@ -330,17 +379,26 @@ Windows::Foundation::IAsyncAction PasswordPage::launch(weak_ref<PasswordPage> we
             co_await resume_on_signal(process.value);
             DWORD result = 0;
             unlock_windows::enrollment::require(GetExitCodeProcess(process.value, &result), "Read password window result");
-            if (result == static_cast<DWORD>(unlock_windows::desktop_app::SetupResult::error))
+            if (operation == Operation::clearCredential && result != ERROR_SUCCESS)
+                failure = L"The saved password removal did not complete successfully (Win32 " + std::to_wstring(result) +
+                    L"). Check the current state and try again.";
+            else if (operation != Operation::clearCredential && result == static_cast<DWORD>(unlock_windows::desktop_app::SetupResult::error))
                 failure = L"The password window did not complete successfully. Try the password action again.";
+            removed = operation == Operation::clearCredential && result == ERROR_SUCCESS;
         } catch (...) { failure = currentException(); }
     }
     if (cancellation()) co_return;
-    if (!dispatcher.TryEnqueue([weak, failure = std::move(failure)] {
+    if (!dispatcher.TryEnqueue([weak, failure = std::move(failure), removed] {
         if (auto page = weak.get(); page && !page->stopped_) {
             try {
                 page->managing_ = false;
                 page->Refresh();
                 if (!failure.empty()) page->error(failure);
+                else if (removed && page->removalSuccessPending_) {
+                    page->success_.Visibility(Visibility::Visible);
+                    page->success_.IsOpen(true);
+                }
+                page->removalSuccessPending_ = false;
             } catch (const hresult_error& error) {
                 page->uiError(error);
             }

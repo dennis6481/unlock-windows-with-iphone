@@ -13,9 +13,12 @@ namespace winrt::UnlockDesktop::implementation {
 struct PasswordPage : PasswordPageT<PasswordPage> {
     PasswordPage() = default;
     void OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEventArgs const& args);
+    void OnNavigatedFrom(Microsoft::UI::Xaml::Navigation::NavigationEventArgs const& args);
     void Bind(unlock_windows::desktop_app::Dashboard::ReportError reportError);
     void Refresh();
     void Stop();
+    void DismissRemoval();
+    void DismissRemovalSuccess();
 
 private:
     void applyState();
@@ -35,11 +38,13 @@ private:
     Microsoft::UI::Xaml::Controls::Grid removeRow_{nullptr};
     Microsoft::UI::Xaml::Controls::Button password_{nullptr}, retry_{nullptr};
     Microsoft::UI::Xaml::Controls::Button remove_{nullptr};
-    Microsoft::UI::Xaml::Controls::InfoBar notice_{nullptr};
+    Microsoft::UI::Xaml::Controls::Flyout removalFlyout_{nullptr};
+    Microsoft::UI::Xaml::Controls::InfoBar notice_{nullptr}, success_{nullptr};
     std::optional<unlock_windows::saved_credential::CredentialSummary> summary_;
     unlock_windows::desktop_app::Dashboard::ReportError reportError_;
     winrt::Windows::Foundation::IAsyncAction query_{nullptr}, operation_{nullptr};
     bool loading_ = false, managing_ = false, stopped_ = false;
+    bool removalSuccessPending_ = false;
 };
 }
 

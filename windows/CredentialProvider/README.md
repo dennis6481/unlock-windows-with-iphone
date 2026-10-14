@@ -10,19 +10,19 @@ CP captures SID, PrimarySid, original QualifiedUserName and ProviderID from the 
 
 For phone unlocking, CP checks console identity and asks the service for `unlockEligibility`, without inventing account names or falling back to a lone candidate.
 
-The tile contains the provider icon, title and a standalone **Unlock** action; it does not accept typed passwords or test approvals. Enter / Unlock starts `beginVerification`. Selection and locking alone do not create requests. Initial enumeration has `autoLogon=FALSE`; default tile selection remains controlled by LogonUI.
+The tile contains the provider icon, title and **Unlock** action; it does not accept typed passwords or test approvals. Enter / Unlock starts `beginVerification`. Selection and locking alone do not create requests. Initial enumeration has `autoLogon=FALSE`; default tile selection remains controlled by LogonUI.
 
-Manual initiation returns a no-credential waiting state rather than blocking on BLE. The tile shows **Just a moment...** during verification and automatic submission, with **Unlock** hidden. Provider failures hide the title and show the specific reason in small text with **OK**; **OK** restores the initial tile without retrying. Native Windows errors retain the system error screen. A worker queries structured service status by requestID and marshals UI changes onto the COM/Advise thread. The service owns the 15-second verification deadline; Windows native authentication is not covered by it. Deselection requests cancellation; late operations cannot create a grant.
+Manual initiation waits without blocking on BLE. Verification and automatic submission show **Just a moment...** instead of **Unlock**. Provider failures replace the title with the reason and **OK**, which resets the tile without retrying; native errors use Windows' error screen. A worker queries status by requestID and marshals UI changes onto the COM/Advise thread. The service's 15-second deadline covers verification, not native authentication. Deselection cancels the request; late operations cannot create a grant.
 
 ## Automatic submission
 
-The worker polls `takeAutoSubmitOffer` before querying verification status. Only a waiting tile can offer automatic submission. The message window calls `CredentialsChanged` on the Advise thread; the next eligible enumeration exposes automatic submission once. `GetSerialization` validates the current captured identity/nonce and offer before claiming the password.
+The waiting worker polls `takeAutoSubmitOffer` before verification status. Its message window calls `CredentialsChanged` on the Advise thread; the next eligible enumeration exposes automatic submission once. `GetSerialization` validates the current captured identity/nonce and offer before claiming the password.
 
 The service rechecks 3-second communication/RSSI evidence and consumes authorization before decrypting the password. CP packs credentials in LogonUI using protected/ID-provider flags and submits to native Negotiate. It does not construct a token or call `LsaLogonUser`. Only native authentication confirms actual unlock.
 
 After successful serialization, `ReportResult` reports its claim nonce and native status to the service once. A matching native success updates **Last Unlock**; rejection, packing failure and missing reports do not. Reporting uses the existing bounded pipe call, logs failures and leaves Windows authentication unchanged.
 
-Matching identity/session re-enumeration can retain an unsubmitted offer. Identity changes and UnAdvise retire worker state. A current idle service status ends waiting with an error and **OK**; samples started before the attempt cannot fail it. Missing notifications, serialization failure or native password rejection cannot restore a consumed approval or reissue its offer; another attempt requires a fresh presence request.
+Matching identity/session re-enumeration can retain an unsubmitted offer. Identity changes and UnAdvise retire worker state. Idle status ends waiting with an error and **OK**; pre-attempt samples are ignored. Missing notifications, serialization failure or native password rejection cannot restore a consumed approval or reissue its offer; another attempt requires a fresh presence request.
 
 ## Presentation and deployment
 

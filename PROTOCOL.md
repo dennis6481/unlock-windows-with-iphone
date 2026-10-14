@@ -6,7 +6,7 @@ No iPhone app is used. Windows system pairing identifies the selected phone; the
 
 ## Shared contracts
 
-- [SystemBleContract.h](windows/Bluetooth/SystemBleContract.h): ANCS/Notification Source UUIDs, binding record layout, RSSI range −100…−20 dBm, 1 dBm step, −60 dBm default, shared 15-second BLE operation deadline and 3-second evidence lifetime.
+- [SystemBleContract.h](windows/Bluetooth/SystemBleContract.h): ANCS/Notification Source UUIDs, binding record layout, RSSI range −100…−20 dBm, 1 dBm step, −60 dBm default, 15-second BLE deadline and 3-second evidence lifetime.
 - [SavedCredentialIpc.h](windows/SavedCredential/SavedCredentialIpc.h): IPC version **3**, operations, status/failure enums, binding and packet codecs. Unsupported versions and operations are rejected.
 - [SystemBleSession](windows/Bluetooth/SystemBleSession.cpp): reusable paired BLE endpoint and protected GATT operations. [PresenceAuthorization](windows/Bluetooth/PresenceAuthorization.h) combines communication with request-local RSSI from [RssiSampler](windows/Bluetooth/RssiSampler.h), shared with the independent diagnostic.
 
@@ -16,9 +16,9 @@ No iPhone app is used. Windows system pairing identifies the selected phone; the
 2. Windows Bluetooth settings owns pairing and numeric confirmation. Existing Windows pairing is reused; the app does not initiate a pairing ceremony.
 3. The ordinary unlocked console user's Status page watches paired BLE endpoints when no iPhone is bound. Added, Updated and Removed events update the list; returning from Windows settings performs another enumeration. Each endpoint ID has its own named row, with no name-based identity matching. The user selects the device and clicks **Bind selected device**.
 4. The selected BLE endpoint ID must still appear in the system paired BLE list. Display names and guessed MAC addresses do not select identity.
-5. Explicit confirmation and UAC submit an expected-record/candidate change. The service independently verifies the selected paired BLE endpoint, authenticated Secure Connections pairing record and fresh protected communication before atomic commit; binding does not collect RSSI. Cancellation or failure retains the old binding.
+5. **Bind selected device** and UAC submit an expected-record/candidate change. The service independently verifies the selected paired BLE endpoint, authenticated Secure Connections pairing record and fresh protected communication before atomic commit; binding does not collect RSSI. Cancellation or failure retains the old binding.
 
-Newly paired devices are never registered automatically. The UI offers removal only for an existing binding; remove it before binding another device. Removal deletes the product binding, not Windows pairing. Unlock range offers Near (−30 dBm), Medium (−60 dBm) and Far (−90 dBm). Completing a change requires UAC; refusal or failure restores the saved setting. Other saved thresholds are only snapped for display until the user changes the selection.
+Newly paired devices are never registered automatically. Remove an existing binding before binding another device; removal keeps Windows pairing. Unlock range offers Near (−30 dBm), Medium (−60 dBm) and Far (−90 dBm). Changes require UAC; refusal or failure restores the saved setting. Other thresholds snap only for display until changed.
 
 The read-only `serviceDiagnostics` IPC operation returns the latest request's verification trace as UTF-8 text, restricted to the verified unlocked target console user and bounded by the IPC payload limit. The desktop pauses binding-status/diagnostics polling while the console is locked and resumes on its next unlocked poll. A rejected query is discarded only when the same console account is confirmed to have locked during that query; other failures remain errors. Diagnostics appends new lines to the desktop session history. Existing status payloads and persisted formats are unchanged; unsupported queries report an error.
 

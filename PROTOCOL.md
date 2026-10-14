@@ -6,7 +6,7 @@ No iPhone app is used. Windows system pairing identifies the selected phone; the
 
 ## Shared contracts
 
-- [SystemBleContract.h](windows/Bluetooth/SystemBleContract.h): ANCS/Notification Source UUIDs, binding record layout, RSSI range −100…−20 dBm, 1 dBm step, −60 dBm default, 30-second request deadline and 3-second evidence lifetime.
+- [SystemBleContract.h](windows/Bluetooth/SystemBleContract.h): ANCS/Notification Source UUIDs, binding record layout, RSSI range −100…−20 dBm, 1 dBm step, −60 dBm default, shared 15-second BLE operation deadline and 3-second evidence lifetime.
 - [SavedCredentialIpc.h](windows/SavedCredential/SavedCredentialIpc.h): IPC version **3**, operations, status/failure enums, binding and packet codecs. Unsupported versions and operations are rejected.
 - [SystemBleSession](windows/Bluetooth/SystemBleSession.cpp): reusable paired BLE endpoint and protected GATT operations. [PresenceAuthorization](windows/Bluetooth/PresenceAuthorization.h) combines communication with request-local RSSI from [RssiSampler](windows/Bluetooth/RssiSampler.h), shared with the independent diagnostic.
 
@@ -32,7 +32,7 @@ Deploy matching desktop/service binaries; older software cannot read new binding
 
 ## Request and one-time approval
 
-1. Clicking **Unlock** lets an eligible LogonUI caller create a unique request for the locked physical console, with a fixed 30-second deadline. Selection and lock events alone do not start verification.
+1. Clicking **Unlock** lets an eligible LogonUI caller create a unique request for the locked physical console, with a fixed 15-second deadline. Selection and lock events alone do not start verification.
 2. One MTA BLE worker maintains the bound phone's connection after native sign-in, rechecks the selected paired BLE endpoint and authenticated Secure Connections bond metadata for each request, and clears request evidence at request end. IPC only validates, queues and reads state; it never waits for GATT. An active or still-finishing BLE task returns **busy**; an idle retained connection does not.
 3. ANCS, Notification Source and CCCD structure queries use Windows Cached mode (which may query the device on a miss); valid objects are reused on the current connection. Each request performs authenticated/encrypted subscription, Uncached CCCD read and unsubscribe without reading notification contents. Service-list changes before the first complete protected subscribe/read/unsubscribe discard provisional structure and evidence within the original deadline; changes after that stability point invalidate the request.
 4. RSSI must be sampled after request start, match the current endpoint, Bluetooth address **and address type** and connection revision, be at most 3 seconds old and reach the saved threshold. After collection, the session rechecks the target and communication state under one lock. Missing/old samples wait within the original deadline; fresh low samples fail immediately. Time-expired communication evidence is renewed when an eligible sample arrives, within the same deadline. Address changes discard samples until a current associated sample exists.

@@ -295,7 +295,7 @@ void run() {
     setUserArray->Release();
 
     DWORD fieldCount = 0;
-    require(provider->GetFieldDescriptorCount(&fieldCount) == S_OK && fieldCount == 3,
+    require(provider->GetFieldDescriptorCount(&fieldCount) == S_OK && fieldCount == 5,
         "unexpected Credential Provider field count");
 
     DWORD credentialCount = 0;

@@ -24,7 +24,7 @@ One MTA worker owns BLE and maintains the bound phone after native sign-in; IPC 
 
 After RSSI collection, the session checks the complete target and current communication state under one lock. A successful communication operation may already be time-expired after unsubscribe; unlock renews it when RSSI qualifies, within the original deadline. Binding still requires fresh communication at atomic commit.
 
-States distinguish idle, verifying, approved, failed, consumed and completed binding. Reasons distinguish BLE endpoint/pairing, protected operation, connection, RSSI, timeout, cancellation, storage and context failures. Request deadlines remain 30 seconds; no retry or callback extends them.
+States distinguish idle, verifying, approved, failed, consumed and completed binding. Reasons distinguish BLE endpoint/pairing, protected operation, connection, RSSI, timeout, cancellation, storage and context failures. Unlock and binding requests share a 15-second deadline. No retry or callback extends it.
 
 `serviceDiagnostics` exposes the latest request's bounded verification trace to the verified unlocked target console user. Diagnostics records request IDs, watcher status/counts, pairing properties, GATT results, operation timings and failures. Cleanup failures preserve an earlier verification failure.
 

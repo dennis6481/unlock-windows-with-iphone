@@ -5,6 +5,7 @@
 #pragma once
 
 #include "../../DesktopNotifications.h"
+#include "../../../Bluetooth/SystemBleContract.h"
 #include <Windows.h>
 #undef GetCurrentTime
 #include <string>
@@ -52,7 +53,7 @@ inline GridLength star() { return {1, GridUnitType::Star}; }
 inline GridLength automatic() { return {0, GridUnitType::Auto}; }
 
 inline Border settingsCard(const wchar_t* title, const FrameworkElement& content, const wchar_t* glyph,
-                           bool stackWhenNarrow = true) {
+                           bool stackWhenNarrow = true, const wchar_t* description = nullptr) {
     auto card = Markup::XamlReader::Load(LR"(<Border
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
@@ -71,7 +72,19 @@ inline Border settingsCard(const wchar_t* title, const FrameworkElement& content
         row.Height(index == 0 ? star() : automatic());
         layout.RowDefinitions().Append(row);
     }
-    auto header = text(title);
+    FrameworkElement header = text(title);
+    if (description) {
+        StackPanel heading;
+        heading.Spacing(4);
+        heading.Children().Append(header);
+        auto subtitle = Markup::XamlReader::Load(LR"(<TextBlock
+            xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+            FontSize="12" TextWrapping="Wrap"
+            Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>)").as<TextBlock>();
+        subtitle.Text(description);
+        heading.Children().Append(subtitle);
+        header = heading;
+    }
     auto headerIcon = icon(glyph);
     headerIcon.VerticalAlignment(VerticalAlignment::Center);
     headerIcon.Margin({0,0,20,0});
@@ -101,31 +114,44 @@ inline Border settingsCard(const wchar_t* title, const FrameworkElement& content
     return card;
 }
 
-inline Border signalThresholdCard(const wchar_t* title, const TextBlock& value,
-                                 const Slider& slider, const Button& action = nullptr) {
-    Grid row;
+inline constexpr int kDistanceStep = 30;
+inline constexpr int kNearThreshold = system_ble::kDefaultThreshold + kDistanceStep;
+inline constexpr int kFarThreshold = system_ble::kDefaultThreshold - kDistanceStep;
+
+inline int nearestDistanceThreshold(double value) {
+    if (value >= (kNearThreshold + system_ble::kDefaultThreshold) / 2.0) return kNearThreshold;
+    if (value >= (kFarThreshold + system_ble::kDefaultThreshold) / 2.0) return system_ble::kDefaultThreshold;
+    return kFarThreshold;
+}
+
+inline const wchar_t* distanceLabel(int threshold) {
+    return threshold == kNearThreshold ? L"Near" : threshold == kFarThreshold ? L"Far" : L"Medium";
+}
+
+inline Border signalThresholdCard(const wchar_t* title, const Slider& slider) {
+    Grid controls;
     for (auto width : {automatic(), star(), automatic()}) {
         ColumnDefinition column;
         column.Width(width);
-        row.ColumnDefinitions().Append(column);
+        controls.ColumnDefinitions().Append(column);
     }
-    value.VerticalAlignment(VerticalAlignment::Center);
-    value.Margin({0,0,12,0});
-    slider.VerticalAlignment(VerticalAlignment::Center);
-    slider.MaxWidth(240);
+    auto nearLabel = text(distanceLabel(kNearThreshold));
+    auto farLabel = text(distanceLabel(kFarThreshold));
+    nearLabel.VerticalAlignment(VerticalAlignment::Center);
+    farLabel.VerticalAlignment(VerticalAlignment::Center);
+    nearLabel.Margin({0,0,12,0});
+    farLabel.Margin({12,0,0,0});
     slider.Width(240);
     slider.HorizontalAlignment(HorizontalAlignment::Stretch);
+    slider.VerticalAlignment(VerticalAlignment::Center);
     Grid::SetColumn(slider, 1);
-    row.Children().Append(value);
-    row.Children().Append(slider);
-    if (action) {
-        action.VerticalAlignment(VerticalAlignment::Center);
-        action.Margin({12,0,0,0});
-        Grid::SetColumn(action, 2);
-        row.Children().Append(action);
-    }
+    Grid::SetColumn(farLabel, 2);
+    controls.Children().Append(nearLabel);
+    controls.Children().Append(slider);
+    controls.Children().Append(farLabel);
     const auto glyph = std::wstring(1, static_cast<wchar_t>(Symbol::FourBars));
-    return settingsCard(title, row, glyph.c_str());
+    return settingsCard(title, controls, glyph.c_str(), true,
+        L"RSSI-based range does not indicate an exact distance.");
 }
 
 inline void rethrowNonlocalUiError(const hresult_error& error) {

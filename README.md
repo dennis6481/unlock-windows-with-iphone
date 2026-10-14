@@ -39,7 +39,7 @@ Your PC must have Bluetooth enabled, with an adapter and driver that support **B
 ## What it does
 
 - Unlock your locked Windows session using your paired iPhone over Bluetooth. Select the phone unlock tile on the Windows lock screen; click **Unlock** to request a fresh presence check. The phone needs no action for each attempt; locking the PC alone does not request unlock.
-- Adjust **Signal threshold** on the Windows **Status** page. Dragging changes a pending value; **Save** requests UAC.
+- Adjust **Unlock range** on the Windows **Status** page: **Near**, **Medium** or **Far**. Completing a change requests UAC. Signal strength is affected by obstacles and does not indicate an exact distance.
 - **Last Unlock** shows the last successful phone unlock and its signal, for example `2 min ago / -58 dBm`. It resets when the service or PC restarts.
 - Keep an encrypted copy of your Microsoft account password on your PC. Your password is never sent to your iPhone.
 - Manage system pairing, the product binding and saved password from the Windows tray app. The LocalSystem service verifies presence independently when the desktop app exits.

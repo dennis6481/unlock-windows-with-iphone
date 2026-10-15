@@ -68,8 +68,8 @@ struct ControllerState final {
             try {
                 const auto binding = enrollment::readBinding();
                 status.binding = binding;
-                status.status = binding.state == system_ble::BindingState::bound ? L"iPhone bound" :
-                    L"Bind an iPhone";
+                status.status = binding.state == system_ble::BindingState::bound ? L"iPhone paired with this app" :
+                    L"Pair an iPhone";
             } catch (const enrollment::BindingStatusRejected&) {
                 if (lockedDuringQuery()) return;
                 throw;
@@ -92,7 +92,7 @@ struct ControllerState final {
                         throw std::runtime_error("Last unlock reply is invalid.");
                 } catch (...) { status.lastUnlock.reset(); status.error = winrt::to_message(); }
             }
-        } catch (...) { status.error = winrt::to_message(); status.status = L"Binding status unavailable"; }
+        } catch (...) { status.error = winrt::to_message(); status.status = L"App pairing status unavailable"; }
         {
             std::lock_guard lock(mutex);
             status.busy = busy;
@@ -142,8 +142,8 @@ struct ControllerState final {
                 throw std::runtime_error("The console account changed during setup");
             const auto binding = enrollment::readBinding();
             if (binding.state == system_ble::BindingState::bound) {
-                if (binding.record.accountSid != target.sid) throw std::runtime_error("The bound phone belongs to a different account");
-                { std::lock_guard lock(mutex); notices.push_back({L"Password and iPhone binding are saved. Lock this PC and click Unlock to try it.", L"Setup configured", NoticeSeverity::information}); }
+                if (binding.record.accountSid != target.sid) throw std::runtime_error("The paired phone belongs to a different account");
+                { std::lock_guard lock(mutex); notices.push_back({L"Password and iPhone pairing are saved. Lock this PC and click Unlock to try it.", L"Setup configured", NoticeSeverity::information}); }
                 return;
             }
         }

@@ -645,11 +645,11 @@ const wchar_t* authenticationStatusText(const AuthenticationStatus& status) noex
     case AuthenticationFailure::protectedOperationFailed: return L"Protected Bluetooth verification failed. Try again.";
     case AuthenticationFailure::expired: return L"Verification timed out. Try again.";
     case AuthenticationFailure::sessionChanged: return L"Your Windows session changed. Start again.";
-    case AuthenticationFailure::associationInvalid: return L"The bound BLE endpoint is unavailable or no longer paired. Bind again.";
+    case AuthenticationFailure::associationInvalid: return L"The selected BLE endpoint is unavailable or no longer paired. Pair again.";
     case AuthenticationFailure::bondRejected: return L"Authenticated Secure Connections pairing is required.";
     case AuthenticationFailure::cancelled: return L"Verification cancelled.";
-    case AuthenticationFailure::bindingChanged: return L"The binding changed. Start again.";
-    case AuthenticationFailure::storageFailed: return L"The binding could not be saved. The previous binding is retained.";
+    case AuthenticationFailure::bindingChanged: return L"The app pairing changed. Start again.";
+    case AuthenticationFailure::storageFailed: return L"The app pairing could not be saved. The previous pairing is retained.";
     case AuthenticationFailure::evidenceExpired: return L"Bluetooth evidence expired. Click Unlock again.";
     case AuthenticationFailure::internalError: return L"Verification failed. See diagnostics.";
     }
@@ -657,7 +657,7 @@ const wchar_t* authenticationStatusText(const AuthenticationStatus& status) noex
     case AuthenticationStage::verifying: return L"Checking your iPhone's presence\u2026";
     case AuthenticationStage::approved: return L"Presence verified. Unlocking this PC\u2026";
     case AuthenticationStage::consumed: return L"This authorization has already been used. Start again.";
-    case AuthenticationStage::completed: return L"Binding saved.";
+    case AuthenticationStage::completed: return L"App pairing saved.";
     default: return UNLOCK_PRODUCT_DISPLAY_NAME;
     }
 }

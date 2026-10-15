@@ -13,6 +13,7 @@ struct BindingView final {
     winrt::Microsoft::UI::Xaml::Controls::ContentControl content{nullptr};
     std::function<void()> refresh, stop, remove;
     std::function<bool()> busy;
+    std::function<void(bool)> setVisible;
 };
 
 BindingView createBindingView(

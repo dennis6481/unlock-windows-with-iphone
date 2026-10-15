@@ -15,6 +15,7 @@ struct StatusPage : StatusPageT<StatusPage> {
     void Update(unlock_windows::desktop_app::DashboardSnapshot const& snapshot);
     void Stop();
     void Refresh();
+    void SetVisible(bool visible);
     void SetHost(std::function<void(bool)> refresh);
     void Remove();
     bool Busy() const;
@@ -32,7 +33,7 @@ private:
     std::optional<unlock_windows::desktop_app::BindingView> bindingView_;
     std::optional<unlock_windows::saved_credential::BindingSummary> binding_;
     bool saving_ = false, dirty_ = false, updating_ = false, stopped_ = false, hostBusy_ = false;
-    bool resetBindingView_ = false;
+    bool resetBindingView_ = false, visible_ = false;
     std::function<void(bool)> refreshSnapshot_;
     std::wstring saveError_;
     winrt::handle cancellation_;

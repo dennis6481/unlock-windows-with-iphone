@@ -3,6 +3,7 @@
 #include "DesktopNotifications.h"
 #include "DesktopApplication.h"
 #include "Dashboard/Pages/PageControls.h"
+#include "../Resources/DesktopUi.h"
 #include "../Resources/resource.h"
 #include <microsoft.ui.xaml.window.h>
 #include <winrt/Microsoft.UI.Dispatching.h>
@@ -49,20 +50,22 @@ struct DesktopNotifications::State final : std::enable_shared_from_this<State> {
             }
             try {
                 window = Window{};
-                window.Title(notice.title);
+                window.Title(UNLOCK_PRODUCT_DISPLAY_NAME);
+                window.SystemBackdrop(Media::MicaBackdrop{});
                 const auto appWindow = window.AppWindow();
                 appWindow.TitleBar().PreferredTheme(Microsoft::UI::Windowing::TitleBarTheme::UseDefaultAppMode);
                 HWND hwnd = nullptr;
                 check_hresult(window.as<IWindowNative>()->get_WindowHandle(&hwnd));
                 const auto dpi = GetDpiForWindow(hwnd);
-                appWindow.Resize({MulDiv(560, dpi, 96), MulDiv(360, dpi, 96)});
+                appWindow.Resize({MulDiv(460, dpi, 96), MulDiv(280, dpi, 96)});
+                desktop_ui::centerOnActiveMonitor(hwnd);
                 const auto appIcon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDI_UNLOCK_APP));
                 if (!appIcon) throw_last_error();
                 SendMessageW(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(appIcon));
                 SendMessageW(hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(appIcon));
                 StackPanel content;
                 content.Spacing(16);
-                content.Margin({28, 24, 28, 24});
+                content.Margin({24, 16, 24, 16});
                 content.Children().Append(dashboard_ui::text(notice.title.c_str(), 24));
                 InfoBar message;
                 message.IsClosable(false);
@@ -72,7 +75,9 @@ struct DesktopNotifications::State final : std::enable_shared_from_this<State> {
                 content.Children().Append(message);
                 Button close;
                 close.Content(box_value(L"OK"));
+                close.MinWidth(80);
                 close.HorizontalAlignment(HorizontalAlignment::Right);
+                close.Margin({24, 0, 24, 20});
                 close.Style(Application::Current().Resources().Lookup(box_value(L"AccentButtonStyle")).as<Style>());
                 const auto weak = weak_from_this();
                 close.Click([weak](const auto&, const auto&) {
@@ -81,11 +86,28 @@ struct DesktopNotifications::State final : std::enable_shared_from_this<State> {
                         catch (...) { self->displayFailure(); }
                     }
                 });
-                content.Children().Append(close);
                 ScrollViewer scroll;
                 scroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Disabled);
+                scroll.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);
                 scroll.Content(content);
-                window.Content(scroll);
+                Grid layout;
+                RowDefinition titleBarRow, contentRow, actionsRow;
+                titleBarRow.Height(dashboard_ui::automatic());
+                contentRow.Height(dashboard_ui::star());
+                actionsRow.Height(dashboard_ui::automatic());
+                layout.RowDefinitions().Append(titleBarRow);
+                layout.RowDefinitions().Append(contentRow);
+                layout.RowDefinitions().Append(actionsRow);
+                TitleBar titleBar;
+                titleBar.Title(UNLOCK_PRODUCT_DISPLAY_NAME);
+                layout.Children().Append(titleBar);
+                Grid::SetRow(scroll, 1);
+                layout.Children().Append(scroll);
+                Grid::SetRow(close, 2);
+                layout.Children().Append(close);
+                window.Content(layout);
+                window.ExtendsContentIntoTitleBar(true);
+                window.SetTitleBar(titleBar);
                 closedToken = window.Closed([weak](const auto&, const auto&) {
                     if (const auto self = weak.lock()) self->closed();
                 });

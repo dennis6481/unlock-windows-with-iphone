@@ -42,11 +42,22 @@ int main() {
         expect(rejected, "unknown, incomplete or conflicting roles are rejected before dispatch");
     }
     expect(parseProductVersion(kProductVersion.text()) == kProductVersion, "configured product version round trip");
-    expect(packageAction({0, 10, 0}, {0, 9, 9}) == PackageAction::update, "numeric minor version comparison");
-    expect(packageAction({1, 0, 0}, {0, 65535, 65535}) == PackageAction::update, "major version takes precedence");
+    expect(parseProductVersion(L"1.2.3") == ProductVersion{1, 2, 3, 0}, "three-part versions default build to zero");
+    expect(parseProductVersion(L"1.2.3.42") == ProductVersion{1, 2, 3, 42}, "four-part product version round trip");
+    expect(parseProductVersion(L"65535.65535.65535.65535") == ProductVersion{65535, 65535, 65535, 65535}, "all version parts support the resource limit");
+    expect(packageAction({0, 10, 0, 0}, {0, 9, 9, 65535}) == PackageAction::update, "numeric minor version comparison");
+    expect(packageAction({1, 0, 0, 0}, {0, 65535, 65535, 65535}) == PackageAction::update, "major version takes precedence");
+    expect(packageAction({1, 2, 3, 10}, {1, 2, 3, 9}) == PackageAction::update, "build comparison is numeric");
+    expect(packageAction({1, 2, 4, 0}, {1, 2, 3, 65535}) == PackageAction::update, "patch takes precedence over build");
+    expect(packageAction({1, 2, 3, 9}, {1, 2, 3, 10}) == PackageAction::rejectDowngrade, "lower builds are rejected");
+    expect(packageAction(*parseProductVersion(L"1.2.3.0"), *parseProductVersion(L"1.2.3")) == PackageAction::reinstall,
+        "legacy three-part versions are equivalent to build zero");
+    expect(ProductVersion{1, 2, 3, 42}.release() == ProductVersion{1, 2, 3, 0}.release(), "public releases ignore build differences");
+    expect(ProductVersion{1, 2, 4, 0}.release() > ProductVersion{1, 2, 3, 65535}.release(), "public updates compare release versions");
     expect(packageAction(kProductVersion, kProductVersion) == PackageAction::reinstall, "same version requires explicit reinstall");
-    expect(packageAction({0, 1, 0}, {0, 1, 1}) == PackageAction::rejectDowngrade, "reject downgrade");
-    for (const auto* invalid : {L"", L"0.1", L"0.1.0.0", L"01.1.0", L"1.-1.0", L"65536.0.0", L"0.1.0junk"})
+    expect(packageAction({0, 1, 0, 0}, {0, 1, 1, 0}) == PackageAction::rejectDowngrade, "reject downgrade");
+    for (const auto* invalid : {L"", L"0.1", L"0.1.0.", L"1.2.3.4.5", L"01.1.0", L"1.2.3.04", L"1.-1.0",
+            L"65536.0.0", L"1.2.3.65536", L"999999999999999999999.0.0", L"0.1.0junk", L"1.2.3.4junk"})
         expect(!parseProductVersion(invalid), "malformed product versions fail closed");
     size_t desktopTools = 0;
     for (size_t i = 0; i < kComponentFiles.size(); ++i) {
@@ -87,7 +98,7 @@ int main() {
         installed.installedVersion = version;
         expect(plan().action == MaintenanceAction::blocked, "missing or malformed installed versions must block maintenance");
     }
-    for (const auto* version : {L"1.0.0", L"1.0.1", L"2.0.0"}) {
+    for (const auto* version : {L"1.0.0", L"1.0.1", L"2.0.0", L"1.0.0.0", L"1.0.0.42"}) {
         installed.installedVersion = version;
         expect(plan().action == MaintenanceAction::maintain, "maintenance floor is fixed independently of the current package version");
     }

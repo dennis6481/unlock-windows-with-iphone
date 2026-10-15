@@ -53,6 +53,15 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Validate product release version
+        shell: pwsh
+        run: |
+          . .\WindowsBuild.ps1
+          $metadata = Get-ProductBuildMetadata -Architecture $env:UNLOCK_TARGET_ARCH
+          if ($metadata.ReleaseVersion -cne $env:RELEASE_VERSION) {
+              throw "Product release version does not match tag $env:GITHUB_REF_NAME."
+          }
+
       - name: Run all Release tests
         shell: cmd
         run: |
@@ -82,9 +91,14 @@ jobs:
               throw "Expected one installer, found $($installers.Count)."
           }
           $installer = $installers[0]
+          $metadata = Get-ProductBuildMetadata -Architecture $env:UNLOCK_TARGET_ARCH
+          $expected = [version]$metadata.Version
           $version = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($installer.FullName)
-          if ($version.ProductVersion -cne $env:RELEASE_VERSION -or $version.FileVersion -cne $version.ProductVersion) {
-              throw "Installer version does not match tag $env:GITHUB_REF_NAME."
+          if ($version.ProductVersion -cne $metadata.Version -or $version.FileVersion -cne $metadata.Version -or
+              [version]::new($version.ProductMajorPart, $version.ProductMinorPart, $version.ProductBuildPart, $version.ProductPrivatePart) -ne $expected -or
+              [version]::new($version.FileMajorPart, $version.FileMinorPart, $version.FileBuildPart, $version.FilePrivatePart) -ne $expected -or
+              $installer.Name -cne $metadata.SetupFile) {
+              throw 'Installer name or four-part version does not match ProductVersion.h.'
           }
           if ((Get-PortableExecutableArchitecture -Path $installer.FullName) -cne $env:UNLOCK_TARGET_ARCH) {
               throw "Installer architecture does not match $env:UNLOCK_TARGET_ARCH."

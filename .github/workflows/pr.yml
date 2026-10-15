@@ -52,12 +52,10 @@ jobs:
       - name: Determine snapshot artifact name
         id: snapshot
         shell: pwsh
-        env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           . .\WindowsBuild.ps1
           $metadata = Get-ProductBuildMetadata -Architecture $env:UNLOCK_TARGET_ARCH
-          "name=$([IO.Path]::GetFileNameWithoutExtension($metadata.SetupFile))-SNAPSHOT($env:PR_NUMBER)" >> $env:GITHUB_OUTPUT
+          "name=$([IO.Path]::GetFileNameWithoutExtension($metadata.SetupFile))-SNAPSHOT($($metadata.Build))" >> $env:GITHUB_OUTPUT
           "path=windows/dist/$($metadata.SetupFile)" >> $env:GITHUB_OUTPUT
 
       - name: Upload snapshot installer

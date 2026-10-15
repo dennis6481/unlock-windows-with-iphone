@@ -12,6 +12,7 @@ param(
     [Parameter(ParameterSetName = 'MSBuild', Mandatory)][switch]$InvokeMSBuild,
     [Parameter(ParameterSetName = 'MSBuild', Position = 0, Mandatory)][string]$ProjectPath,
     [Parameter(ParameterSetName = 'MSBuild', Position = 1, ValueFromRemainingArguments)][string[]]$MSBuildArguments,
+    [Parameter(ParameterSetName = 'MSBuild')][switch]$RunTests,
     [string]$OutputDirectory,
     [ValidateSet('auto', 'x64', 'arm64')][string]$TargetArchitecture
 )
@@ -112,9 +113,11 @@ function Get-ProductBuildMetadata {
 
     $componentHeader = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'ComponentFiles.h'))
     $productHeader = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'ProductVersion.h'))
-    $versionMatch = [regex]::Match($productHeader, 'kProductVersion\{(\d+),\s*(\d+),\s*(\d+)\}')
+    $versionMatch = [regex]::Match($productHeader, 'kProductVersion\{(\d+),\s*(\d+),\s*(\d+),\s*(\d+)\}')
     if (!$versionMatch.Success) { throw 'Missing Windows product version.' }
-    $version = '{0}.{1}.{2}' -f $versionMatch.Groups[1].Value, $versionMatch.Groups[2].Value, $versionMatch.Groups[3].Value
+    $parts = @(1..4 | ForEach-Object { [uint16]::Parse($versionMatch.Groups[$_].Value) })
+    $version = $parts -join '.'
+    $releaseVersion = $parts[0..2] -join '.'
     $names = @{}
     foreach ($match in [regex]::Matches($componentHeader, 'wchar_t\s+(\w+)\[\]\s*=\s*L"([^"]+)";')) {
         $names[$match.Groups[1].Value] = $match.Groups[2].Value
@@ -134,15 +137,18 @@ function Get-ProductBuildMetadata {
     [pscustomobject]@{
         Architecture = $normalizedArchitecture
         Version = $version
-        Major = $versionMatch.Groups[1].Value
-        Minor = $versionMatch.Groups[2].Value
-        Patch = $versionMatch.Groups[3].Value
+        ReleaseVersion = $releaseVersion
+        VersionDefinition = $versionMatch.Value
+        Major = $parts[0]
+        Minor = $parts[1]
+        Patch = $parts[2]
+        Build = $parts[3]
         MinimumWindowsBuild = $minimumBuildMatch.Groups[1].Value
         CredentialProviderFile = $names.kCredentialProviderFile
         SavedCredentialServiceFile = $names.kSavedCredentialServiceFile
         MainAppFile = $names.kMainAppFile
         InstallerFile = $names.kInstallerFile
-        SetupFile = "UnlockWithIPhone_${version}_${normalizedArchitecture}_setup.exe"
+        SetupFile = "UnlockWithIPhone_${releaseVersion}_${normalizedArchitecture}_setup.exe"
         VersionFiles = $versionFiles
     }
 }
@@ -151,17 +157,18 @@ function Write-BuildResources {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Directory,
-        [Parameter(Mandatory)][ValidateSet('x64', 'arm64', 'X64', 'ARM64')][string]$Architecture
+        [Parameter(Mandatory)][ValidateSet('x64', 'arm64', 'X64', 'ARM64')][string]$Architecture,
+        [object]$Metadata
     )
 
-    $metadata = Get-ProductBuildMetadata -Architecture $Architecture
+    if (!$Metadata) { $Metadata = Get-ProductBuildMetadata -Architecture $Architecture }
     [IO.Directory]::CreateDirectory($Directory) | Out-Null
     $props = @(
         '<!-- Created by Rui MA on 10 Oct 2026 -->',
         '<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">',
         '  <PropertyGroup>',
         "    <UnlockProductVersion>$($metadata.Version)</UnlockProductVersion>",
-        "    <UnlockProductVersionParts>$($metadata.Major),$($metadata.Minor),$($metadata.Patch),0</UnlockProductVersionParts>",
+        "    <UnlockProductVersionParts>$($metadata.Major),$($metadata.Minor),$($metadata.Patch),$($metadata.Build)</UnlockProductVersionParts>",
         "    <UnlockArchitecture>$($metadata.Architecture)</UnlockArchitecture>",
         "    <UnlockPlatform>$($metadata.Architecture.ToUpperInvariant())</UnlockPlatform>",
         "    <UnlockMinimumWindowsBuild>$($metadata.MinimumWindowsBuild)</UnlockMinimumWindowsBuild>",
@@ -192,8 +199,8 @@ function Write-BuildResources {
             "#include ""$resourceHeader""",
             '',
             '1 VERSIONINFO',
-            "FILEVERSION $($metadata.Major),$($metadata.Minor),$($metadata.Patch),0",
-            "PRODUCTVERSION $($metadata.Major),$($metadata.Minor),$($metadata.Patch),0",
+            "FILEVERSION $($metadata.Major),$($metadata.Minor),$($metadata.Patch),$($metadata.Build)",
+            "PRODUCTVERSION $($metadata.Major),$($metadata.Minor),$($metadata.Patch),$($metadata.Build)",
             'FILEFLAGSMASK VS_FFI_FILEFLAGSMASK',
             'FILEFLAGS 0',
             'FILEOS VOS_NT_WINDOWS32',
@@ -243,7 +250,7 @@ function Write-EmbeddedPackage {
     })
     if (!$components.Count) { throw 'Component contract is empty.' }
     $parts = $Version.Split('.')
-    if ($parts.Count -ne 3) { throw "Invalid product version: $Version" }
+    if ($parts.Count -ne 4) { throw "Invalid product version: $Version" }
     $entries = [Collections.Generic.List[object]]::new()
     $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     $architecture = $null
@@ -254,7 +261,7 @@ function Write-EmbeddedPackage {
         $path = (Resolve-Path -LiteralPath $matches[0]).Path
         $info = [Diagnostics.FileVersionInfo]::GetVersionInfo($path)
         if ($info.ProductVersion -cne $Version -or $info.FileVersion -cne $Version -or
-            $info.ProductPrivatePart -ne 0 -or $info.FilePrivatePart -ne 0 -or
+            $info.ProductPrivatePart -ne [int]$parts[3] -or $info.FilePrivatePart -ne [int]$parts[3] -or
             $info.ProductMajorPart -ne [int]$parts[0] -or $info.FileMajorPart -ne [int]$parts[0] -or
             $info.ProductMinorPart -ne [int]$parts[1] -or $info.FileMinorPart -ne [int]$parts[1] -or
             $info.ProductBuildPart -ne [int]$parts[2] -or $info.FileBuildPart -ne [int]$parts[2]) {
@@ -375,6 +382,63 @@ function Write-EmbeddedPackage {
 }
 
 
+function Invoke-WindowsBuild {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ProjectPath,
+        [string[]]$Arguments,
+        [Parameter(Mandatory)][ValidateSet('x64', 'arm64')][string]$Architecture,
+        [switch]$RunTests
+    )
+
+    $project = (Resolve-Path -LiteralPath $ProjectPath -ErrorAction Stop).Path
+    $targets = @($Arguments | Where-Object { $_ -match '^[-/](t|target):' })
+    $query = @($Arguments | Where-Object { $_ -match '^[-/](getProperty|getItem|pp|preprocess|targets|version|help)(:|$)' })
+    $productBuild = $project -ieq (Join-Path $PSScriptRoot 'UnlockWindows.sln') -and !$query.Count -and
+        (!$targets.Count -or ($targets.Count -eq 1 -and $targets[0] -match '^[-/](t|target):(Build|Rebuild)$'))
+    if ($RunTests -and !$productBuild) { throw 'RunTests requires a complete solution Build or Rebuild.' }
+
+    $directory = Join-Path $PSScriptRoot 'build'
+    $configuration = 'Debug'
+    foreach ($argument in $Arguments) {
+        if ($argument -match '^[-/](p|property):(.+)$') {
+            foreach ($property in ($Matches[2] -split ';')) {
+                if ($property -match '^UnlockBuildDirectory=(.+)$') { $directory = $Matches[1] }
+                elseif ($property -match '^Configuration=(.+)$') { $configuration = $Matches[1] }
+            }
+        }
+    }
+    if (![IO.Path]::IsPathRooted($directory)) { $directory = Join-Path (Get-Location).ProviderPath $directory }
+    $directory = [IO.Path]::GetFullPath($directory)
+    $increment = $productBuild -and $env:CI -ine 'true' -and $env:GITHUB_ACTIONS -ine 'true'
+    $metadata = Get-ProductBuildMetadata -Architecture $Architecture
+    if ($increment -and $metadata.Build -eq [uint16]::MaxValue) {
+        throw 'Product build number is 65535. Set the next release version/build in ProductVersion.h before building.'
+    }
+    # Refresh before MSBuild evaluates project imports; every project uses this snapshot.
+    if (!$query.Count -and (!$targets.Count -or $targets[0] -notmatch '^[-/](t|target):Clean$')) {
+        Write-BuildResources -Directory (Join-Path $directory 'generated') -Architecture $Architecture -Metadata $metadata
+    }
+    $platform = $Architecture.ToUpperInvariant()
+    if ($Architecture -eq 'x64') { $platform = 'x64' }
+    & MSBuild.exe $project @Arguments "/p:Platform=$platform" "/p:UnlockBuildDirectory=$directory"
+    if ($LASTEXITCODE -ne 0) { return }
+    if ($RunTests) {
+        & MSBuild.exe (Join-Path $PSScriptRoot 'UnlockWindowsTests.proj') /t:Test /m:1 /nologo `
+            "/p:Configuration=$configuration" "/p:Platform=$platform" "/p:UnlockBuildDirectory=$directory" /p:BuildTesting=ON
+        if ($LASTEXITCODE -ne 0) { return }
+    }
+    if ($increment) {
+        $headerPath = Join-Path $PSScriptRoot 'ProductVersion.h'
+        $header = [IO.File]::ReadAllText($headerPath)
+        if (!$header.Contains($metadata.VersionDefinition)) { throw 'ProductVersion.h changed during the build; build number was not advanced.' }
+        $next = 'kProductVersion{{{0}, {1}, {2}, {3}}}' -f $metadata.Major, $metadata.Minor, $metadata.Patch, ($metadata.Build + 1)
+        [IO.File]::WriteAllText($headerPath, $header.Replace($metadata.VersionDefinition, $next), [Text.UTF8Encoding]::new($false))
+        Write-Host "Built $($metadata.Version). Next local build: $($metadata.ReleaseVersion).$($metadata.Build + 1)."
+    }
+}
+
+
 function Initialize-VisualStudioEnvironment {
     [CmdletBinding()]
     param([Parameter(Mandatory)][ValidateSet('x64', 'arm64')][string]$Architecture)
@@ -428,9 +492,7 @@ if ($MyInvocation.InvocationName -ne '.') {
             if (!$OutputDirectory) { throw 'OutputDirectory is required with Prepare.' }
             Write-BuildResources -Directory (Join-Path $OutputDirectory 'generated') -Architecture $TargetArchitecture
         } else {
-            $platform = 'x64'
-            if ($TargetArchitecture -ieq 'arm64') { $platform = 'ARM64' }
-            & MSBuild.exe $ProjectPath @MSBuildArguments "/p:Platform=$platform"
+            Invoke-WindowsBuild -ProjectPath $ProjectPath -Arguments $MSBuildArguments -Architecture $TargetArchitecture -RunTests:$RunTests
             exit $LASTEXITCODE
         }
     } elseif ($WriteBuildResources) {

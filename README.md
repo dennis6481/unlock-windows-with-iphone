@@ -85,7 +85,7 @@ The [Windows module index](windows/README.md#module-index) explains the source d
 
 Do not mix service, Credential Provider and desktop binaries from different builds.
 
-Windows distribution is a single `windows/dist/UnlockWithIPhone_<version>_<architecture>_setup.exe` with the desktop app, service and Credential Provider embedded. 
+Windows distribution is a single `windows/dist/UnlockWithIPhone_<version>_<architecture>_setup.exe` with the desktop app, service and Credential Provider embedded. The product version uses `major.minor.patch.build`; installer filenames omit build. Existing three-part versions are read with build `0`.
 
 
 ## Known limitations

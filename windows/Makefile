@@ -9,12 +9,13 @@ TARGET_ARCH = auto
 BUILD_TESTING = OFF
 WINDOWS_BUILD_SCRIPT = $(CURDIR)\WindowsBuild.ps1
 SOLUTION = $(CURDIR)\UnlockWindows.sln
-TEST_PROJECT = $(CURDIR)\UnlockWindowsTests.proj
 ABS_BUILD_DIR = $(abspath $(BUILD_DIR))
 
 unexport MAKEFLAGS
 
-all: build test
+all: test
+
+.PHONY: all help configure build configure-release build-release release test clean run-app
 
 help:
 	@echo "make                 configure, build and run all tests"
@@ -45,8 +46,8 @@ build-release: configure-release
 
 release: build-release
 
-test: build
-	set "TEMP=$(TMP_DIR)" && set "TMP=$(TMP_DIR)" && set "UNLOCK_VS_DEV_CMD=$(VS_DEV_CMD)" && set "UNLOCK_TARGET_ARCH=$(TARGET_ARCH)" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(WINDOWS_BUILD_SCRIPT)" -InvokeMSBuild "$(TEST_PROJECT)" /t:Test /m:1 /nologo "/p:Configuration=$(CONFIG)" "/p:UnlockBuildDirectory=$(ABS_BUILD_DIR)"
+test: configure
+	set "TEMP=$(TMP_DIR)" && set "TMP=$(TMP_DIR)" && set "UNLOCK_VS_DEV_CMD=$(VS_DEV_CMD)" && set "UNLOCK_TARGET_ARCH=$(TARGET_ARCH)" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(WINDOWS_BUILD_SCRIPT)" -InvokeMSBuild "$(SOLUTION)" -RunTests /restore /m /nologo "/p:Configuration=$(CONFIG)" "/p:UnlockBuildDirectory=$(ABS_BUILD_DIR)" "/p:BuildTesting=$(BUILD_TESTING)"
 
 clean:
 	set "TEMP=$(TMP_DIR)" && set "TMP=$(TMP_DIR)" && set "UNLOCK_VS_DEV_CMD=$(VS_DEV_CMD)" && set "UNLOCK_TARGET_ARCH=$(TARGET_ARCH)" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(WINDOWS_BUILD_SCRIPT)" -InvokeMSBuild "$(SOLUTION)" /t:Clean /m /nologo "/p:Configuration=$(CONFIG)" "/p:UnlockBuildDirectory=$(ABS_BUILD_DIR)"

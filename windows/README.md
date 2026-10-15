@@ -27,6 +27,10 @@ make -C windows build-release
 
 `test` builds first and then runs the four native test programs in their existing order. `make -C windows` builds and runs tests; `build-release` builds Release targets without executing them. The shared [WindowsBuild.ps1](WindowsBuild.ps1) helper finds Visual Studio with `vswhere`, selects native `x64` or `arm64`, initializes the MSBuild environment and validates the Windows SDK tools. It redirects compiler temporary files into the ignored root `.tmp/` directory.
 
+Product versions use `major.minor.patch.build` from [ProductVersion.h](ProductVersion.h); About displays `Version X.Y.Z (Build B)`. A complete local solution Build/Rebuild uses one fixed version, then advances the header's build once for the next invocation after success. `make` and `make test` wait for tests to pass too.
+
+Failed/cancelled builds, configure, clean, standalone tests and subprojects do not advance it. CI keeps the committed version. Parts range from 0 to 65535; set the next release/build manually before incrementing would overflow. Build one invocation at a time per checkout.
+
 To select a target and separate build directories explicitly:
 
 ```powershell
@@ -35,7 +39,7 @@ make -C windows build-release TARGET_ARCH=arm64 BUILD_DIR=build/arm64-release
 ```
 
 
-The installer is generated at `windows/dist/UnlockWithIPhone_<version>_<architecture>_setup.exe`, with `x64` or `arm64` matching the compiler target and the version read from [ProductVersion.h](ProductVersion.h). Distribute only the **Release** setup EXE; it embeds the desktop app and its runtime files, service and Credential Provider. Static libraries are isolated under `lib/<architecture>/<configuration>` to prevent Debug/Release runtime mixing. Use separate build directories per architecture/configuration; the active desktop EXE remains at the build root for existing make commands.
+The installer is generated at `windows/dist/UnlockWithIPhone_<version>_<architecture>_setup.exe`, with `x64` or `arm64` matching the compiler target and the first three version parts read from [ProductVersion.h](ProductVersion.h). Distribute only the **Release** setup EXE; it embeds the desktop app and its runtime files, service and Credential Provider. Static libraries are isolated under `lib/<architecture>/<configuration>` to prevent Debug/Release runtime mixing. Use separate build directories per architecture/configuration; the active desktop EXE remains at the build root for existing make commands.
 
 The desktop build follows make → MSBuild Solution/.vcxproj. Native libraries, the service, Credential Provider, desktop WinUI app and installer are separate projects with explicit dependencies and outputs. Pinned Windows App SDK packages and Hybrid CRT remain in use; local NuGet caches and Visual Studio user settings are ignored by Git. XAML generation and `DesktopApp.files` preserve the pages' relative directories. `DesktopApp.files` comes from the WinUI project; packaging embeds one dependency manifest for paths, sizes, SHA-256 and PE machine types. Third-party files retain their versions. The presence replacement built successfully for x64 Release on 11 Oct 2026 with tests disabled (0 errors, 0 warnings). Local resource limits required one MSBuild node and one compiler process. Tests, runtime, clean-machine deployment and ARM64 acceptance remain pending.
 
@@ -50,19 +54,13 @@ Open **Unlock with iPhone** from the Start Menu to show the main window. Install
 
 ## Update and uninstall
 
-Run a newer installer to **Update**, or the same version to **Reinstall**. Downgrades are rejected. Updates preserve your saved password and pairing information.
+Run a newer installer to **Update**, or the same version to **Reinstall**. All four version parts participate in this comparison; three-part installed versions default to build `0`. Downgrades are rejected. Updates preserve your saved password and pairing information.
 
 For uninstall instructions, see the [main guide](../README.md#uninstall). For installation compatibility and failure recovery, see the [installer guide](Setup/README.md).
 
 ## Troubleshooting
 
-Use tray **Status… → Diagnostics**. From the repository root, the read-only component inspector is:
-
-```powershell
-& '.\windows\Diagnostics\Get-ComponentsStatus.ps1'
-```
-
-It does not start services/tasks, repair installations or mount offline user hives. Do not run a second build-tree tray alongside the installed app. A service approved status does not confirm that Windows accepted the password.
+Use tray **Status… → Diagnostics**. Do not run a second build-tree tray alongside the installed app. A service approved status does not confirm that Windows accepted the password.
 
 ## Module index
 
@@ -79,8 +77,7 @@ windows/
 ├── Protocol/           SHA-256 hashing for installer package integrity.
 ├── Setup/              Installation, updates, removal and restart continuation.
 ├── Resources/          Win32 appearance, manifests, icons and version resources.
-├── *Tests/             C++ regression tests orchestrated by UnlockWindowsTests.proj.
-└── Diagnostics/        Read-only component and installation-state inspection.
+└── *Tests/             C++ regression tests orchestrated by UnlockWindowsTests.proj.
 ```
 
 Module guides: [SavedCredential](SavedCredential/README.md), [CredentialProvider](CredentialProvider/README.md) and [Setup](Setup/README.md). See [PROTOCOL.md](../PROTOCOL.md) for the shared protocol.
@@ -109,9 +106,9 @@ The main window uses Mica and system theme colors; Windows 10 uses the framework
 **Last Unlock** stays right-aligned, for example `2 min ago / -58 dBm`, and updates after native Windows authentication succeeds. RSSI comes from the consumed claim, not a later scan. No history displays `—`; unbound phones hide the card and query failures remain explicit errors. Records survive desktop reopening but reset on service/PC restart, account change, binding replacement/removal or password removal. Threshold changes retain history. Compiled for x64 Release on 11 Oct 2026; runtime/hardware acceptance remains pending.
 ## Tag builds
 
-Pushing `v1.0.0` publishes a Release; `v1.0.0-rc` publishes a Pre-release without marking it Latest. The numeric tag version must match [ProductVersion.h](ProductVersion.h); `-rc` is GitHub release metadata only, so RC and final installers with the same numeric version use Reinstall.
+Pushing `v1.0.0` publishes a Release; `v1.0.0-rc` publishes a Pre-release without marking it Latest. The numeric tag must match the first three parts in [ProductVersion.h](ProductVersion.h); installer versions retain all four committed parts, while Release download filenames use three parts. About checks public updates using the first three parts only. `-rc` is GitHub release metadata only, so RC and final installers with the same four-part version use Reinstall.
 
-CI uses `WindowsBuild.ps1` without GNU Make. [PR builds](../.github/workflows/pr.yml) compile the Release solution for x64 and ARM64 when targeting `dev` or `main`, without running tests or publishing; require **Build x64** and **Build arm64** in the target branch ruleset to block failed builds from merging. [Release CI](../.github/workflows/release.yml) runs all four native test programs on both architectures before building and verifying installers; any failure blocks publication.
+CI uses `WindowsBuild.ps1` without GNU Make. [PR builds](../.github/workflows/pr.yml) compile the Release solution for x64 and ARM64 when targeting `dev` or `main`, without running tests or publishing a release. Each uploads an installer with a three-part version filename in an artifact named `UnlockWithIPhone_<version>_<architecture>_setup-SNAPSHOT(<build>)`, using the product version's fourth part in parentheses; require **Build x64** and **Build arm64** in the target branch ruleset to block failed builds from merging. [Release CI](../.github/workflows/release.yml) runs all four native test programs on both architectures before building and verifying installers; any failure blocks publication.
 
 ## References
 

@@ -286,7 +286,7 @@ void PackageDeployment::stageContinuation(SetupTransactionState& state) const {
     adapter_.ensureProtectedDirectory(directory, true);
     adapter_.logOperation(L"Create protected continuation directory: " + directory.wstring());
     const auto wizard = directory / kInstallerFile;
-    if (adapter_.binaryVersion(state.sourcePath).text() != state.packageVersion) fail(L"Maintenance installer version changed.");
+    if (parseProductVersion(state.packageVersion) != adapter_.binaryVersion(state.sourcePath)) fail(L"Maintenance installer version changed.");
     copyNativeExecutable(state.sourcePath, wizard);
     verifyPackageCopy(state.sourcePath, wizard);
     state.wizardPath = wizard.wstring();

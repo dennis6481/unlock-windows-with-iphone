@@ -48,3 +48,19 @@ jobs:
           if errorlevel 1 exit /b %errorlevel%
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File WindowsBuild.ps1 -InvokeMSBuild "UnlockWindows.sln" /restore /m /nologo "/p:Configuration=Release" "/p:UnlockBuildDirectory=%CD%\build" "/p:BuildTesting=OFF"
           if errorlevel 1 exit /b %errorlevel%
+
+      - name: Determine snapshot artifact name
+        id: snapshot
+        shell: pwsh
+        run: |
+          . .\WindowsBuild.ps1
+          $metadata = Get-ProductBuildMetadata -Architecture $env:UNLOCK_TARGET_ARCH
+          "name=$([IO.Path]::GetFileNameWithoutExtension($metadata.SetupFile))-SNAPSHOT($($metadata.Build))" >> $env:GITHUB_OUTPUT
+          "path=windows/dist/$($metadata.SetupFile)" >> $env:GITHUB_OUTPUT
+
+      - name: Upload snapshot installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.snapshot.outputs.name }}
+          path: ${{ steps.snapshot.outputs.path }}
+          if-no-files-found: error

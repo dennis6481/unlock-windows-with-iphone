@@ -304,6 +304,11 @@ struct Session::State final : std::enable_shared_from_this<State> {
             report("ANCS service count=" + std::to_string(found.Services().Size()));
             if (found.Services().Size() != 1) throw VerificationError(Failure::protectedOperationFailed, "ANCS service not unique");
             service = found.Services().GetAt(0);
+            const auto opened = await(service.OpenAsync(GattSharingMode::SharedReadAndWrite), "Open ANCS service for shared read/write");
+            report("ANCS shared open status=" + std::to_string(static_cast<int>(opened)));
+            if (opened != GattOpenStatus::Success && opened != GattOpenStatus::AlreadyOpened)
+                throw VerificationError(Failure::protectedOperationFailed,
+                    ("ANCS shared open failed: status=" + std::to_string(static_cast<int>(opened))).c_str());
             const auto sources = await(service.GetCharacteristicsForUuidAsync(kNotificationSource, BluetoothCacheMode::Cached), "Cached-mode Notification Source structure query");
             { std::lock_guard lock(mutex); changed = initial != revision; }
             if (changed) { report("ANCS discovery changed; discard provisional characteristics and rediscover"); service.Close(); service = nullptr; continue; }

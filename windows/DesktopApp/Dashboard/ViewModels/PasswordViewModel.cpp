@@ -18,15 +18,24 @@ PasswordViewModel::PasswordViewModel() {
     const auto weak = get_weak();
     using unlock_windows::desktop_app::ViewModelCommand;
     refresh_ = make_self<ViewModelCommand>([weak] { if (auto model = weak.get()) {
-        try { model->Refresh(); } catch (const hresult_error& error) { model->UiError(error); }
+        try { model->Refresh(); } catch (const hresult_error& error) {
+            if (isNonlocalUiError(error)) throw;
+            model->UiError(error);
+        }
     } }, [weak] { auto model = weak.get(); return model && !model->stopped_ && !model->loading_ && !model->managing_; });
     password_ = make_self<ViewModelCommand>([weak] { if (auto model = weak.get()) {
         try { model->beginOperation(model->summary_->credentialPresent ? Operation::updateCredential : Operation::setCredential); }
-        catch (const hresult_error& error) { model->UiError(error); }
+        catch (const hresult_error& error) {
+            if (isNonlocalUiError(error)) throw;
+            model->UiError(error);
+        }
     } }, [weak] { auto model = weak.get(); return model && model->Ready(); });
     remove_ = make_self<ViewModelCommand>([weak] { if (auto model = weak.get()) {
         try { model->beginOperation(Operation::clearCredential); }
-        catch (const hresult_error& error) { model->UiError(error); }
+        catch (const hresult_error& error) {
+            if (isNonlocalUiError(error)) throw;
+            model->UiError(error);
+        }
     } }, [weak] { auto model = weak.get(); return model && model->CanRemove(); });
 }
 hstring PasswordViewModel::Account() const {
@@ -74,7 +83,6 @@ void PasswordViewModel::Refresh() {
     query_ = query(get_weak(), dispatcher_, reportError_);
 }
 void PasswordViewModel::UiError(const hresult_error& failure) {
-    rethrowNonlocalUiError(failure);
     Stop(); retry_ = false;
     applyState();
     error(L"Password UI: " + std::wstring(failure.message()));
@@ -116,7 +124,7 @@ Windows::Foundation::IAsyncAction PasswordViewModel::query(weak_ref<PasswordView
                 reportError(L"Status reply acknowledgment failed; stage=" + std::wstring(callStageName(diagnostics.stage)) +
                     L"; win32=" + std::to_wstring(diagnostics.win32Error));
         }
-    } catch (...) { failure = currentException(); }
+    } catch (...) { failure = formatException(std::current_exception()); }
     if (cancellation()) co_return;
     if (!dispatcher.TryEnqueue([weak, summary = std::move(summary), failure = std::move(failure)]() mutable {
         if (auto page = weak.get(); page && !page->stopped_) {
@@ -129,6 +137,7 @@ Windows::Foundation::IAsyncAction PasswordViewModel::query(weak_ref<PasswordView
                     page->retry_ = true; page->Notify({L"RetryVisibility"});
                 }
             } catch (const hresult_error& error) {
+                if (isNonlocalUiError(error)) throw;
                 page->UiError(error);
             }
         }
@@ -169,7 +178,7 @@ Windows::Foundation::IAsyncAction PasswordViewModel::launch(weak_ref<PasswordVie
             process.value = request.hProcess;
             if (!process.value) throw std::runtime_error("Password window returned no process handle");
         }
-    } catch (...) { failure = currentException(); }
+    } catch (...) { failure = formatException(std::current_exception()); }
     if (process.value) {
         try {
             co_await resume_on_signal(process.value);
@@ -185,7 +194,7 @@ Windows::Foundation::IAsyncAction PasswordViewModel::launch(weak_ref<PasswordVie
                     std::to_wstring(result) + L". Try the password action again.";
             completed = operation == Operation::clearCredential ? result == ERROR_SUCCESS
                 : result == static_cast<DWORD>(unlock_windows::desktop_app::SetupResult::credentialReady);
-        } catch (...) { failure = currentException(); }
+        } catch (...) { failure = formatException(std::current_exception()); }
     }
     if (cancellation()) co_return;
     if (!dispatcher.TryEnqueue([weak, failure = std::move(failure), completed, operation] {
@@ -202,6 +211,7 @@ Windows::Foundation::IAsyncAction PasswordViewModel::launch(weak_ref<PasswordVie
                 }
                 page->passwordSuccessPending_ = false;
             } catch (const hresult_error& error) {
+                if (isNonlocalUiError(error)) throw;
                 page->UiError(error);
             }
         }

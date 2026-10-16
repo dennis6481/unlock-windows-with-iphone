@@ -47,9 +47,9 @@ void AboutViewModel::Check() {
         check_->Invalidate();
         updateCheck_ = checkForUpdates(get_weak(), Microsoft::UI::Dispatching::DispatcherQueue::GetForCurrentThread(), reportError_);
     } catch (const hresult_error& error) {
-        rethrowNonlocalUiError(error);
+        if (isNonlocalUiError(error)) throw;
         Stop();
-        reportError_(currentException());
+        reportError_(formatException(std::current_exception()));
     }
 }
 Windows::Foundation::IAsyncAction AboutViewModel::checkForUpdates(
@@ -94,7 +94,7 @@ Windows::Foundation::IAsyncAction AboutViewModel::checkForUpdates(
         }
     } catch (...) {
         if (cancellation()) co_return;
-        message = failure + currentException();
+        message = failure + formatException(std::current_exception());
     }
     if (cancellation()) co_return;
     try {
@@ -110,11 +110,11 @@ Windows::Foundation::IAsyncAction AboutViewModel::checkForUpdates(
                 page->Notify({L"UpdateStatus", L"ReleaseUri", L"ReleaseVisibility"});
                 page->check_->Invalidate();
             } catch (const hresult_error& error) {
-                rethrowNonlocalUiError(error);
+                if (isNonlocalUiError(error)) throw;
                 page->Stop();
-                page->reportError_(currentException());
+                page->reportError_(formatException(std::current_exception()));
             }
         })) reportError(L"The About UI dispatcher rejected an update.");
-    } catch (...) { reportError(currentException()); }
+    } catch (...) { reportError(formatException(std::current_exception())); }
 }
 }

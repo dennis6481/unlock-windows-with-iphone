@@ -307,7 +307,7 @@ int runTray(HINSTANCE instance, bool setup, bool background) {
             host.reset();
             return result;
         } catch (...) {
-            const auto error = dashboard_ui::currentException();
+            const auto error = dashboard_ui::formatException(std::current_exception());
             showNativeUiError(L"Could not run desktop app.", error, L"Could not run desktop app");
             try { host->finishAfterLoop(); }
             catch (...) { RaiseFailFastException(nullptr, nullptr, 0); }
@@ -316,7 +316,7 @@ int runTray(HINSTANCE instance, bool setup, bool background) {
             return 1;
         }
     } catch (...) {
-        const auto error = dashboard_ui::currentException();
+        const auto error = dashboard_ui::formatException(std::current_exception());
         if (uiStarted) showNativeUiError(L"Could not run desktop app.", error, L"Could not run desktop app");
         else showStartupError(error, L"Could not run desktop app");
         return 1;

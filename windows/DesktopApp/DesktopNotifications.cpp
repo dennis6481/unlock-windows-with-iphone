@@ -83,7 +83,7 @@ struct DesktopNotifications::State final : std::enable_shared_from_this<State> {
                 close.Click([weak](const auto&, const auto&) {
                     if (const auto self = weak.lock(); self && self->window) {
                         try { self->window.Close(); }
-                        catch (...) { self->displayFailure(); }
+                        catch (...) { self->displayFailure(std::current_exception()); }
                     }
                 });
                 ScrollViewer scroll;
@@ -113,7 +113,7 @@ struct DesktopNotifications::State final : std::enable_shared_from_this<State> {
                 });
                 window.Activate();
                 return;
-            } catch (...) { displayFailure(); return; }
+            } catch (...) { displayFailure(std::current_exception()); return; }
         }
         notifyDrained();
     }
@@ -127,15 +127,17 @@ struct DesktopNotifications::State final : std::enable_shared_from_this<State> {
         closing.Close();
     }
 
-    void displayFailure() {
-        failure = dashboard_ui::currentException();
+    /// Present a captured display failure and propagate it if no notice remains.
+    /// @param exception Non-null exception captured by the caller in a catch handler.
+    void displayFailure(const std::exception_ptr& exception) {
+        failure = dashboard_ui::formatException(exception);
         failed = true;
         try { releaseWindow(); }
-        catch (...) { failure += L"\n" + dashboard_ui::currentException(); }
+        catch (...) { failure += L"\n" + dashboard_ui::formatException(std::current_exception()); }
         advancing = false;
         if (pending.empty()) {
             showNativeUiError(L"The desktop notification could not complete.", failure, L"Desktop needs attention");
-            throw;
+            std::rethrow_exception(exception);
         }
         display();
     }
@@ -156,7 +158,7 @@ struct DesktopNotifications::State final : std::enable_shared_from_this<State> {
                 })) throw hresult_error(E_FAIL, L"The WinUI dispatcher rejected the next notification.");
                 return;
             }
-        } catch (...) { displayFailure(); return; }
+        } catch (...) { displayFailure(std::current_exception()); return; }
         notifyDrained();
     }
 };
@@ -167,7 +169,7 @@ DesktopNotifications::DesktopNotifications(std::function<void()> drained) : stat
 
 DesktopNotifications::~DesktopNotifications() {
     try { stop(); }
-    catch (...) { showNativeUiError(L"Could not close the desktop notification.", dashboard_ui::currentException(), L"Desktop needs attention"); }
+    catch (...) { showNativeUiError(L"Could not close the desktop notification.", dashboard_ui::formatException(std::current_exception()), L"Desktop needs attention"); }
 }
 
 void DesktopNotifications::show(std::wstring message, std::wstring title, NoticeSeverity severity) {
@@ -198,7 +200,7 @@ void showStartupError(const std::wstring& message, const std::wstring& title) {
         if (!notices.empty()) throw hresult_error(E_FAIL, L"WinUI ended before the error notification was acknowledged.");
         notices.stop();
         app = nullptr;
-    } catch (...) { showNativeUiError(message, dashboard_ui::currentException(), title); }
+    } catch (...) { showNativeUiError(message, dashboard_ui::formatException(std::current_exception()), title); }
 }
 
 }

@@ -16,7 +16,10 @@ PasswordPage::PasswordPage() {
                 if (args.PropertyName() == L"CanRemove" && !page->viewModel_.CanRemove()) page->DismissRemoval();
                 if (args.PropertyName() == L"Warning") page->NoticeBar().Severity(
                     page->viewModel_.Warning() ? InfoBarSeverity::Warning : InfoBarSeverity::Error);
-            } catch (const hresult_error& error) { get_self<PasswordViewModel>(page->viewModel_)->UiError(error); }
+            } catch (const hresult_error& error) {
+                if (isNonlocalUiError(error)) throw;
+                get_self<PasswordViewModel>(page->viewModel_)->UiError(error);
+            }
         }
     });
 }
@@ -43,7 +46,10 @@ void PasswordPage::ManagementLoaded(const Windows::Foundation::IInspectable&, co
             for (int index = 0; index < count; ++index) elements.push_back(Media::VisualTreeHelper::GetChild(element, index));
         }
         throw hresult_error(E_UNEXPECTED, L"The password Expander header was not found.");
-    } catch (const hresult_error& failure) { get_self<PasswordViewModel>(viewModel_)->UiError(failure); }
+    } catch (const hresult_error& failure) {
+        if (isNonlocalUiError(failure)) throw;
+        get_self<PasswordViewModel>(viewModel_)->UiError(failure);
+    }
 }
 void PasswordPage::ManagementCollapsed(const Windows::Foundation::IInspectable&, const ExpanderCollapsedEventArgs&) { DismissRemoval(); }
 void PasswordPage::ConfirmRemovalClick(const Windows::Foundation::IInspectable&, const RoutedEventArgs&) { DismissRemoval(); viewModel_.RemoveCommand().Execute(nullptr); }

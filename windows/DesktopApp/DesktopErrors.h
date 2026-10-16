@@ -9,16 +9,17 @@
 #include <string>
 
 namespace unlock_windows::desktop_app::dashboard_ui {
-/// Propagate process-wide failures instead of treating them as local UI errors.
-inline void rethrowNonlocalUiError(const winrt::hresult_error& error) {
+/// Identify failures that must propagate instead of being treated as local UI errors.
+inline bool isNonlocalUiError(const winrt::hresult_error& error) {
     const auto code = error.code();
-    if (code == E_OUTOFMEMORY || code == RPC_E_WRONG_THREAD || code == E_UNEXPECTED ||
-        code == E_POINTER || code == E_INVALIDARG) throw;
+    return code == E_OUTOFMEMORY || code == RPC_E_WRONG_THREAD || code == E_UNEXPECTED ||
+        code == E_POINTER || code == E_INVALIDARG;
 }
 
-/// Format the active exception for the existing desktop diagnostics and feedback.
-inline std::wstring currentException() {
-    try { throw; }
+/// Format a captured exception for the existing desktop diagnostics and feedback.
+/// @param exception Non-null exception captured by the caller in a catch handler.
+inline std::wstring formatException(const std::exception_ptr& exception) {
+    try { std::rethrow_exception(exception); }
     catch (const winrt::hresult_error& error) {
         return std::wstring(error.message()) + L" (hresult=" +
             std::to_wstring(static_cast<unsigned long>(error.code().value)) + L")";

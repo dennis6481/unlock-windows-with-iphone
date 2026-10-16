@@ -117,7 +117,7 @@ public:
                 try {
                     if (!self->snapshot_) self->refresh();
                     else self->save();
-                } catch (...) { self->uiError(); }
+                } catch (...) { self->uiError(std::current_exception()); }
             }
         });
         StackPanel actions;
@@ -161,7 +161,7 @@ public:
                 if (const auto self = weak.lock(); self && !self->stopped_ && !self->closing_) {
                     try { if (self->setupCancelled()) self->close(); }
                     catch (...) {
-                        const auto message = currentException();
+                        const auto message = formatException(std::current_exception());
                         OutputDebugStringW(message.c_str());
                         self->notice(message, InfoBarSeverity::Error);
                         self->cancellationTimer_.Stop();
@@ -223,8 +223,10 @@ private:
         notice_.IsOpen(true);
     }
 
-    void uiError() {
-        const auto message = currentException();
+    /// Restore password-window state and present the captured UI failure.
+    /// @param exception Non-null exception captured by the caller in a catch handler.
+    void uiError(const std::exception_ptr& exception) {
+        const auto message = formatException(exception);
         OutputDebugStringW(message.c_str());
         busy_ = false;
         snapshot_.reset();
@@ -348,7 +350,7 @@ private:
             }
         } catch (...) {
             if (!failure.empty()) failure += L"\n";
-            failure += currentException();
+            failure += formatException(std::current_exception());
             snapshot.reset();
         }
         request.clear();
@@ -371,7 +373,7 @@ private:
                         self->result_ = static_cast<int>(SetupResult::credentialReady);
                         self->close();
                     }
-                } catch (...) { self->uiError(); }
+                } catch (...) { self->uiError(std::current_exception()); }
             }
         })) {
             OutputDebugStringW(L"Password window dispatcher rejected an operation result.\n");
@@ -414,7 +416,7 @@ int unlock_windows::desktop_app::runSavedPassword(HINSTANCE, int, bool setup, sa
                 throw std::runtime_error("The service still reports a saved password after removal.");
             return ERROR_SUCCESS;
         } catch (...) {
-            const auto message = currentException();
+            const auto message = formatException(std::current_exception());
             OutputDebugStringW(message.c_str());
             return ERROR_GEN_FAILURE;
         }
@@ -445,7 +447,7 @@ int unlock_windows::desktop_app::runSavedPassword(HINSTANCE, int, bool setup, sa
         window.reset();
         return result;
     } catch (...) {
-        const auto message = currentException();
+        const auto message = formatException(std::current_exception());
         OutputDebugStringW(message.c_str());
         if (uiStarted) showNativeUiError(L"Could not run password window.", message, L"Could not run password window");
         else showStartupError(message, L"Could not run password window");

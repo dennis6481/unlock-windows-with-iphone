@@ -75,7 +75,7 @@ struct StatusViewModel::BindingSession : std::enable_shared_from_this<BindingSes
                 if (!self->dispatcher.TryEnqueue([weak, action = std::move(action)] {
                     if (auto current = weak.lock(); current && !current->stopping) {
                         try { ++current->listRevision; action(*current); current->render(); }
-                        catch (...) { current->message(currentException()); }
+                        catch (...) { current->message(formatException(std::current_exception())); }
                     }
                 })) OutputDebugStringW(L"Binding device update dispatcher rejected\n");
             }
@@ -116,7 +116,7 @@ struct StatusViewModel::BindingSession : std::enable_shared_from_this<BindingSes
                 for (auto item : bleItems) items.insert_or_assign(std::wstring(item.Id()), item);
                 render();
             } else if (!stopping) scanAgain = true;
-        } catch (...) { if (!stopping) message(currentException()); }
+        } catch (...) { if (!stopping) message(formatException(std::current_exception())); }
         scanning = false;
         if (scanAgain && !stopping) { scanAgain = false; scan(); }
         if (stopping && !busy) finish();
@@ -181,7 +181,7 @@ struct StatusViewModel::BindingSession : std::enable_shared_from_this<BindingSes
                 bindingChanged = true;
             }
             co_await resume_background(); original = enrollment::readBinding(); co_await foreground;
-        } catch (...) { failure = currentException(); }
+        } catch (...) { failure = formatException(std::current_exception()); }
         co_await foreground;
         if (!failure.empty()) {
             message(failure);
@@ -200,7 +200,7 @@ struct StatusViewModel::BindingSession : std::enable_shared_from_this<BindingSes
                     model->SuccessOpen(!model->resetSession_);
                     model->refreshSnapshot_(true);
                 } catch (...) {
-                    failure = currentException(); message(failure);
+                    failure = formatException(std::current_exception()); message(failure);
                     model->saveError_ = failure; model->reportError_(failure);
                 }
                 model->Publish();
@@ -291,7 +291,7 @@ bool StatusViewModel::Update(const desktop_app::DashboardSnapshot& snapshot) {
     if (snapshot.binding && !bound && !snapshot.busy && !session_ && !stopped_) {
         try { EnsureSession(); }
         catch (...) {
-            const auto failure = currentException();
+            const auto failure = formatException(std::current_exception());
             if (failure != saveError_) reportError_(failure);
             saveError_ = failure;
         }
@@ -316,7 +316,7 @@ void StatusViewModel::StartBinding(bool remove) {
     if (stopped_ || snapshot_.busy || Busy()) return;
     if (remove && (!binding_ || binding_->state != system_ble::BindingState::bound)) return;
     try { EnsureSession(); session_->start(remove); Publish(); }
-    catch (...) { saveError_ = currentException(); reportError_(saveError_); Publish(); }
+    catch (...) { saveError_ = formatException(std::current_exception()); reportError_(saveError_); Publish(); }
 }
 bool StatusViewModel::RangeDirty() const { return binding_ && nearestDistanceThreshold(-range_) != nearestDistanceThreshold(binding_->record.threshold); }
 void StatusViewModel::ResetRange() {
@@ -343,7 +343,7 @@ fire_and_forget StatusViewModel::SaveRange(weak_ref<StatusViewModel> weak) {
     change.candidate.threshold = -static_cast<int>(model->range_);
     try { model->cancellation_ = enrollment::createCancellation(change.candidate.accountSid, change.cancelEvent); }
     catch (...) {
-        model->saving_ = false; model->saveError_ = currentException(); model->reportError_(model->saveError_);
+        model->saving_ = false; model->saveError_ = formatException(std::current_exception()); model->reportError_(model->saveError_);
         model->ResetRange(); model->Publish(); co_return;
     }
     apartment_context foreground;
@@ -357,9 +357,9 @@ fire_and_forget StatusViewModel::SaveRange(weak_ref<StatusViewModel> weak) {
         enrollment::manageBinding(Operation::saveThreshold, bytes);
         saved = enrollment::readBinding();
     } catch (...) {
-        failure = currentException();
+        failure = formatException(std::current_exception());
         try { saved = enrollment::readBinding(); }
-        catch (...) { failure += L"\n" + currentException(); }
+        catch (...) { failure += L"\n" + formatException(std::current_exception()); }
     }
     co_await foreground;
     if (model = weak.get(); model && !model->stopped_) {
@@ -376,7 +376,7 @@ fire_and_forget StatusViewModel::OpenSettings(weak_ref<StatusViewModel> weak) {
         try {
             if (!co_await Windows::System::Launcher::LaunchUriAsync(Windows::Foundation::Uri{L"ms-settings:bluetooth"}))
                 throw hresult_error(E_FAIL, L"Windows Bluetooth settings could not be opened");
-        } catch (...) { session->message(currentException()); }
+        } catch (...) { session->message(formatException(std::current_exception())); }
     }
 }
 void StatusViewModel::Stop() {

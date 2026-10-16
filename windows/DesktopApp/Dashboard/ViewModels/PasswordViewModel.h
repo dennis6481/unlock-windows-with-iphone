@@ -62,7 +62,7 @@ struct PasswordViewModel : PasswordViewModelT<PasswordViewModel>, unlock_windows
     void Stop();
     /// Clear or suppress success feedback on navigation or window hiding.
     void DismissSuccess();
-    /// Preserve the page's local UI error handling policy.
+    /// Handle a local UI failure after the caller has handled propagation.
     void UiError(const hresult_error& failure);
 private:
     /// Publish summary-derived state and command availability.

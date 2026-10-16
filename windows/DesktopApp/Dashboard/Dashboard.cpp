@@ -51,6 +51,7 @@ struct Dashboard::State final {
     std::wstring failure;
     bool stopping = false;
 
+    /// Report a local UI failure after the caller has handled propagation.
     void fail(const hresult_error& error);
 };
 namespace {
@@ -74,7 +75,10 @@ struct Dashboard::State::View final {
             if (!window_) buildWindow();
             if (!state_->failure.empty()) return;
             applySnapshot();
-        } catch (const hresult_error& error) { state_->fail(error); }
+        } catch (const hresult_error& error) {
+            if (isNonlocalUiError(error)) throw;
+            state_->fail(error);
+        }
     }
 
     void show(std::optional<DashboardPage> page) {
@@ -87,7 +91,10 @@ struct Dashboard::State::View final {
             SetForegroundWindow(hwnd_);
             if (passwordPage_ && nav_.SelectedItem() == pages_[1])
                 get_self<winrt::UnlockDesktop::implementation::PasswordPage>(passwordPage_)->Refresh();
-        } catch (const hresult_error& error) { state_->fail(error); }
+        } catch (const hresult_error& error) {
+            if (isNonlocalUiError(error)) throw;
+            state_->fail(error);
+        }
     }
 
 private:
@@ -150,7 +157,10 @@ private:
                 }
                 resetCopyFeedback();
                 appWindow_.Hide();
-            } catch (const hresult_error& error) { state_->fail(error); }
+            } catch (const hresult_error& error) {
+                if (isNonlocalUiError(error)) throw;
+                state_->fail(error);
+            }
         });
 
         nav_ = XamlReader::Load(LR"(<NavigationView
@@ -251,7 +261,10 @@ private:
         copyFeedbackTimer_.IsRepeating(false);
         copyFeedbackToken_ = copyFeedbackTimer_.Tick([this](const auto&, const auto&) {
             try { resetCopyFeedback(); }
-            catch (const hresult_error& error) { state_->fail(error); }
+            catch (const hresult_error& error) {
+                if (isNonlocalUiError(error)) throw;
+                state_->fail(error);
+            }
         });
         copy_.VerticalAlignment(VerticalAlignment::Center);
         copyActions_ = StackPanel{};
@@ -274,8 +287,8 @@ private:
                 setCopyFeedback(true);
                 copyFeedbackTimer_.Start();
             } catch (const hresult_error& error) {
-                rethrowNonlocalUiError(error);
-                state_->reportError(L"Failed to copy diagnostic logs: " + currentException());
+                if (isNonlocalUiError(error)) throw;
+                state_->reportError(L"Failed to copy diagnostic logs: " + formatException(std::current_exception()));
             }
         });
         Grid::SetColumn(copyActions_, 1);
@@ -332,7 +345,10 @@ private:
                 copyActions_.Visibility(diagnosticsPage ? Visibility::Visible : Visibility::Collapsed);
                 scroll_.UpdateLayout();
                 scroll_.ChangeView(nullptr, scrollOffsets_[pageId], nullptr, true);
-            } catch (const hresult_error& error) { state_->fail(error); }
+            } catch (const hresult_error& error) {
+                if (isNonlocalUiError(error)) throw;
+                state_->fail(error);
+            }
         });
         nav_.SelectedItem(pages_[0]);
         if (!state_->failure.empty()) return;
@@ -358,7 +374,10 @@ private:
                     get_self<winrt::UnlockDesktop::implementation::PasswordPage>(passwordPage_)->Refresh();
                 if (statusPage_ && nav_.SelectedItem() == pages_[0])
                     get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->Refresh();
-            } catch (const hresult_error& error) { state_->fail(error); }
+            } catch (const hresult_error& error) {
+                if (isNonlocalUiError(error)) throw;
+                state_->fail(error);
+            }
         });
     }
 
@@ -430,7 +449,6 @@ Dashboard::Dashboard(RefreshAction refresh, ReportError reportError, ReportError
 Dashboard::~Dashboard() { stop(); }
 
 void Dashboard::State::fail(const hresult_error& error) {
-    rethrowNonlocalUiError(error);
     failure = std::wstring(error.message());
     reportError(failure);
     if (view) view->shutdown();
@@ -445,7 +463,10 @@ void Dashboard::show(std::optional<DashboardPage> page) {
     try {
         if (!state_->view) state_->view = std::make_unique<State::View>(state_.get());
         state_->view->show(page);
-    } catch (const hresult_error& error) { state_->fail(error); }
+    } catch (const hresult_error& error) {
+        if (isNonlocalUiError(error)) throw;
+        state_->fail(error);
+    }
 }
 
 void Dashboard::update(DashboardSnapshot snapshot) {

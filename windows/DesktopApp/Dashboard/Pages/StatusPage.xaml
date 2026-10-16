@@ -93,7 +93,7 @@
                               ScrollViewer.VerticalScrollBarVisibility="Disabled" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                               HorizontalContentAlignment="Stretch" AutomationProperties.Name="BLE devices paired in Windows">
                         <ListView.ItemContainerStyle>
-                            <Style TargetType="ListViewItem">
+                            <Style TargetType="ListViewItem" BasedOn="{StaticResource DefaultListViewItemStyle}">
                                 <Setter Property="Padding" Value="12"/>
                                 <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
                             </Style>

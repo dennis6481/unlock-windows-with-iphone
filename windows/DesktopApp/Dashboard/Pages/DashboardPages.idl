@@ -9,6 +9,7 @@ namespace UnlockDesktop
         String Name{ get; };
     }
 
+    [bindable]
     [default_interface]
     runtimeclass StatusViewModel : Microsoft.UI.Xaml.Data.INotifyPropertyChanged
     {

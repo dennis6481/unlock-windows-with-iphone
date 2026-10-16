@@ -13,7 +13,7 @@
 
 namespace winrt::UnlockDesktop::implementation {
 using namespace unlock_windows;
-using namespace unlock_windows::desktop_app::dashboard_ui;
+using namespace unlock_windows::desktop_app::ui;
 using namespace saved_credential;
 using Microsoft::UI::Xaml::Visibility;
 using namespace Windows::Devices::Enumeration;
@@ -274,10 +274,10 @@ void StatusViewModel::SelectedDevice(const UnlockDesktop::PairedDevice& device) 
     if (session_) session_->selectedKey = device ? std::wstring(device.EndpointId()) : std::wstring{};
     Notify({L"SelectedDevice"}); bind_->Invalidate();
 }
-void StatusViewModel::SetHost(std::function<void(bool)> refresh, desktop_app::Dashboard::ReportError reportError) {
+void StatusViewModel::SetHost(std::function<void(bool)> refresh, desktop_app::MainWindow::ReportError reportError) {
     refreshSnapshot_ = std::move(refresh); reportError_ = std::move(reportError);
 }
-bool StatusViewModel::Update(const desktop_app::DashboardSnapshot& snapshot) {
+bool StatusViewModel::Update(const desktop_app::DesktopSnapshot& snapshot) {
     if (snapshot.binding && snapshot.binding->state != system_ble::BindingState::bound && binding_ &&
         binding_->state == system_ble::BindingState::bound) SuccessOpen(false);
     snapshot_ = snapshot;

@@ -4,7 +4,7 @@
 #include "../DesktopApp/DesktopApp.h"
 #include "../DesktopApp/DesktopApplication.h"
 #include "../DesktopApp/DesktopNotifications.h"
-#include "../DesktopApp/Dashboard/Pages/PageControls.h"
+#include "../DesktopApp/UI/Pages/PageControls.h"
 #include "../Resources/resource.h"
 #include "../Resources/DesktopUi.h"
 #include "../Enrollment/EnrollmentSession.h"
@@ -23,7 +23,7 @@ using namespace Microsoft::UI::Xaml;
 using namespace Microsoft::UI::Xaml::Controls;
 using namespace unlock_windows::saved_credential;
 using namespace unlock_windows::desktop_app;
-using namespace unlock_windows::desktop_app::dashboard_ui;
+using namespace unlock_windows::desktop_app::ui;
 
 struct PasswordBuffer final {
     std::array<wchar_t, kMaxPasswordChars + 1> value{};

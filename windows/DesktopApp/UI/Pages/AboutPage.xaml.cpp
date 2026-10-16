@@ -8,7 +8,7 @@ AboutPage::AboutPage() {
     viewModel_ = make<AboutViewModel>();
     InitializeComponent();
 }
-void AboutPage::Bind(unlock_windows::desktop_app::Dashboard::ReportError reportError) {
+void AboutPage::Bind(unlock_windows::desktop_app::MainWindow::ReportError reportError) {
     get_self<AboutViewModel>(viewModel_)->Bind(std::move(reportError));
 }
 void AboutPage::Stop() { get_self<AboutViewModel>(viewModel_)->Stop(); }

@@ -4,7 +4,7 @@
 
 #include "StatusViewModel.g.h"
 #include "Observable.h"
-#include "../Dashboard.h"
+#include "../MainWindow.h"
 #include "../UnlockRange.h"
 #include <winrt/Microsoft.UI.Dispatching.h>
 #include <winrt/Windows.Foundation.Collections.h>
@@ -67,9 +67,9 @@ struct StatusViewModel : StatusViewModelT<StatusViewModel>, unlock_windows::desk
     /// Expose the existing Windows Bluetooth settings link.
     Microsoft::UI::Xaml::Input::ICommand OpenSettingsCommand() const { return settings_.as<Microsoft::UI::Xaml::Input::ICommand>(); }
     /// Attach snapshot refresh and error-reporting callbacks from the host.
-    void SetHost(std::function<void(bool)> refresh, unlock_windows::desktop_app::Dashboard::ReportError reportError);
+    void SetHost(std::function<void(bool)> refresh, unlock_windows::desktop_app::MainWindow::ReportError reportError);
     /// Apply the existing periodic snapshot and report whether the view must reset its gesture.
-    bool Update(const unlock_windows::desktop_app::DashboardSnapshot& snapshot);
+    bool Update(const unlock_windows::desktop_app::DesktopSnapshot& snapshot);
     /// Refresh an existing enrollment session without creating another polling source.
     void Refresh();
     /// Cancel enrollment and threshold work during desktop shutdown.
@@ -104,14 +104,14 @@ private:
     static fire_and_forget SaveRange(weak_ref<StatusViewModel> weak);
     /// Launch the existing Bluetooth settings URI and report launch failures.
     static fire_and_forget OpenSettings(weak_ref<StatusViewModel> weak);
-    unlock_windows::desktop_app::DashboardSnapshot snapshot_;
+    unlock_windows::desktop_app::DesktopSnapshot snapshot_;
     std::optional<unlock_windows::saved_credential::BindingSummary> binding_;
     std::shared_ptr<BindingSession> session_;
     Windows::Foundation::Collections::IObservableVector<UnlockDesktop::PairedDevice> devices_{single_threaded_observable_vector<UnlockDesktop::PairedDevice>()};
     UnlockDesktop::PairedDevice selected_{nullptr};
     com_ptr<unlock_windows::desktop_app::ViewModelCommand> bind_, remove_, save_, settings_;
     std::function<void(bool)> refreshSnapshot_;
-    unlock_windows::desktop_app::Dashboard::ReportError reportError_;
+    unlock_windows::desktop_app::MainWindow::ReportError reportError_;
     std::wstring saveError_;
     handle cancellation_;
     double range_ = -unlock_windows::system_ble::kDefaultThreshold;

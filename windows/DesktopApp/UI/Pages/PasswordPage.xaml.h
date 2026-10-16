@@ -15,7 +15,7 @@ struct PasswordPage : PasswordPageT<PasswordPage> {
     /// Clear the view's confirmation and transient completion feedback on departure.
     void OnNavigatedFrom(Microsoft::UI::Xaml::Navigation::NavigationEventArgs const& args);
     /// Attach the existing host diagnostic callback.
-    void Bind(unlock_windows::desktop_app::Dashboard::ReportError reportError);
+    void Bind(unlock_windows::desktop_app::MainWindow::ReportError reportError);
     /// Forward entry and activation refresh to the model.
     void Refresh();
     /// Dismiss view feedback and stop the model during desktop shutdown.

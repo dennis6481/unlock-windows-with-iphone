@@ -2,7 +2,7 @@
 
 #pragma once
 
-#include "Dashboard/Dashboard.h"
+#include "UI/MainWindow.h"
 #include "TrayManager.h"
 #include "DesktopNotifications.h"
 #include <functional>
@@ -11,12 +11,12 @@
 #include <vector>
 
 namespace unlock_windows::desktop_app {
-enum class DiagnosticSource { desktop, tray, dashboard, password, binding, about, setup, service, serviceIpc, lastUnlock };
+enum class DiagnosticSource { desktop, tray, mainWindow, password, binding, about, setup, service, serviceIpc, lastUnlock };
 struct ControllerState;
 struct DesktopNotice final { std::wstring message, title; NoticeSeverity severity; };
 struct DesktopUpdate final {
     bool controlReady = false, stopping = false, failed = false;
-    std::optional<DashboardSnapshot> snapshot;
+    std::optional<DesktopSnapshot> snapshot;
     std::vector<DesktopNotice> notices;
 };
 class DesktopController final {

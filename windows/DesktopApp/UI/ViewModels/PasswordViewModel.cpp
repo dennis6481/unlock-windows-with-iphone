@@ -9,7 +9,7 @@
 #include <shellapi.h>
 
 namespace winrt::UnlockDesktop::implementation {
-using namespace unlock_windows::desktop_app::dashboard_ui;
+using namespace unlock_windows::desktop_app::ui;
 using namespace unlock_windows::saved_credential;
 using namespace Microsoft::UI::Xaml;
 
@@ -56,7 +56,7 @@ void PasswordViewModel::SuccessOpen(bool value) {
     Notify({L"SuccessOpen"});
 }
 void PasswordViewModel::SuccessClosed() { successVisible_ = false; Notify({L"SuccessVisibility"}); }
-void PasswordViewModel::Bind(unlock_windows::desktop_app::Dashboard::ReportError reportError) { reportError_ = std::move(reportError); }
+void PasswordViewModel::Bind(unlock_windows::desktop_app::MainWindow::ReportError reportError) { reportError_ = std::move(reportError); }
 void PasswordViewModel::DismissSuccess() { passwordSuccessPending_ = false; SuccessOpen(false); }
 void PasswordViewModel::applyState() {
     if (summary_) {
@@ -101,7 +101,7 @@ void PasswordViewModel::Stop() {
 }
 Windows::Foundation::IAsyncAction PasswordViewModel::query(weak_ref<PasswordViewModel> weak,
     Microsoft::UI::Dispatching::DispatcherQueue dispatcher,
-    unlock_windows::desktop_app::Dashboard::ReportError reportError) {
+    unlock_windows::desktop_app::MainWindow::ReportError reportError) {
     const auto cancellation = co_await get_cancellation_token();
     co_await resume_background();
     if (cancellation()) co_return;
@@ -146,7 +146,7 @@ Windows::Foundation::IAsyncAction PasswordViewModel::query(weak_ref<PasswordView
 
 Windows::Foundation::IAsyncAction PasswordViewModel::launch(weak_ref<PasswordViewModel> weak,
     Microsoft::UI::Dispatching::DispatcherQueue dispatcher, Operation operation,
-    unlock_windows::desktop_app::Dashboard::ReportError reportError) {
+    unlock_windows::desktop_app::MainWindow::ReportError reportError) {
     const auto cancellation = co_await get_cancellation_token();
     co_await resume_background();
     if (cancellation()) co_return;

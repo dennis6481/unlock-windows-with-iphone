@@ -2,7 +2,7 @@
 
 #include "DesktopNotifications.h"
 #include "DesktopApplication.h"
-#include "Dashboard/Pages/PageControls.h"
+#include "UI/Pages/PageControls.h"
 #include "../Resources/DesktopUi.h"
 #include "../Resources/resource.h"
 #include <microsoft.ui.xaml.window.h>
@@ -66,10 +66,10 @@ struct DesktopNotifications::State final : std::enable_shared_from_this<State> {
                 StackPanel content;
                 content.Spacing(16);
                 content.Margin({24, 16, 24, 16});
-                content.Children().Append(dashboard_ui::text(notice.title.c_str(), 24));
+                content.Children().Append(ui::text(notice.title.c_str(), 24));
                 InfoBar message;
                 message.IsClosable(false);
-                message.Severity(dashboard_ui::infoBarSeverity(notice.severity));
+                message.Severity(ui::infoBarSeverity(notice.severity));
                 message.Message(notice.message);
                 message.IsOpen(true);
                 content.Children().Append(message);
@@ -92,9 +92,9 @@ struct DesktopNotifications::State final : std::enable_shared_from_this<State> {
                 scroll.Content(content);
                 Grid layout;
                 RowDefinition titleBarRow, contentRow, actionsRow;
-                titleBarRow.Height(dashboard_ui::automatic());
-                contentRow.Height(dashboard_ui::star());
-                actionsRow.Height(dashboard_ui::automatic());
+                titleBarRow.Height(ui::automatic());
+                contentRow.Height(ui::star());
+                actionsRow.Height(ui::automatic());
                 layout.RowDefinitions().Append(titleBarRow);
                 layout.RowDefinitions().Append(contentRow);
                 layout.RowDefinitions().Append(actionsRow);
@@ -130,10 +130,10 @@ struct DesktopNotifications::State final : std::enable_shared_from_this<State> {
     /// Present a captured display failure and propagate it if no notice remains.
     /// @param exception Non-null exception captured by the caller in a catch handler.
     void displayFailure(const std::exception_ptr& exception) {
-        failure = dashboard_ui::formatException(exception);
+        failure = ui::formatException(exception);
         failed = true;
         try { releaseWindow(); }
-        catch (...) { failure += L"\n" + dashboard_ui::formatException(std::current_exception()); }
+        catch (...) { failure += L"\n" + ui::formatException(std::current_exception()); }
         advancing = false;
         if (pending.empty()) {
             showNativeUiError(L"The desktop notification could not complete.", failure, L"Desktop needs attention");
@@ -169,7 +169,7 @@ DesktopNotifications::DesktopNotifications(std::function<void()> drained) : stat
 
 DesktopNotifications::~DesktopNotifications() {
     try { stop(); }
-    catch (...) { showNativeUiError(L"Could not close the desktop notification.", dashboard_ui::formatException(std::current_exception()), L"Desktop needs attention"); }
+    catch (...) { showNativeUiError(L"Could not close the desktop notification.", ui::formatException(std::current_exception()), L"Desktop needs attention"); }
 }
 
 void DesktopNotifications::show(std::wstring message, std::wstring title, NoticeSeverity severity) {
@@ -200,7 +200,7 @@ void showStartupError(const std::wstring& message, const std::wstring& title) {
         if (!notices.empty()) throw hresult_error(E_FAIL, L"WinUI ended before the error notification was acknowledged.");
         notices.stop();
         app = nullptr;
-    } catch (...) { showNativeUiError(message, dashboard_ui::formatException(std::current_exception()), title); }
+    } catch (...) { showNativeUiError(message, ui::formatException(std::current_exception()), title); }
 }
 
 }

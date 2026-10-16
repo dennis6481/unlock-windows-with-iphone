@@ -15,7 +15,7 @@ struct DiagnosticsPage : DiagnosticsPageT<DiagnosticsPage> {
     void Update(std::wstring const& diagnostics);
     /// Release the model subscription during desktop shutdown.
     void Stop();
-    /// Retain a weak reference to the Dashboard-owned scroll viewer.
+    /// Retain a weak reference to the MainWindow-owned scroll viewer.
     void SetScrollHost(Microsoft::UI::Xaml::Controls::ScrollViewer const& scroll);
 private:
     /// Apply model text while preserving the existing selection and viewport.

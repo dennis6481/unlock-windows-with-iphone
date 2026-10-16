@@ -70,7 +70,7 @@ The system BLE diagnostic uses a separate `SystemBleDiagnostic` target and share
 windows/
 ├── Bluetooth/          Shared system pairing relationship and service BLE operations.
 ├── SystemBleDiagnostic/ Standalone diagnostic, never installed.
-├── DesktopApp/         Desktop EXE, XAML pages/ViewModels, role dispatch and Win32 TrayManager.
+├── DesktopApp/         MainWindow, UI/Pages, UI/ViewModels, role dispatch and Win32 TrayManager.
 ├── Enrollment/         Binding client, UAC helper and protected binding store.
 ├── SavedCredential/    Credential service, IPC, encrypted password storage and management UI.
 ├── CredentialProvider/ Windows sign-in tile and native credential submission.

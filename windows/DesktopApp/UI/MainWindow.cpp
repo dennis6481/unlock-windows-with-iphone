@@ -1,6 +1,6 @@
 // Created by Rui MA on 08 Oct 2026
 
-#include "Dashboard.h"
+#include "MainWindow.h"
 #include "../../Resources/resource.h"
 #include "Pages/PageControls.h"
 
@@ -37,12 +37,12 @@ using namespace winrt::Microsoft::UI::Xaml;
 using namespace winrt::Microsoft::UI::Xaml::Controls;
 using namespace winrt::Microsoft::UI::Xaml::Markup;
 
-using namespace dashboard_ui;
+using namespace ui;
 
-struct Dashboard::State final {
+struct MainWindow::State final {
     struct View;
     std::unique_ptr<View> view;
-    DashboardSnapshot snapshot;
+    DesktopSnapshot snapshot;
     RefreshAction refresh;
     ReportError reportError;
     ReportError passwordReport;
@@ -57,7 +57,7 @@ struct Dashboard::State final {
 namespace {
 constexpr wchar_t kCopyLogsText[] = L"Copy logs";
 
-NavigationViewItem navigationItem(DashboardPage page, const wchar_t* label, const wchar_t* glyph) {
+NavigationViewItem navigationItem(MainWindowPage page, const wchar_t* label, const wchar_t* glyph) {
     NavigationViewItem item;
     item.Content(box_value(hstring(label)));
     item.Tag(box_value(static_cast<std::int32_t>(page)));
@@ -67,7 +67,7 @@ NavigationViewItem navigationItem(DashboardPage page, const wchar_t* label, cons
 
 }
 
-struct Dashboard::State::View final {
+struct MainWindow::State::View final {
     explicit View(State* state) : state_(state) {}
     void refresh() {
         if (exiting_ || state_->stopping) return;
@@ -81,7 +81,7 @@ struct Dashboard::State::View final {
         }
     }
 
-    void show(std::optional<DashboardPage> page) {
+    void show(std::optional<MainWindowPage> page) {
         refresh();
         if (exiting_ || state_->stopping || !window_) return;
         try {
@@ -180,10 +180,10 @@ private:
         nav_.IsSettingsVisible(false);
         nav_.HorizontalContentAlignment(HorizontalAlignment::Stretch);
         nav_.VerticalContentAlignment(VerticalAlignment::Stretch);
-        pages_ = {navigationItem(DashboardPage::status, L"Status", L"\xE8EA"),
-            navigationItem(DashboardPage::password, L"Password", L"\xE72E"),
-            navigationItem(DashboardPage::diagnostics, L"Diagnostics", L"\xE9D9"),
-            navigationItem(DashboardPage::about, L"About", L"\xE946")};
+        pages_ = {navigationItem(MainWindowPage::status, L"Status", L"\xE8EA"),
+            navigationItem(MainWindowPage::password, L"Password", L"\xE72E"),
+            navigationItem(MainWindowPage::diagnostics, L"Diagnostics", L"\xE9D9"),
+            navigationItem(MainWindowPage::about, L"About", L"\xE946")};
         for (std::size_t index = 0; index < 3; ++index) nav_.MenuItems().Append(pages_[index]);
         nav_.FooterMenuItems().Append(pages_[3]);
 
@@ -311,17 +311,17 @@ private:
             try {
                 const auto item = args.SelectedItem().try_as<NavigationViewItem>();
                 if (!item) return;
-                const auto pageId = static_cast<DashboardPage>(unbox_value<std::int32_t>(item.Tag()));
+                const auto pageId = static_cast<MainWindowPage>(unbox_value<std::int32_t>(item.Tag()));
                 if (currentPage_) scrollOffsets_[*currentPage_] = scroll_.VerticalOffset();
                 currentPage_ = pageId;
-                const bool statusPage = pageId == DashboardPage::status;
-                const bool diagnosticsPage = pageId == DashboardPage::diagnostics;
+                const bool statusPage = pageId == MainWindowPage::status;
+                const bool diagnosticsPage = pageId == MainWindowPage::diagnostics;
                 if (statusPage) {
                     statusPage_ = navigateTo<winrt::UnlockDesktop::StatusPage>();
                     get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->SetHost([this](bool resetScroll) {
                         if (resetScroll) {
-                            scrollOffsets_[DashboardPage::status] = 0.0;
-                            if (currentPage_ == DashboardPage::status) scroll_.ChangeView(nullptr, 0.0, nullptr, true);
+                            scrollOffsets_[MainWindowPage::status] = 0.0;
+                            if (currentPage_ == MainWindowPage::status) scroll_.ChangeView(nullptr, 0.0, nullptr, true);
                         }
                         state_->refresh();
                     }, state_->bindingReport);
@@ -330,12 +330,12 @@ private:
                     diagnosticsPage_ = navigateTo<winrt::UnlockDesktop::DiagnosticsPage>();
                     get_self<winrt::UnlockDesktop::implementation::DiagnosticsPage>(diagnosticsPage_)->SetScrollHost(scroll_);
                     get_self<winrt::UnlockDesktop::implementation::DiagnosticsPage>(diagnosticsPage_)->Update(state_->snapshot.diagnostics);
-                } else if (pageId == DashboardPage::password) {
+                } else if (pageId == MainWindowPage::password) {
                     passwordPage_ = navigateTo<winrt::UnlockDesktop::PasswordPage>();
                     auto* page = get_self<winrt::UnlockDesktop::implementation::PasswordPage>(passwordPage_);
                     page->Bind(state_->passwordReport);
                     page->Refresh();
-                } else if (pageId == DashboardPage::about) {
+                } else if (pageId == MainWindowPage::about) {
                     aboutPage_ = navigateTo<winrt::UnlockDesktop::AboutPage>();
                     get_self<winrt::UnlockDesktop::implementation::AboutPage>(aboutPage_)->Bind(
                         state_->aboutReport);
@@ -417,8 +417,8 @@ private:
     NavigationView nav_{nullptr};
     std::array<NavigationViewItem, 4> pages_{nullptr, nullptr, nullptr, nullptr};
     ScrollViewer scroll_{nullptr};
-    std::optional<DashboardPage> currentPage_;
-    std::map<DashboardPage, double> scrollOffsets_;
+    std::optional<MainWindowPage> currentPage_;
+    std::map<MainWindowPage, double> scrollOffsets_;
     Grid root_{nullptr};
     Frame frame_{nullptr};
     winrt::UnlockDesktop::StatusPage statusPage_{nullptr};
@@ -437,7 +437,7 @@ private:
     event_token copyFeedbackToken_{};
 };
 
-Dashboard::Dashboard(RefreshAction refresh, ReportError reportError, ReportError passwordReport,
+MainWindow::MainWindow(RefreshAction refresh, ReportError reportError, ReportError passwordReport,
                      ReportError bindingReport, ReportError aboutReport) : state_(std::make_unique<State>()) {
     state_->refresh = std::move(refresh);
     state_->reportError = std::move(reportError);
@@ -446,15 +446,15 @@ Dashboard::Dashboard(RefreshAction refresh, ReportError reportError, ReportError
     state_->aboutReport = std::move(aboutReport);
 }
 
-Dashboard::~Dashboard() { stop(); }
+MainWindow::~MainWindow() { stop(); }
 
-void Dashboard::State::fail(const hresult_error& error) {
+void MainWindow::State::fail(const hresult_error& error) {
     failure = std::wstring(error.message());
     reportError(failure);
     if (view) view->shutdown();
 }
 
-void Dashboard::show(std::optional<DashboardPage> page) {
+void MainWindow::show(std::optional<MainWindowPage> page) {
     if (state_->stopping) return;
     if (!state_->failure.empty()) {
         state_->reportError(L"Dashboard is unavailable: " + state_->failure);
@@ -469,13 +469,13 @@ void Dashboard::show(std::optional<DashboardPage> page) {
     }
 }
 
-void Dashboard::update(DashboardSnapshot snapshot) {
+void MainWindow::update(DesktopSnapshot snapshot) {
     if (state_->stopping || !state_->failure.empty()) return;
     state_->snapshot = std::move(snapshot);
     if (state_->view) state_->view->refresh();
 }
 
-void Dashboard::stop() {
+void MainWindow::stop() {
     state_->stopping = true;
     if (state_->view) state_->view->shutdown();
     state_->view.reset();

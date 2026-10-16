@@ -10,7 +10,7 @@
 #include <winrt/Windows.Web.Http.Headers.h>
 
 namespace winrt::UnlockDesktop::implementation {
-using namespace unlock_windows::desktop_app::dashboard_ui;
+using namespace unlock_windows::desktop_app::ui;
 using namespace Microsoft::UI::Xaml;
 namespace {
 constexpr wchar_t kProjectUrl[] = L"https://github.com/dennis6481/unlock-windows-with-iphone";
@@ -31,7 +31,7 @@ Windows::Foundation::Uri AboutViewModel::ProjectUri() const { return Windows::Fo
 Windows::Foundation::Uri AboutViewModel::LicenseUri() const { return Windows::Foundation::Uri{std::wstring(kProjectUrl) + L"/blob/main/LICENSE.md"}; }
 Visibility AboutViewModel::UpdateVisibility() const { return checked_ ? Visibility::Visible : Visibility::Collapsed; }
 Visibility AboutViewModel::ReleaseVisibility() const { return release_ ? Visibility::Visible : Visibility::Collapsed; }
-void AboutViewModel::Bind(unlock_windows::desktop_app::Dashboard::ReportError reportError) { reportError_ = std::move(reportError); }
+void AboutViewModel::Bind(unlock_windows::desktop_app::MainWindow::ReportError reportError) { reportError_ = std::move(reportError); }
 void AboutViewModel::Stop() {
     stopped_ = true;
     if (updateCheck_) updateCheck_.Cancel();
@@ -54,7 +54,7 @@ void AboutViewModel::Check() {
 }
 Windows::Foundation::IAsyncAction AboutViewModel::checkForUpdates(
     weak_ref<AboutViewModel> weak, Microsoft::UI::Dispatching::DispatcherQueue dispatcher,
-    unlock_windows::desktop_app::Dashboard::ReportError reportError) {
+    unlock_windows::desktop_app::MainWindow::ReportError reportError) {
     const auto cancellation = co_await get_cancellation_token();
     cancellation.enable_propagation();
     co_await resume_background();

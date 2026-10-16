@@ -16,7 +16,7 @@ inline constexpr wchar_t kSetupCancelPrefix[] = L"Global\\UnlockWindowsWithIPhon
 inline constexpr wchar_t kBackgroundRole[] = L"--background";
 inline constexpr wchar_t kTrayWindowClass[] = L"UnlockWindowsWithIPhoneDesktopHost";
 inline constexpr UINT kSetupMessage = WM_APP + 3;
-inline constexpr UINT kShowDashboardMessage = WM_APP + 4;
+inline constexpr UINT kShowMainWindowMessage = WM_APP + 4;
 enum class SetupResult : DWORD { cancelled = 0, error = 1, credentialReady = 2 };
 enum class Role { tray, setup, savedPassword, bindingHelper };
 struct Launch final {

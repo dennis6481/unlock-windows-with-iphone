@@ -18,7 +18,7 @@ const wchar_t* diagnosticSourceName(DiagnosticSource source) {
     switch (source) {
     case DiagnosticSource::desktop: return L"Desktop";
     case DiagnosticSource::tray: return L"Tray";
-    case DiagnosticSource::dashboard: return L"Dashboard";
+    case DiagnosticSource::mainWindow: return L"Dashboard";
     case DiagnosticSource::password: return L"Password";
     case DiagnosticSource::binding: return L"Binding";
     case DiagnosticSource::about: return L"About";
@@ -58,7 +58,7 @@ struct ControllerState final {
     std::condition_variable wake;
     std::deque<TrayCommand> commands;
     bool stopping = false, ready = false, failed = false, busy = false;
-    std::optional<DashboardSnapshot> snapshot;
+    std::optional<DesktopSnapshot> snapshot;
     std::vector<DesktopNotice> notices;
     std::wstring diagnostics, error, serviceDiagnostic;
     std::wstring queryDiagnostic, lastUnlockDiagnostic;
@@ -92,7 +92,7 @@ struct ControllerState final {
         if (!message.empty()) record(source, NoticeSeverity::error, message);
     }
     void publish() {
-        DashboardSnapshot status;
+        DesktopSnapshot status;
         auto querySource = DiagnosticSource::desktop;
         try {
             const auto console = enrollment::queryConsole();

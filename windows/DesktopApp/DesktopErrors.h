@@ -8,7 +8,7 @@
 #include <exception>
 #include <string>
 
-namespace unlock_windows::desktop_app::dashboard_ui {
+namespace unlock_windows::desktop_app::ui {
 /// Identify failures that must propagate instead of being treated as local UI errors.
 inline bool isNonlocalUiError(const winrt::hresult_error& error) {
     const auto code = error.code();

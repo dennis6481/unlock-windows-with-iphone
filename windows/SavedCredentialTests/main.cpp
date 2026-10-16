@@ -4,7 +4,7 @@
 #include "../DesktopApp/DesktopApp.h"
 #include "../Bluetooth/PresenceAuthorization.h"
 #include "../SavedCredential/LastUnlock.h"
-#include "../DesktopApp/Dashboard/Dashboard.h"
+#include "../DesktopApp/UI/MainWindow.h"
 #include "../ConsoleSession.h"
 #include <winrt/Windows.Foundation.Collections.h>
 #include <sddl.h>

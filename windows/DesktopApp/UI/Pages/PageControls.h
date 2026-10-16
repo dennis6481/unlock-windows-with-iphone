@@ -16,7 +16,7 @@
 #include <winrt/Microsoft.UI.Xaml.Media.h>
 #include <exception>
 
-namespace unlock_windows::desktop_app::dashboard_ui {
+namespace unlock_windows::desktop_app::ui {
 using namespace winrt;
 using namespace Microsoft::UI::Xaml;
 using namespace Microsoft::UI::Xaml::Controls;
@@ -32,7 +32,7 @@ inline InfoBarSeverity infoBarSeverity(NoticeSeverity severity) {
     throw hresult_invalid_argument(L"Unknown desktop notice severity.");
 }
 
-/// Create wrapping text for the Dashboard shell and independent password window.
+/// Create wrapping text for the MainWindow shell and independent password window.
 inline TextBlock text(const wchar_t* value, double size = 14) {
     TextBlock block;
     block.Text(value);

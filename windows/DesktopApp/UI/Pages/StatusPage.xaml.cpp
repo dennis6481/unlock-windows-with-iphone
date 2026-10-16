@@ -11,7 +11,7 @@
 #include <winrt/Windows.System.h>
 
 namespace winrt::UnlockDesktop::implementation {
-using namespace unlock_windows::desktop_app::dashboard_ui;
+using namespace unlock_windows::desktop_app::ui;
 namespace {
 struct DistanceToolTip : implements<DistanceToolTip, Microsoft::UI::Xaml::Data::IValueConverter> {
     /// Convert the positive slider value into its existing range label.
@@ -128,12 +128,12 @@ void StatusPage::QueueThresholdAction(bool cancel) {
     }
 }
 void StatusPage::DismissBindingSuccess() { viewModel_.SuccessOpen(false); }
-void StatusPage::Update(unlock_windows::desktop_app::DashboardSnapshot const& snapshot) {
+void StatusPage::Update(unlock_windows::desktop_app::DesktopSnapshot const& snapshot) {
     auto* model = get_self<StatusViewModel>(viewModel_);
     const auto reset = model->Update(snapshot);
     if (reset || (!model->RangeDirty() && !thresholdPointerActive_ && !thresholdKeyActive_)) ResetThresholdPreview();
 }
-void StatusPage::SetHost(std::function<void(bool)> refresh, unlock_windows::desktop_app::Dashboard::ReportError reportError) {
+void StatusPage::SetHost(std::function<void(bool)> refresh, unlock_windows::desktop_app::MainWindow::ReportError reportError) {
     get_self<StatusViewModel>(viewModel_)->SetHost(std::move(refresh), std::move(reportError));
 }
 void StatusPage::Refresh() { get_self<StatusViewModel>(viewModel_)->Refresh(); }

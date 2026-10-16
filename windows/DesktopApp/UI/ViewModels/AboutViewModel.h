@@ -4,7 +4,7 @@
 
 #include "AboutViewModel.g.h"
 #include "Observable.h"
-#include "../Dashboard.h"
+#include "../MainWindow.h"
 #include <winrt/Microsoft.UI.Dispatching.h>
 
 namespace winrt::UnlockDesktop::implementation {
@@ -29,7 +29,7 @@ struct AboutViewModel : AboutViewModelT<AboutViewModel>, unlock_windows::desktop
     /// Expose the explicit update check operation.
     Microsoft::UI::Xaml::Input::ICommand CheckUpdatesCommand() const { return check_.as<Microsoft::UI::Xaml::Input::ICommand>(); }
     /// Attach the host's existing diagnostic reporter.
-    void Bind(unlock_windows::desktop_app::Dashboard::ReportError reportError);
+    void Bind(unlock_windows::desktop_app::MainWindow::ReportError reportError);
     /// Cancel update work when the desktop shuts down.
     void Stop();
 private:
@@ -38,13 +38,13 @@ private:
     /// Preserve the GitHub request, release comparison and cancellation behavior.
     static Windows::Foundation::IAsyncAction checkForUpdates(weak_ref<AboutViewModel> weak,
         Microsoft::UI::Dispatching::DispatcherQueue dispatcher,
-        unlock_windows::desktop_app::Dashboard::ReportError reportError);
+        unlock_windows::desktop_app::MainWindow::ReportError reportError);
     hstring message_;
     Windows::Foundation::Uri release_{nullptr};
     bool stopped_ = false, checking_ = false, checked_ = false;
     com_ptr<unlock_windows::desktop_app::ViewModelCommand> check_;
     Windows::Foundation::IAsyncAction updateCheck_{nullptr};
-    unlock_windows::desktop_app::Dashboard::ReportError reportError_;
+    unlock_windows::desktop_app::MainWindow::ReportError reportError_;
 };
 }
 namespace winrt::UnlockDesktop::factory_implementation {

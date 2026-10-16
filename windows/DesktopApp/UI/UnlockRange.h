@@ -4,7 +4,7 @@
 
 #include "../../Bluetooth/SystemBleContract.h"
 
-namespace unlock_windows::desktop_app::dashboard_ui {
+namespace unlock_windows::desktop_app::ui {
 inline constexpr int kDistanceStep = 30;
 inline constexpr int kNearThreshold = system_ble::kDefaultThreshold + kDistanceStep;
 inline constexpr int kFarThreshold = system_ble::kDefaultThreshold - kDistanceStep;

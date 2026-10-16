@@ -11,7 +11,7 @@ struct AboutPage : AboutPageT<AboutPage> {
     /// Expose the model to compiled XAML bindings.
     UnlockDesktop::AboutViewModel ViewModel() const { return viewModel_; }
     /// Forward the existing host diagnostic callback.
-    void Bind(unlock_windows::desktop_app::Dashboard::ReportError reportError);
+    void Bind(unlock_windows::desktop_app::MainWindow::ReportError reportError);
     /// Stop update work during desktop shutdown.
     void Stop();
 private:

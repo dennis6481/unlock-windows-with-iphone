@@ -4,7 +4,7 @@
 
 #include "PasswordViewModel.g.h"
 #include "Observable.h"
-#include "../Dashboard.h"
+#include "../MainWindow.h"
 #include <winrt/Microsoft.UI.Dispatching.h>
 
 namespace winrt::UnlockDesktop::implementation {
@@ -55,7 +55,7 @@ struct PasswordViewModel : PasswordViewModelT<PasswordViewModel>, unlock_windows
     /// Expose removal after the view's existing confirmation Flyout.
     Microsoft::UI::Xaml::Input::ICommand RemoveCommand() const { return remove_.as<Microsoft::UI::Xaml::Input::ICommand>(); }
     /// Attach the host's existing error reporter.
-    void Bind(unlock_windows::desktop_app::Dashboard::ReportError reportError);
+    void Bind(unlock_windows::desktop_app::MainWindow::ReportError reportError);
     /// Query the existing non-sensitive service summary.
     void Refresh();
     /// Cancel pending presentation work on desktop shutdown.
@@ -74,13 +74,13 @@ private:
     /// Preserve the existing service query and reply validation.
     static Windows::Foundation::IAsyncAction query(weak_ref<PasswordViewModel> weak,
         Microsoft::UI::Dispatching::DispatcherQueue dispatcher,
-        unlock_windows::desktop_app::Dashboard::ReportError reportError);
+        unlock_windows::desktop_app::MainWindow::ReportError reportError);
     /// Preserve UAC launch, process waiting and operation-specific exit codes.
     static Windows::Foundation::IAsyncAction launch(weak_ref<PasswordViewModel> weak,
         Microsoft::UI::Dispatching::DispatcherQueue dispatcher, unlock_windows::saved_credential::Operation operation,
-        unlock_windows::desktop_app::Dashboard::ReportError reportError);
+        unlock_windows::desktop_app::MainWindow::ReportError reportError);
     std::optional<unlock_windows::saved_credential::CredentialSummary> summary_;
-    unlock_windows::desktop_app::Dashboard::ReportError reportError_;
+    unlock_windows::desktop_app::MainWindow::ReportError reportError_;
     Microsoft::UI::Dispatching::DispatcherQueue dispatcher_{nullptr};
     Windows::Foundation::IAsyncAction query_{nullptr}, operation_{nullptr};
     com_ptr<unlock_windows::desktop_app::ViewModelCommand> refresh_, password_, remove_;

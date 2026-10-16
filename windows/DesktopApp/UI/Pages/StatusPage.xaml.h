@@ -21,13 +21,13 @@ struct StatusPage : StatusPageT<StatusPage> {
     /// Restore the saved threshold and invalidate queued input completions.
     void ResetThresholdPreview();
     /// Forward the host snapshot and preserve an active input preview.
-    void Update(unlock_windows::desktop_app::DashboardSnapshot const& snapshot);
+    void Update(unlock_windows::desktop_app::DesktopSnapshot const& snapshot);
     /// Stop operations and dismiss the view's confirmation Flyout.
     void Stop();
     /// Forward activation refresh to the existing enrollment session.
     void Refresh();
     /// Attach the host callbacks without exposing controls to the model.
-    void SetHost(std::function<void(bool)> refresh, unlock_windows::desktop_app::Dashboard::ReportError reportError);
+    void SetHost(std::function<void(bool)> refresh, unlock_windows::desktop_app::MainWindow::ReportError reportError);
     /// Preserve the existing narrow-card layout.
     void ThresholdCardSizeChanged(const Windows::Foundation::IInspectable&, const Microsoft::UI::Xaml::SizeChangedEventArgs& args);
     /// Preserve the existing narrow removal-card layout.

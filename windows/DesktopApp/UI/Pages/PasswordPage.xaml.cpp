@@ -6,7 +6,7 @@
 #include <vector>
 
 namespace winrt::UnlockDesktop::implementation {
-using namespace unlock_windows::desktop_app::dashboard_ui;
+using namespace unlock_windows::desktop_app::ui;
 PasswordPage::PasswordPage() {
     viewModel_ = make<PasswordViewModel>();
     InitializeComponent();
@@ -23,7 +23,7 @@ PasswordPage::PasswordPage() {
         }
     });
 }
-void PasswordPage::Bind(unlock_windows::desktop_app::Dashboard::ReportError reportError) { get_self<PasswordViewModel>(viewModel_)->Bind(std::move(reportError)); }
+void PasswordPage::Bind(unlock_windows::desktop_app::MainWindow::ReportError reportError) { get_self<PasswordViewModel>(viewModel_)->Bind(std::move(reportError)); }
 void PasswordPage::OnNavigatedFrom(Microsoft::UI::Xaml::Navigation::NavigationEventArgs const&) { DismissRemoval(); DismissPasswordSuccess(); }
 void PasswordPage::DismissRemoval() { RemovalFlyout().Hide(); }
 void PasswordPage::DismissPasswordSuccess() { get_self<PasswordViewModel>(viewModel_)->DismissSuccess(); }

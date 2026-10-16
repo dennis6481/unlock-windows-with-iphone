@@ -56,6 +56,8 @@
   the superseded implementation. Do not use glue code to maintain historical
   paths.
 - After each turn, without subagent, verify if there's overengineering or unneccesary code, or old compatibility code.
+- Add Doxygen comments for each method in C/C++
+- Use MVVM for UIs
 
 ## Documentations
 

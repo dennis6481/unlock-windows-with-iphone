@@ -19,6 +19,8 @@
 #include "Pages/AboutPage.xaml.h"
 #include <winrt/Microsoft.UI.Xaml.Controls.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
+#include <winrt/Microsoft.UI.Xaml.Automation.h>
+#include <winrt/Microsoft.UI.Dispatching.h>
 #include <winrt/Microsoft.UI.Xaml.Markup.h>
 #include <winrt/Microsoft.UI.Xaml.Media.h>
 #include <winrt/Microsoft.UI.Xaml.Media.Animation.h>
@@ -26,6 +28,7 @@
 #include <utility>
 #include <array>
 #include <map>
+#include <chrono>
 
 namespace unlock_windows::desktop_app {
 using namespace winrt;
@@ -51,6 +54,8 @@ struct Dashboard::State final {
     void fail(const hresult_error& error);
 };
 namespace {
+constexpr wchar_t kCopyLogsText[] = L"Copy logs";
+
 NavigationViewItem navigationItem(DashboardPage page, const wchar_t* label, const wchar_t* glyph) {
     NavigationViewItem item;
     item.Content(box_value(hstring(label)));
@@ -86,6 +91,17 @@ struct Dashboard::State::View final {
     }
 
 private:
+    void setCopyFeedback(bool copied) {
+        if (!VisualStateManager::GoToState(copyFeedback_, copied ? L"Copied" : L"Ready", true))
+            throw hresult_error(E_UNEXPECTED, L"The copy feedback visual state was not found.");
+        copy_.IsEnabled(!copied && !state_->snapshot.diagnostics.empty());
+    }
+
+    void resetCopyFeedback() {
+        copyFeedbackTimer_.Stop();
+        setCopyFeedback(false);
+    }
+
     static LRESULT CALLBACK sizing(HWND window, UINT message, WPARAM wparam, LPARAM lparam,
                                    UINT_PTR, DWORD_PTR) {
         if (message == WM_GETMINMAXINFO) {
@@ -132,6 +148,7 @@ private:
                     page->DismissRemoval();
                     page->DismissPasswordSuccess();
                 }
+                resetCopyFeedback();
                 appWindow_.Hide();
             } catch (const hresult_error& error) { state_->fail(error); }
         });
@@ -186,26 +203,83 @@ private:
         title_.VerticalAlignment(VerticalAlignment::Center);
         header.Children().Append(title_);
         copy_ = Button{};
-        copy_.Content(box_value(L"Copy"));
+        copyFeedback_ = XamlReader::Load(LR"(<ContentControl
+            xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+            xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+            IsTabStop="False" IsHitTestVisible="False" AutomationProperties.AccessibilityView="Raw">
+            <ContentControl.Template>
+                <ControlTemplate TargetType="ContentControl">
+                    <Grid>
+                        <VisualStateManager.VisualStateGroups>
+                            <VisualStateGroup x:Name="CopyStates">
+                                <VisualStateGroup.Transitions>
+                                    <VisualTransition GeneratedDuration="0:0:0.15"/>
+                                </VisualStateGroup.Transitions>
+                                <VisualState x:Name="Ready">
+                                    <VisualState.Setters>
+                                        <Setter Target="CopiedIcon.Opacity" Value="0"/>
+                                    </VisualState.Setters>
+                                </VisualState>
+                                <VisualState x:Name="Copied">
+                                    <VisualState.Setters>
+                                        <Setter Target="CopiedIcon.Opacity" Value="1"/>
+                                    </VisualState.Setters>
+                                </VisualState>
+                            </VisualStateGroup>
+                        </VisualStateManager.VisualStateGroups>
+                        <SymbolIcon x:Name="CopiedIcon" Symbol="Accept" Opacity="0"
+                            Foreground="{TemplateBinding Foreground}"/>
+                    </Grid>
+                </ControlTemplate>
+            </ContentControl.Template>
+        </ContentControl>)").as<ContentControl>();
+        copyFeedback_.VerticalAlignment(VerticalAlignment::Center);
+        copyFeedback_.Margin({0, 0, 12, 0});
+        StackPanel copyContent;
+        copyContent.Orientation(Orientation::Horizontal);
+        copyContent.Spacing(8);
+        copyContent.Children().Append(SymbolIcon{Symbol::Copy});
+        auto copyLabel = text(kCopyLogsText);
+        copyLabel.VerticalAlignment(VerticalAlignment::Center);
+        copyContent.Children().Append(copyLabel);
+        copy_.Content(copyContent);
+        Automation::AutomationProperties::SetName(copy_, kCopyLogsText);
+        copyFeedback_.ApplyTemplate();
+        setCopyFeedback(false);
+        copyFeedbackTimer_ = window_.DispatcherQueue().CreateTimer();
+        copyFeedbackTimer_.Interval(std::chrono::seconds(2));
+        copyFeedbackTimer_.IsRepeating(false);
+        copyFeedbackToken_ = copyFeedbackTimer_.Tick([this](const auto&, const auto&) {
+            try { resetCopyFeedback(); }
+            catch (const hresult_error& error) { state_->fail(error); }
+        });
         copy_.VerticalAlignment(VerticalAlignment::Center);
-        copy_.Margin({16, 0, 0, 0});
-        copy_.Visibility(Visibility::Collapsed);
+        copyActions_ = StackPanel{};
+        copyActions_.Orientation(Orientation::Horizontal);
+        copyActions_.VerticalAlignment(VerticalAlignment::Center);
+        copyActions_.Margin({16, 0, 0, 0});
+        copyActions_.Visibility(Visibility::Collapsed);
+        copyActions_.Children().Append(copyFeedback_);
+        copyActions_.Children().Append(copy_);
         ToolTipService::SetToolTip(copy_, box_value(L"Copy all logs"));
         copyToken_ = copy_.Click([this](const auto&, const auto&) {
             try {
+                resetCopyFeedback();
                 using namespace winrt::Windows::ApplicationModel::DataTransfer;
                 DataPackage content;
                 content.RequestedOperation(DataPackageOperation::Copy);
                 content.SetText(state_->snapshot.diagnostics);
                 Clipboard::SetContent(content);
                 Clipboard::Flush();
+                setCopyFeedback(true);
+                copyFeedbackTimer_.Start();
             } catch (const hresult_error& error) {
                 rethrowNonlocalUiError(error);
                 state_->reportError(L"Failed to copy diagnostic logs: " + currentException());
             }
         });
-        Grid::SetColumn(copy_, 1);
-        header.Children().Append(copy_);
+        Grid::SetColumn(copyActions_, 1);
+        header.Children().Append(copyActions_);
         root_.Children().Append(header);
 
         frame_ = Frame{};
@@ -254,8 +328,8 @@ private:
                         state_->aboutReport);
                 } else throw hresult_invalid_argument(L"Unknown Dashboard page.");
                 title_.Text(unbox_value<hstring>(item.Content()));
-                copy_.Visibility(diagnosticsPage ? Visibility::Visible : Visibility::Collapsed);
-                copy_.IsEnabled(!state_->snapshot.diagnostics.empty());
+                resetCopyFeedback();
+                copyActions_.Visibility(diagnosticsPage ? Visibility::Visible : Visibility::Collapsed);
                 scroll_.UpdateLayout();
                 scroll_.ChangeView(nullptr, scrollOffsets_[pageId], nullptr, true);
             } catch (const hresult_error& error) { state_->fail(error); }
@@ -290,7 +364,7 @@ private:
 
     void applySnapshot() {
         const auto& snapshot = state_->snapshot;
-        copy_.IsEnabled(!snapshot.diagnostics.empty());
+        copy_.IsEnabled(!copyFeedbackTimer_.IsRunning() && !snapshot.diagnostics.empty());
         if (statusPage_) get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->Update(snapshot);
         if (diagnosticsPage_) get_self<winrt::UnlockDesktop::implementation::DiagnosticsPage>(diagnosticsPage_)->Update(snapshot.diagnostics);
     }
@@ -299,6 +373,10 @@ public:
     void shutdown() {
         if (exiting_) return;
         exiting_ = true;
+        if (copyFeedbackTimer_) {
+            copyFeedbackTimer_.Stop();
+            if (copyFeedbackToken_.value) copyFeedbackTimer_.Tick(copyFeedbackToken_);
+        }
         if (appWindow_ && closingToken_.value) appWindow_.Closing(closingToken_);
         if (window_ && activatedToken_.value) window_.Activated(activatedToken_);
         if (nav_ && navigationToken_.value) nav_.SelectionChanged(navigationToken_);
@@ -330,10 +408,14 @@ private:
     winrt::UnlockDesktop::PasswordPage passwordPage_{nullptr};
     TextBlock title_{nullptr};
     Button copy_{nullptr};
+    StackPanel copyActions_{nullptr};
+    ContentControl copyFeedback_{nullptr};
+    Dispatching::DispatcherQueueTimer copyFeedbackTimer_{nullptr};
     bool exiting_ = false;
     event_token closingToken_{}, navigationToken_{};
     event_token activatedToken_{};
     event_token copyToken_{};
+    event_token copyFeedbackToken_{};
 };
 
 Dashboard::Dashboard(RefreshAction refresh, ReportError reportError, ReportError passwordReport,

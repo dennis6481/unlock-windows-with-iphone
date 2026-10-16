@@ -4,6 +4,73 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     NavigationCacheMode="Required">
+    <Page.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="ms-appx:///Dashboard/Pages/SharedResources.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Page.Resources>
     <ContentControl x:Name="BodyHost" Margin="0,32,0,0"
-                    HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" />
+                    HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch">
+        <StackPanel Style="{StaticResource PageCards}">
+            <Border Style="{StaticResource SettingsCard}">
+                <StackPanel Spacing="16">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                        <FontIcon Glyph="&#xE946;" Style="{StaticResource CardIcon}"/>
+                        <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.Version, Mode=OneWay}" Style="{StaticResource CardHeading}"/>
+                        <Button Grid.Column="2" VerticalAlignment="Center" Content="Check for updates"
+                                Command="{x:Bind ViewModel.CheckUpdatesCommand, Mode=OneWay}"/>
+                    </Grid>
+                    <TextBlock Text="{x:Bind ViewModel.UpdateStatus, Mode=OneWay}" Style="{StaticResource CardText}"
+                               Visibility="{x:Bind ViewModel.UpdateVisibility, Mode=OneWay}"/>
+                    <HyperlinkButton Content="View release" NavigateUri="{x:Bind ViewModel.ReleaseUri, Mode=OneWay}"
+                                     Visibility="{x:Bind ViewModel.ReleaseVisibility, Mode=OneWay}"/>
+                </StackPanel>
+            </Border>
+            <HyperlinkButton Style="{StaticResource ExternalLink}" NavigateUri="{x:Bind ViewModel.ProjectUri, Mode=OneWay}"
+                             AutomationProperties.Name="GitHub Page">
+                <Border Style="{StaticResource SettingsCard}">
+                    <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                        <FontIcon Glyph="&#xE71B;" Style="{StaticResource CardIcon}"/>
+                        <TextBlock Grid.Column="1" Text="GitHub Page" Style="{StaticResource CardHeading}"/>
+                        <FontIcon Grid.Column="2" Glyph="&#xE8A7;" FontSize="16" VerticalAlignment="Center"
+                                  FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"/>
+                    </Grid>
+                </Border>
+            </HyperlinkButton>
+            <HyperlinkButton Style="{StaticResource ExternalLink}" NavigateUri="{x:Bind ViewModel.LicenseUri, Mode=OneWay}"
+                             AutomationProperties.Name="MIT License">
+                <Border Style="{StaticResource SettingsCard}">
+                    <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                        <FontIcon Glyph="&#xE8A5;" Style="{StaticResource CardIcon}"/>
+                        <TextBlock Grid.Column="1" Text="MIT License" Style="{StaticResource CardHeading}"/>
+                        <FontIcon Grid.Column="2" Glyph="&#xE8A7;" FontSize="16" VerticalAlignment="Center"
+                                  FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"/>
+                    </Grid>
+                </Border>
+            </HyperlinkButton>
+            <HyperlinkButton Style="{StaticResource ExternalLink}" NavigateUri="https://www.buymeacoffee.com/dennis6481"
+                             AutomationProperties.Name="Buy me a coffee">
+                <Border Style="{StaticResource SettingsCard}">
+                    <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                        <FontIcon Glyph="&#xEB51;" Style="{StaticResource CardIcon}"/>
+                        <TextBlock Grid.Column="1" Text="Buy me a coffee" Style="{StaticResource CardHeading}"/>
+                        <FontIcon Grid.Column="2" Glyph="&#xE8A7;" FontSize="16" VerticalAlignment="Center"
+                                  FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"/>
+                    </Grid>
+                </Border>
+            </HyperlinkButton>
+        </StackPanel>
+    </ContentControl>
 </Page>

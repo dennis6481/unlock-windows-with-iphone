@@ -72,7 +72,7 @@
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <ProgramDataBaseFileName>$(IntDir)$(ProjectName).pdb</ProgramDataBaseFileName>
       <AdditionalOptions>/utf-8 /bigobj %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>$(GeneratedFilesDir)Dashboard\Pages;..;..\DesktopApp\Dashboard\Pages;..\Protocol;..\Enrollment;..\SavedCredential;Dashboard\Pages;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(GeneratedFilesDir)Dashboard\Pages;..;..\DesktopApp\Dashboard\Pages;..\Protocol;..\Enrollment;..\SavedCredential;Dashboard\Pages;Dashboard\ViewModels;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>UNICODE;_UNICODE;WIN32_LEAN_AND_MEAN;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <ResourceCompile>
@@ -99,17 +99,27 @@
     <ClCompile Include="./main.cpp" />
     <ClCompile Include="./DesktopHost.cpp" />
     <ClCompile Include="./DesktopNotifications.cpp" />
-    <ClCompile Include="..\Enrollment/Enrollment.cpp" />
     <ClCompile Include="..\Bluetooth\SystemBleSession.cpp" />
     <ClCompile Include="..\SavedCredential/CredentialManagement.cpp" />
     <ClInclude Include="./DesktopApplication.h" />
-    <ClInclude Include="..\Enrollment\BindingView.h" />
     <ClCompile Include="./Dashboard/Dashboard.cpp" />
     <ClInclude Include="..\Bluetooth\SystemBleContract.h" />
     <ClCompile Include="Dashboard\Pages/StatusPage.xaml.cpp" />
     <ClCompile Include="Dashboard\Pages/PasswordPage.xaml.cpp" />
     <ClCompile Include="Dashboard\Pages/DiagnosticsPage.xaml.cpp" />
     <ClCompile Include="Dashboard\Pages/AboutPage.xaml.cpp" />
+    <ClCompile Include="Dashboard\ViewModels\StatusViewModel.cpp" />
+    <ClCompile Include="Dashboard\ViewModels\PasswordViewModel.cpp" />
+    <ClCompile Include="Dashboard\ViewModels\DiagnosticsViewModel.cpp" />
+    <ClCompile Include="Dashboard\ViewModels\AboutViewModel.cpp" />
+    <ClInclude Include="Dashboard\ViewModels\StatusViewModel.h" />
+    <ClInclude Include="Dashboard\ViewModels\PasswordViewModel.h" />
+    <ClInclude Include="Dashboard\ViewModels\DiagnosticsViewModel.h" />
+    <ClInclude Include="Dashboard\ViewModels\AboutViewModel.h" />
+    <ClInclude Include="Dashboard\ViewModels\PairedDevice.h" />
+    <ClInclude Include="Dashboard\ViewModels\Observable.h" />
+    <ClInclude Include="Dashboard\UnlockRange.h" />
+    <ClInclude Include="DesktopErrors.h" />
     <ClInclude Include="Dashboard\Pages\StatusPage.xaml.h"><DependentUpon>StatusPage.xaml</DependentUpon></ClInclude>
     <ClInclude Include="Dashboard\Pages\PasswordPage.xaml.h"><DependentUpon>PasswordPage.xaml</DependentUpon></ClInclude>
     <ClInclude Include="Dashboard\Pages\DiagnosticsPage.xaml.h"><DependentUpon>DiagnosticsPage.xaml</DependentUpon></ClInclude>
@@ -119,6 +129,7 @@
     <Page Include="Dashboard\Pages\PasswordPage.xaml" />
     <Page Include="Dashboard\Pages\DiagnosticsPage.xaml" />
     <Page Include="Dashboard\Pages\AboutPage.xaml" />
+    <Page Include="Dashboard\Pages\SharedResources.xaml" />
     <ResourceCompile Include="$(UnlockGeneratedDirectory)\UnlockWithIPhone-version.rc" />
     <ResourceCompile Include="..\Resources\AppIcon.rc" />
     <Manifest Include="..\Resources/DesktopUi.manifest" />

@@ -18,7 +18,7 @@ struct ProductVersion final {
         return std::to_wstring(major) + L"." + std::to_wstring(minor) + L"." + std::to_wstring(patch) + L"." + std::to_wstring(build);
     }
 };
-inline constexpr ProductVersion kProductVersion{1, 0, 0, 11};
+inline constexpr ProductVersion kProductVersion{1, 0, 0, 12};
 inline constexpr ProductVersion kMinimumMaintenanceVersion{1, 0, 0, 0};
 
 [[nodiscard]] inline std::optional<ProductVersion> parseProductVersion(std::wstring_view text) {

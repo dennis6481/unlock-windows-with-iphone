@@ -3,27 +3,112 @@
 namespace UnlockDesktop
 {
     [default_interface]
+    runtimeclass PairedDevice
+    {
+        String EndpointId{ get; };
+        String Name{ get; };
+    }
+
+    [default_interface]
+    runtimeclass StatusViewModel : Microsoft.UI.Xaml.Data.INotifyPropertyChanged
+    {
+        StatusViewModel();
+        String DeviceName{ get; };
+        String LastUnlock{ get; };
+        String Error{ get; };
+        Boolean ErrorOpen{ get; };
+        Boolean SuccessOpen;
+        Microsoft.UI.Xaml.Visibility SuccessVisibility{ get; };
+        Microsoft.UI.Xaml.Visibility BoundVisibility{ get; };
+        Microsoft.UI.Xaml.Visibility BindingVisibility{ get; };
+        Microsoft.UI.Xaml.Visibility EmptyVisibility{ get; };
+        Microsoft.UI.Xaml.Visibility ProgressVisibility{ get; };
+        Boolean BindingEnabled{ get; };
+        Boolean DevicesEnabled{ get; };
+        Boolean ManagementEnabled{ get; };
+        Boolean BindingBusy{ get; };
+        String BindingMessage{ get; };
+        String BindLabel{ get; };
+        String BindAutomationName{ get; };
+        Double RangeValue{ get; };
+        Windows.Foundation.Collections.IObservableVector<PairedDevice> Devices{ get; };
+        PairedDevice SelectedDevice;
+        Microsoft.UI.Xaml.Input.ICommand BindCommand{ get; };
+        Microsoft.UI.Xaml.Input.ICommand RemoveCommand{ get; };
+        Microsoft.UI.Xaml.Input.ICommand SaveRangeCommand{ get; };
+        Microsoft.UI.Xaml.Input.ICommand OpenSettingsCommand{ get; };
+    }
+
+    [default_interface]
+    runtimeclass PasswordViewModel : Microsoft.UI.Xaml.Data.INotifyPropertyChanged
+    {
+        PasswordViewModel();
+        String Account{ get; };
+        String PasswordLabel{ get; };
+        String PasswordAction{ get; };
+        Boolean Ready{ get; };
+        Boolean CanRemove{ get; };
+        Boolean Expanded;
+        Boolean Warning{ get; };
+        Boolean NoticeOpen;
+        String Notice{ get; };
+        Microsoft.UI.Xaml.Visibility RemovalVisibility{ get; };
+        Microsoft.UI.Xaml.Visibility RetryVisibility{ get; };
+        Boolean SuccessOpen;
+        String SuccessTitle{ get; };
+        Microsoft.UI.Xaml.Visibility SuccessVisibility{ get; };
+        Microsoft.UI.Xaml.Input.ICommand RefreshCommand{ get; };
+        Microsoft.UI.Xaml.Input.ICommand PasswordCommand{ get; };
+        Microsoft.UI.Xaml.Input.ICommand RemoveCommand{ get; };
+    }
+
+    [default_interface]
+    runtimeclass DiagnosticsViewModel : Microsoft.UI.Xaml.Data.INotifyPropertyChanged
+    {
+        DiagnosticsViewModel();
+        String Text{ get; };
+    }
+
+    [default_interface]
+    runtimeclass AboutViewModel : Microsoft.UI.Xaml.Data.INotifyPropertyChanged
+    {
+        AboutViewModel();
+        String Version{ get; };
+        Windows.Foundation.Uri ProjectUri{ get; };
+        Windows.Foundation.Uri LicenseUri{ get; };
+        String UpdateStatus{ get; };
+        Windows.Foundation.Uri ReleaseUri{ get; };
+        Microsoft.UI.Xaml.Visibility UpdateVisibility{ get; };
+        Microsoft.UI.Xaml.Visibility ReleaseVisibility{ get; };
+        Microsoft.UI.Xaml.Input.ICommand CheckUpdatesCommand{ get; };
+    }
+
+    [default_interface]
     runtimeclass StatusPage : Microsoft.UI.Xaml.Controls.Page
     {
         StatusPage();
+        StatusViewModel ViewModel{ get; };
     }
 
     [default_interface]
     runtimeclass PasswordPage : Microsoft.UI.Xaml.Controls.Page
     {
         PasswordPage();
+        PasswordViewModel ViewModel{ get; };
     }
 
     [default_interface]
     runtimeclass DiagnosticsPage : Microsoft.UI.Xaml.Controls.Page
     {
         DiagnosticsPage();
+        DiagnosticsViewModel ViewModel{ get; };
     }
 
     [default_interface]
     runtimeclass AboutPage : Microsoft.UI.Xaml.Controls.Page
     {
         AboutPage();
+        AboutViewModel ViewModel{ get; };
     }
 
 }

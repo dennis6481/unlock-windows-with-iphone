@@ -2,51 +2,35 @@
 
 #include "DiagnosticsPage.xaml.h"
 #include "DiagnosticsPage.g.cpp"
-#include "PageControls.h"
+#include <winrt/Windows.Foundation.h>
 #include <algorithm>
-#include <winrt/Microsoft.UI.Xaml.Automation.h>
 
 namespace winrt::UnlockDesktop::implementation {
-using namespace unlock_windows::desktop_app::dashboard_ui;
-
-void DiagnosticsPage::OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEventArgs const&) {
-    if (diagnostics_) return;
-    diagnostics_ = TextBox{};
-    diagnostics_.IsReadOnly(true);
-    diagnostics_.AcceptsReturn(true);
-    diagnostics_.TextWrapping(TextWrapping::Wrap);
-    diagnostics_.MinHeight(320);
-    ScrollViewer::SetVerticalScrollBarVisibility(diagnostics_, ScrollBarVisibility::Disabled);
-    ScrollViewer::SetHorizontalScrollBarVisibility(diagnostics_, ScrollBarVisibility::Disabled);
-    Automation::AutomationProperties::SetName(diagnostics_, L"Technical details and diagnostic history");
-
-    StackPanel body;
-    body.Spacing(24);
-    body.Children().Append(diagnostics_);
-    BodyHost().Content(body);
+DiagnosticsPage::DiagnosticsPage() {
+    viewModel_ = make<DiagnosticsViewModel>();
+    InitializeComponent();
+    changed_ = viewModel_.PropertyChanged([weak = get_weak()](const auto&, const auto&) {
+        if (auto page = weak.get()) page->ApplyText();
+    });
 }
-
-void DiagnosticsPage::Update(std::wstring const& diagnostics) {
-    if (diagnostics == displayedDiagnostics_) return;
-    const auto selectionStart = diagnostics_.SelectionStart();
-    const auto selectionLength = diagnostics_.SelectionLength();
+void DiagnosticsPage::Update(std::wstring const& diagnostics) { get_self<DiagnosticsViewModel>(viewModel_)->Update(diagnostics); }
+void DiagnosticsPage::ApplyText() {
+    const auto text = DiagnosticsText();
+    const auto selectionStart = text.SelectionStart();
+    const auto selectionLength = text.SelectionLength();
     const auto scroll = scrollHost_.get();
     const auto verticalOffset = scroll ? scroll.VerticalOffset() : 0.0;
-    diagnostics_.Text(diagnostics);
-    displayedDiagnostics_ = diagnostics;
-    const auto textLength = static_cast<int32_t>(diagnostics_.Text().size());
+    text.Text(viewModel_.Text());
+    const auto textLength = static_cast<int32_t>(text.Text().size());
     const auto start = std::min(selectionStart, textLength);
-    diagnostics_.Select(start, std::min(selectionLength, textLength - start));
+    text.Select(start, std::min(selectionLength, textLength - start));
     if (scroll) {
         scroll.UpdateLayout();
         scroll.ChangeView(nullptr, verticalOffset, nullptr, true);
     }
 }
-
-void DiagnosticsPage::SetScrollHost(ScrollViewer const& scroll) {
-    scrollHost_ = make_weak(scroll);
-}
-
+void DiagnosticsPage::SetScrollHost(Microsoft::UI::Xaml::Controls::ScrollViewer const& scroll) { scrollHost_ = make_weak(scroll); }
 void DiagnosticsPage::Stop() {
+    if (changed_.value) { viewModel_.PropertyChanged(changed_); changed_ = {}; }
 }
 }

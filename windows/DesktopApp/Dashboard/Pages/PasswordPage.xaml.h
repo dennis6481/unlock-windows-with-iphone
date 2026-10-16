@@ -1,53 +1,43 @@
 // Created by Rui MA on 09 Oct 2026
 
 #pragma once
-
 #include "PasswordPage.g.h"
-#include "../Dashboard.h"
-#include "../../../SavedCredential/SavedCredentialIpc.h"
-#include <winrt/Microsoft.UI.Dispatching.h>
+#include "../ViewModels/PasswordViewModel.h"
 #include <winrt/Microsoft.UI.Xaml.Controls.h>
 #include <winrt/Microsoft.UI.Xaml.Navigation.h>
 
 namespace winrt::UnlockDesktop::implementation {
 struct PasswordPage : PasswordPageT<PasswordPage> {
-    PasswordPage() = default;
-    void OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEventArgs const& args);
+    /// Initialize the password presentation without taking ownership of its elevated window.
+    PasswordPage();
+    /// Expose the cached model to compiled bindings.
+    UnlockDesktop::PasswordViewModel ViewModel() const { return viewModel_; }
+    /// Clear the view's confirmation and transient completion feedback on departure.
     void OnNavigatedFrom(Microsoft::UI::Xaml::Navigation::NavigationEventArgs const& args);
+    /// Attach the existing host diagnostic callback.
     void Bind(unlock_windows::desktop_app::Dashboard::ReportError reportError);
+    /// Forward entry and activation refresh to the model.
     void Refresh();
+    /// Dismiss view feedback and stop the model during desktop shutdown.
     void Stop();
+    /// Hide the existing removal confirmation Flyout.
     void DismissRemoval();
+    /// Clear or suppress completion feedback when the page is no longer visible.
     void DismissPasswordSuccess();
-
+    /// Preserve the existing responsive account card layout.
+    void AccountCardSizeChanged(const Windows::Foundation::IInspectable&, const Microsoft::UI::Xaml::SizeChangedEventArgs& args);
+    /// Apply the existing custom header style to the official Expander toggle.
+    void ManagementLoaded(const Windows::Foundation::IInspectable&, const Microsoft::UI::Xaml::RoutedEventArgs&);
+    /// Dismiss confirmation when the management group is collapsed.
+    void ManagementCollapsed(const Windows::Foundation::IInspectable&, const Microsoft::UI::Xaml::Controls::ExpanderCollapsedEventArgs&);
+    /// Hide confirmation before invoking the model's removal command.
+    void ConfirmRemovalClick(const Windows::Foundation::IInspectable&, const Microsoft::UI::Xaml::RoutedEventArgs&);
+    /// Collapse the success bar only after its existing close transition finishes.
+    void SuccessClosed(const Windows::Foundation::IInspectable&, const Microsoft::UI::Xaml::Controls::InfoBarClosedEventArgs&);
 private:
-    void applyState();
-    void beginOperation(unlock_windows::saved_credential::Operation operation);
-    void error(const std::wstring& message);
-    void uiError(const hresult_error& error);
-    static winrt::Windows::Foundation::IAsyncAction query(weak_ref<PasswordPage> weak,
-        Microsoft::UI::Dispatching::DispatcherQueue dispatcher,
-        unlock_windows::desktop_app::Dashboard::ReportError reportError);
-    static winrt::Windows::Foundation::IAsyncAction launch(weak_ref<PasswordPage> weak,
-        Microsoft::UI::Dispatching::DispatcherQueue dispatcher,
-        unlock_windows::saved_credential::Operation operation,
-        unlock_windows::desktop_app::Dashboard::ReportError reportError);
-    Microsoft::UI::Xaml::Controls::StackPanel passwordPanel_{nullptr};
-    Microsoft::UI::Xaml::Controls::TextBlock account_{nullptr}, passwordLabel_{nullptr};
-    Microsoft::UI::Xaml::Controls::Expander management_{nullptr};
-    Microsoft::UI::Xaml::Controls::Grid removeRow_{nullptr};
-    Microsoft::UI::Xaml::Controls::Button password_{nullptr}, retry_{nullptr};
-    Microsoft::UI::Xaml::Controls::Button remove_{nullptr};
-    Microsoft::UI::Xaml::Controls::Flyout removalFlyout_{nullptr};
-    Microsoft::UI::Xaml::Controls::InfoBar notice_{nullptr}, success_{nullptr};
-    std::optional<unlock_windows::saved_credential::CredentialSummary> summary_;
-    unlock_windows::desktop_app::Dashboard::ReportError reportError_;
-    winrt::Windows::Foundation::IAsyncAction query_{nullptr}, operation_{nullptr};
-    bool loading_ = false, managing_ = false, stopped_ = false;
-    bool passwordSuccessPending_ = false;
+    UnlockDesktop::PasswordViewModel viewModel_{nullptr};
 };
 }
-
 namespace winrt::UnlockDesktop::factory_implementation {
 struct PasswordPage : PasswordPageT<PasswordPage, implementation::PasswordPage> {};
 }

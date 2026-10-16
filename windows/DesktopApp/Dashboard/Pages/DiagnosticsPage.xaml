@@ -5,5 +5,12 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     NavigationCacheMode="Required">
     <ContentControl x:Name="BodyHost" Margin="0,32,0,0"
-                    HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" />
+                    HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch">
+        <StackPanel Spacing="24">
+            <!-- Apply model text in PropertyChanged so selection and the outer viewport survive updates. -->
+            <TextBox x:Name="DiagnosticsText" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="320"
+                     ScrollViewer.VerticalScrollBarVisibility="Disabled" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                     AutomationProperties.Name="Technical details and diagnostic history"/>
+        </StackPanel>
+    </ContentControl>
 </Page>

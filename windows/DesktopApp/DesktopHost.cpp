@@ -34,7 +34,9 @@ public:
                 default: execute(command); break;
                 }
             },
-            [this](const std::wstring& message, bool error) { controller_->record((error ? L"Tray error: " : L"Tray: ") + message); }) {
+            [this](const std::wstring& message, bool error) {
+                controller_->record(DiagnosticSource::tray, error ? NoticeSeverity::error : NoticeSeverity::information, message);
+            }) {
         snapshot_.busy = true;
         snapshot_.status = L"Reading service binding status...";
     }
@@ -75,7 +77,10 @@ public:
         });
         dashboard_ = std::make_unique<Dashboard>(
             [weak] { if (const auto host = weak.lock()) host->execute(TrayCommand::status); },
-            controller_->errorReporter(L"Dashboard needs attention"), controller_->errorReporter(L"", false));
+            controller_->errorReporter(DiagnosticSource::dashboard, L"Dashboard needs attention"),
+            controller_->errorReporter(DiagnosticSource::password, L"", false),
+            controller_->errorReporter(DiagnosticSource::binding, L"", false),
+            controller_->errorReporter(DiagnosticSource::about, L"Dashboard needs attention"));
         timer_ = dispatcher_.CreateTimer();
         timer_.Interval(std::chrono::seconds(1));
         timerToken_ = timer_.Tick([weak](const auto&, const auto&) {
@@ -116,7 +121,7 @@ public:
 
 private:
     void report(const std::wstring& message, const wchar_t* title) {
-        if (controller_) controller_->record(L"Desktop: " + message);
+        if (controller_) controller_->record(DiagnosticSource::desktop, NoticeSeverity::error, message);
         notifications_->show(message, title, NoticeSeverity::error);
     }
 

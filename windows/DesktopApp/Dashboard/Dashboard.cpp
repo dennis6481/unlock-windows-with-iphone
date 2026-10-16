@@ -43,6 +43,8 @@ struct Dashboard::State final {
     RefreshAction refresh;
     ReportError reportError;
     ReportError passwordReport;
+    ReportError bindingReport;
+    ReportError aboutReport;
     std::wstring failure;
     bool stopping = false;
 
@@ -235,7 +237,7 @@ private:
                             if (currentPage_ == DashboardPage::status) scroll_.ChangeView(nullptr, 0.0, nullptr, true);
                         }
                         state_->refresh();
-                    });
+                    }, state_->bindingReport);
                     get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->Update(state_->snapshot);
                 } else if (diagnosticsPage) {
                     diagnosticsPage_ = navigateTo<winrt::UnlockDesktop::DiagnosticsPage>();
@@ -249,7 +251,7 @@ private:
                 } else if (pageId == DashboardPage::about) {
                     aboutPage_ = navigateTo<winrt::UnlockDesktop::AboutPage>();
                     get_self<winrt::UnlockDesktop::implementation::AboutPage>(aboutPage_)->Bind(
-                        state_->reportError);
+                        state_->aboutReport);
                 } else throw hresult_invalid_argument(L"Unknown Dashboard page.");
                 title_.Text(unbox_value<hstring>(item.Content()));
                 copy_.Visibility(diagnosticsPage ? Visibility::Visible : Visibility::Collapsed);
@@ -334,10 +336,13 @@ private:
     event_token copyToken_{};
 };
 
-Dashboard::Dashboard(RefreshAction refresh, ReportError reportError, ReportError passwordReport) : state_(std::make_unique<State>()) {
+Dashboard::Dashboard(RefreshAction refresh, ReportError reportError, ReportError passwordReport,
+                     ReportError bindingReport, ReportError aboutReport) : state_(std::make_unique<State>()) {
     state_->refresh = std::move(refresh);
     state_->reportError = std::move(reportError);
     state_->passwordReport = std::move(passwordReport);
+    state_->bindingReport = std::move(bindingReport);
+    state_->aboutReport = std::move(aboutReport);
 }
 
 Dashboard::~Dashboard() { stop(); }
@@ -345,7 +350,7 @@ Dashboard::~Dashboard() { stop(); }
 void Dashboard::State::fail(const hresult_error& error) {
     rethrowNonlocalUiError(error);
     failure = std::wstring(error.message());
-    reportError(L"Dashboard: " + failure);
+    reportError(failure);
     if (view) view->shutdown();
 }
 

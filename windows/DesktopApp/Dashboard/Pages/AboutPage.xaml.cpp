@@ -49,7 +49,7 @@ void AboutPage::OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEventAr
             } catch (const hresult_error& error) {
                 rethrowNonlocalUiError(error);
                 page->Stop();
-                page->reportError_(L"About: " + std::wstring(error.message()));
+                page->reportError_(currentException());
             }
         }
     });
@@ -147,7 +147,7 @@ Windows::Foundation::IAsyncAction AboutPage::checkForUpdates(
             } catch (const hresult_error& error) {
                 rethrowNonlocalUiError(error);
                 page->Stop();
-                page->reportError_(L"About: " + std::wstring(error.message()));
+                page->reportError_(currentException());
             }
         })) reportError(L"The About UI dispatcher rejected an update.");
     } catch (...) { reportError(currentException()); }

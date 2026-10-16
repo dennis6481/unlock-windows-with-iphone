@@ -38,7 +38,8 @@ public:
     using ReportError = std::function<void(std::wstring)>;
     using RefreshAction = std::function<void()>;
 
-    Dashboard(RefreshAction refresh, ReportError reportError, ReportError passwordReport);
+    Dashboard(RefreshAction refresh, ReportError reportError, ReportError passwordReport,
+              ReportError bindingReport, ReportError aboutReport);
     ~Dashboard();
     Dashboard(const Dashboard&) = delete;
     Dashboard& operator=(const Dashboard&) = delete;

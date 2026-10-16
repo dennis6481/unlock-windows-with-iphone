@@ -256,7 +256,7 @@ void PasswordPage::error(const std::wstring& message) {
     notice_.Severity(InfoBarSeverity::Error);
     notice_.Message(message);
     notice_.IsOpen(true);
-    reportError_(L"Password: " + message);
+    reportError_(message);
 }
 
 void PasswordPage::Refresh() {
@@ -310,8 +310,8 @@ Windows::Foundation::IAsyncAction PasswordPage::query(weak_ref<PasswordPage> wea
         Packet response;
         CallDiagnostics diagnostics;
         if (!call(Operation::credentialSummary, SensitiveBytes{}, response, kPipeTransferLifetimeMs, &diagnostics))
-            failure = L"Saved password service is unavailable: " + std::wstring(callStageName(diagnostics.stage)) +
-                L" (Win32 " + std::to_wstring(diagnostics.win32Error) + L"). Choose Retry to check again.";
+            failure = L"Saved password service is unavailable; stage=" + std::wstring(callStageName(diagnostics.stage)) +
+                L"; win32=" + std::to_wstring(diagnostics.win32Error) + L". Choose Retry to check again.";
         else if (response.result != Result::success)
             failure = L"The service could not verify this signed-in Windows account. Choose Retry to check again.";
         else {
@@ -320,7 +320,8 @@ Windows::Foundation::IAsyncAction PasswordPage::query(weak_ref<PasswordPage> wea
                 failure = L"The service returned malformed password status.";
             else summary = std::move(value);
             if (diagnostics.stage == CallStage::replyAcknowledgment)
-                reportError(L"Password status reply acknowledgment failed (Win32 " + std::to_wstring(diagnostics.win32Error) + L").");
+                reportError(L"Status reply acknowledgment failed; stage=" + std::wstring(callStageName(diagnostics.stage)) +
+                    L"; win32=" + std::to_wstring(diagnostics.win32Error));
         }
     } catch (...) { failure = currentException(); }
     if (cancellation()) co_return;
@@ -367,7 +368,7 @@ Windows::Foundation::IAsyncAction PasswordPage::launch(weak_ref<PasswordPage> we
         request.nShow = operation == Operation::clearCredential ? SW_HIDE : SW_SHOWNORMAL;
         if (!ShellExecuteExW(&request)) {
             const auto code = GetLastError();
-            if (code != ERROR_CANCELLED) throw std::runtime_error("Open password window: Win32=" + std::to_string(code));
+            if (code != ERROR_CANCELLED) throw std::runtime_error("Open password window; win32=" + std::to_string(code));
         } else {
             process.value = request.hProcess;
             if (!process.value) throw std::runtime_error("Password window returned no process handle");
@@ -379,13 +380,13 @@ Windows::Foundation::IAsyncAction PasswordPage::launch(weak_ref<PasswordPage> we
             DWORD result = 0;
             unlock_windows::enrollment::require(GetExitCodeProcess(process.value, &result), "Read password window result");
             if (operation == Operation::clearCredential && result != ERROR_SUCCESS)
-                failure = L"The saved password removal did not complete successfully (Win32 " + std::to_wstring(result) +
-                    L"). Check the current state and try again.";
+                failure = L"The saved password removal did not complete successfully; win32=" + std::to_wstring(result) +
+                    L". Check the current state and try again.";
             else if (operation != Operation::clearCredential &&
                 result != static_cast<DWORD>(unlock_windows::desktop_app::SetupResult::cancelled) &&
                 result != static_cast<DWORD>(unlock_windows::desktop_app::SetupResult::credentialReady))
-                failure = L"The password window did not complete successfully (exit code " +
-                    std::to_wstring(result) + L"). Try the password action again.";
+                failure = L"The password window did not complete successfully; exitCode=" +
+                    std::to_wstring(result) + L". Try the password action again.";
             completed = operation == Operation::clearCredential ? result == ERROR_SUCCESS
                 : result == static_cast<DWORD>(unlock_windows::desktop_app::SetupResult::credentialReady);
         } catch (...) { failure = currentException(); }

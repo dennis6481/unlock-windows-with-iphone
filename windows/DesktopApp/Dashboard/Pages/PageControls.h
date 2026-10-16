@@ -167,7 +167,7 @@ inline void rethrowNonlocalUiError(const hresult_error& error) {
 inline std::wstring currentException() {
     try { throw; }
     catch (const hresult_error& error) {
-        return std::wstring(error.message()) + L" (HRESULT=" +
+        return std::wstring(error.message()) + L" (hresult=" +
             std::to_wstring(static_cast<unsigned long>(error.code().value)) + L")";
     }
     catch (const std::exception& error) { return std::wstring(to_hstring(error.what())); }

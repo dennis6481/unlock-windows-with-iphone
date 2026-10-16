@@ -19,7 +19,7 @@ struct StatusPage : StatusPageT<StatusPage> {
     void Update(unlock_windows::desktop_app::DashboardSnapshot const& snapshot);
     void Stop();
     void Refresh();
-    void SetHost(std::function<void(bool)> refresh);
+    void SetHost(std::function<void(bool)> refresh, unlock_windows::desktop_app::Dashboard::ReportError reportError);
     void Remove();
     bool Busy() const;
 
@@ -40,6 +40,7 @@ private:
     bool thresholdPointerActive_ = false, thresholdKeyActive_ = false, visible_ = false;
     std::uint64_t thresholdInteraction_ = 0;
     std::function<void(bool)> refreshSnapshot_;
+    unlock_windows::desktop_app::Dashboard::ReportError reportError_;
     std::wstring saveError_;
     winrt::handle cancellation_;
     void EnsureBindingView();

@@ -203,6 +203,7 @@ void StatusPage::QueueThresholdAction(bool cancel) {
     })) {
         ResetThresholdPreview();
         saveError_ = L"Unable to schedule the unlock range change.";
+        reportError_(saveError_);
         error_.Message(saveError_); error_.IsOpen(true);
     }
 }
@@ -237,7 +238,11 @@ void StatusPage::Update(unlock_windows::desktop_app::DashboardSnapshot const& sn
     if (known && !bound && !snapshot.busy && !bindingView_ && !stopped_) {
         try {
             EnsureBindingView();
-        } catch (...) { saveError_ = currentException(); }
+        } catch (...) {
+            const auto failure = currentException();
+            if (failure != saveError_) reportError_(failure);
+            saveError_ = failure;
+        }
     }
     if (bindingView_) {
         bindingView_->content.Visibility(known && !bound ? Visibility::Visible : Visibility::Collapsed);
@@ -270,6 +275,7 @@ fire_and_forget StatusPage::save(weak_ref<StatusPage> weak) {
     try { page->cancellation_ = unlock_windows::enrollment::createCancellation(change.candidate.accountSid, change.cancelEvent); }
     catch (...) {
         page->saving_ = false; page->saveError_ = currentException();
+        page->reportError_(page->saveError_);
         page->updating_ = true;
         page->threshold_.Value(-nearestDistanceThreshold(page->binding_->record.threshold)); page->dirty_ = false;
         page->updating_ = false;
@@ -295,6 +301,7 @@ fire_and_forget StatusPage::save(weak_ref<StatusPage> weak) {
     co_await foreground;
     if (page = weak.get(); page && !page->stopped_) {
         page->saving_ = false; page->dirty_ = false; page->saveError_ = failure;
+        if (!failure.empty()) page->reportError_(failure);
         if (saved) page->binding_ = saved;
         page->updating_ = true;
         const bool bound = page->binding_ && page->binding_->state == unlock_windows::system_ble::BindingState::bound;
@@ -311,6 +318,7 @@ void StatusPage::EnsureBindingView() {
     bindingView_ = unlock_windows::desktop_app::createBindingView([weak = get_weak()](std::wstring failure) {
         if (auto page = weak.get(); page && !page->stopped_) {
             page->saveError_ = std::move(failure);
+            if (!page->saveError_.empty()) page->reportError_(page->saveError_);
             page->error_.Message(page->saveError_); page->error_.IsOpen(!page->saveError_.empty());
         }
     }, [weak = get_weak()](const unlock_windows::saved_credential::BindingSummary& binding) {
@@ -328,8 +336,10 @@ void StatusPage::EnsureBindingView() {
     statusPanel_.Children().InsertAt(statusPanel_.Children().Size() - 1, bindingView_->content);
 }
 
-void StatusPage::SetHost(std::function<void(bool)> refresh) {
+void StatusPage::SetHost(std::function<void(bool)> refresh,
+                         unlock_windows::desktop_app::Dashboard::ReportError reportError) {
     refreshSnapshot_ = std::move(refresh);
+    reportError_ = std::move(reportError);
 }
 
 void StatusPage::Refresh() {
@@ -350,6 +360,7 @@ void StatusPage::Remove() {
         threshold_.IsEnabled(false);
     } catch (...) {
         saveError_ = currentException(); error_.Message(saveError_); error_.IsOpen(true);
+        reportError_(saveError_);
     }
 }
 void StatusPage::Stop() {
@@ -357,6 +368,7 @@ void StatusPage::Stop() {
     ResetThresholdPreview();
     if (removalFlyout_) removalFlyout_.Hide();
     if (bindingView_) bindingView_->stop();
-    if (cancellation_ && !SetEvent(cancellation_.get())) OutputDebugStringW(L"Binding management cancellation failed\n");
+    if (cancellation_ && !SetEvent(cancellation_.get()))
+        reportError_(L"Binding management cancellation failed; win32=" + std::to_wstring(GetLastError()));
 }
 }

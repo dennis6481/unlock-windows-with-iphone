@@ -11,6 +11,7 @@
 #include <vector>
 
 namespace unlock_windows::desktop_app {
+enum class DiagnosticSource { desktop, tray, dashboard, password, binding, about, setup, service, serviceIpc, lastUnlock };
 struct ControllerState;
 struct DesktopNotice final { std::wstring message, title; NoticeSeverity severity; };
 struct DesktopUpdate final {
@@ -27,8 +28,8 @@ public:
     DesktopUpdate takeUpdate();
     bool ended();
     void join();
-    void record(const std::wstring& message);
-    std::function<void(std::wstring)> errorReporter(std::wstring title, bool notify = true);
+    void record(DiagnosticSource source, NoticeSeverity severity, const std::wstring& message);
+    std::function<void(std::wstring)> errorReporter(DiagnosticSource source, std::wstring title, bool notify = true);
 private:
     std::shared_ptr<ControllerState> state_;
     std::thread thread_;

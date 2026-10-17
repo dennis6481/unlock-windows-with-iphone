@@ -72,7 +72,7 @@
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <ProgramDataBaseFileName>$(IntDir)$(ProjectName).pdb</ProgramDataBaseFileName>
       <AdditionalOptions>/utf-8 /bigobj %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>$(GeneratedFilesDir)Dashboard\Pages;..;..\DesktopApp\Dashboard\Pages;..\Protocol;..\Enrollment;..\SavedCredential;Dashboard\Pages;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(GeneratedFilesDir)UI\Pages;..;..\DesktopApp\UI\Pages;..\Protocol;..\Enrollment;..\SavedCredential;UI\Pages;UI\ViewModels;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>UNICODE;_UNICODE;WIN32_LEAN_AND_MEAN;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <ResourceCompile>
@@ -99,26 +99,37 @@
     <ClCompile Include="./main.cpp" />
     <ClCompile Include="./DesktopHost.cpp" />
     <ClCompile Include="./DesktopNotifications.cpp" />
-    <ClCompile Include="..\Enrollment/Enrollment.cpp" />
     <ClCompile Include="..\Bluetooth\SystemBleSession.cpp" />
     <ClCompile Include="..\SavedCredential/CredentialManagement.cpp" />
     <ClInclude Include="./DesktopApplication.h" />
-    <ClInclude Include="..\Enrollment\BindingView.h" />
-    <ClCompile Include="./Dashboard/Dashboard.cpp" />
+    <ClCompile Include="./UI/MainWindow.cpp" />
     <ClInclude Include="..\Bluetooth\SystemBleContract.h" />
-    <ClCompile Include="Dashboard\Pages/StatusPage.xaml.cpp" />
-    <ClCompile Include="Dashboard\Pages/PasswordPage.xaml.cpp" />
-    <ClCompile Include="Dashboard\Pages/DiagnosticsPage.xaml.cpp" />
-    <ClCompile Include="Dashboard\Pages/AboutPage.xaml.cpp" />
-    <ClInclude Include="Dashboard\Pages\StatusPage.xaml.h"><DependentUpon>StatusPage.xaml</DependentUpon></ClInclude>
-    <ClInclude Include="Dashboard\Pages\PasswordPage.xaml.h"><DependentUpon>PasswordPage.xaml</DependentUpon></ClInclude>
-    <ClInclude Include="Dashboard\Pages\DiagnosticsPage.xaml.h"><DependentUpon>DiagnosticsPage.xaml</DependentUpon></ClInclude>
-    <ClInclude Include="Dashboard\Pages\AboutPage.xaml.h"><DependentUpon>AboutPage.xaml</DependentUpon></ClInclude>
-    <Midl Include="Dashboard\Pages\DashboardPages.idl" />
-    <Page Include="Dashboard\Pages\StatusPage.xaml" />
-    <Page Include="Dashboard\Pages\PasswordPage.xaml" />
-    <Page Include="Dashboard\Pages\DiagnosticsPage.xaml" />
-    <Page Include="Dashboard\Pages\AboutPage.xaml" />
+    <ClCompile Include="UI\Pages/StatusPage.xaml.cpp" />
+    <ClCompile Include="UI\Pages/PasswordPage.xaml.cpp" />
+    <ClCompile Include="UI\Pages/DiagnosticsPage.xaml.cpp" />
+    <ClCompile Include="UI\Pages/AboutPage.xaml.cpp" />
+    <ClCompile Include="UI\ViewModels\StatusViewModel.cpp" />
+    <ClCompile Include="UI\ViewModels\PasswordViewModel.cpp" />
+    <ClCompile Include="UI\ViewModels\DiagnosticsViewModel.cpp" />
+    <ClCompile Include="UI\ViewModels\AboutViewModel.cpp" />
+    <ClInclude Include="UI\ViewModels\StatusViewModel.h" />
+    <ClInclude Include="UI\ViewModels\PasswordViewModel.h" />
+    <ClInclude Include="UI\ViewModels\DiagnosticsViewModel.h" />
+    <ClInclude Include="UI\ViewModels\AboutViewModel.h" />
+    <ClInclude Include="UI\ViewModels\PairedDevice.h" />
+    <ClInclude Include="UI\ViewModels\Observable.h" />
+    <ClInclude Include="UI\UnlockRange.h" />
+    <ClInclude Include="DesktopErrors.h" />
+    <ClInclude Include="UI\Pages\StatusPage.xaml.h"><DependentUpon>StatusPage.xaml</DependentUpon></ClInclude>
+    <ClInclude Include="UI\Pages\PasswordPage.xaml.h"><DependentUpon>PasswordPage.xaml</DependentUpon></ClInclude>
+    <ClInclude Include="UI\Pages\DiagnosticsPage.xaml.h"><DependentUpon>DiagnosticsPage.xaml</DependentUpon></ClInclude>
+    <ClInclude Include="UI\Pages\AboutPage.xaml.h"><DependentUpon>AboutPage.xaml</DependentUpon></ClInclude>
+    <Midl Include="UI\Pages\Pages.idl" />
+    <Page Include="UI\Pages\StatusPage.xaml" />
+    <Page Include="UI\Pages\PasswordPage.xaml" />
+    <Page Include="UI\Pages\DiagnosticsPage.xaml" />
+    <Page Include="UI\Pages\AboutPage.xaml" />
+    <Page Include="UI\Pages\SharedResources.xaml" />
     <ResourceCompile Include="$(UnlockGeneratedDirectory)\UnlockWithIPhone-version.rc" />
     <ResourceCompile Include="..\Resources\AppIcon.rc" />
     <Manifest Include="..\Resources/DesktopUi.manifest" />

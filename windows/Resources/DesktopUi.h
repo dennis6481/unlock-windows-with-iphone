@@ -20,9 +20,10 @@ inline void scheduleDpiAppearance(HWND window, UINT dpi) {
     require(PostMessageW(window, kApplyDpiAppearance, dpi, 0), "PostMessageW(dialog DPI appearance)");
 }
 
-inline void centerOnActiveMonitor(HWND window) {
+inline void centerOnActiveMonitor(HWND window, HWND monitorReference = nullptr) {
     MONITORINFO monitor{sizeof(monitor)};
-    require(GetMonitorInfoW(MonitorFromWindow(GetForegroundWindow(), MONITOR_DEFAULTTOPRIMARY), &monitor),
+    require(GetMonitorInfoW(MonitorFromWindow(monitorReference ? monitorReference : GetForegroundWindow(),
+        monitorReference ? MONITOR_DEFAULTTONEAREST : MONITOR_DEFAULTTOPRIMARY), &monitor),
         "GetMonitorInfoW(dialog placement)");
     RECT bounds{};
     require(GetWindowRect(window, &bounds), "GetWindowRect(dialog placement)");

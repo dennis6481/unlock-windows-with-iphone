@@ -1,0 +1,44 @@
+<!-- Created by Rui MA on 16 Oct 2026 -->
+<!-- Card presentation follows CommunityToolkit SettingsCard (MIT):
+     https://github.com/CommunityToolkit/Windows/blob/main/components/SettingsControls/src/SettingsCard/SettingsCard.xaml -->
+<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <x:Double x:Key="CardMinHeight">68</x:Double>
+    <Style x:Key="PageCards" TargetType="StackPanel">
+        <Setter Property="Spacing" Value="3"/>
+    </Style>
+    <Style x:Key="SettingsCard" TargetType="Border">
+        <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}"/>
+        <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius" Value="{ThemeResource ControlCornerRadius}"/>
+        <Setter Property="Padding" Value="16"/>
+        <Setter Property="MinHeight" Value="{StaticResource CardMinHeight}"/>
+    </Style>
+    <Style x:Key="CardText" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="14"/>
+        <Setter Property="TextWrapping" Value="Wrap"/>
+    </Style>
+    <Style x:Key="CardHeading" TargetType="TextBlock" BasedOn="{StaticResource CardText}">
+        <Setter Property="VerticalAlignment" Value="Center"/>
+        <Setter Property="Margin" Value="0,0,16,0"/>
+    </Style>
+    <Style x:Key="CardIcon" TargetType="FontIcon">
+        <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets"/>
+        <Setter Property="FontSize" Value="20"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+        <Setter Property="Margin" Value="0,0,20,0"/>
+    </Style>
+    <Style x:Key="ExternalLink" TargetType="HyperlinkButton">
+        <Setter Property="Foreground" Value="{ThemeResource TextFillColorPrimaryBrush}"/>
+        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+        <Setter Property="Padding" Value="0"/>
+        <Setter Property="BorderThickness" Value="0"/>
+    </Style>
+    <Style x:Key="PasswordAction" TargetType="Button">
+        <Setter Property="MinWidth" Value="100"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+</ResourceDictionary>

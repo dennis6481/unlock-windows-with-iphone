@@ -39,7 +39,7 @@ Your PC must have Bluetooth enabled, with an adapter and driver that support **B
 ## What it does
 
 - Unlock your locked Windows session using your paired iPhone over Bluetooth. Select the phone unlock tile on the Windows lock screen; click **Unlock** to request a fresh presence check. The phone needs no action for each attempt; locking the PC alone does not request unlock.
-- Adjust **Signal threshold** on the Windows **Status** page. Dragging changes a pending value; **Save** requests UAC.
+- Adjust **Unlock range** on **Status**: **Near**, **Medium** or **Far**. Changes request UAC; signal strength does not indicate an exact distance.
 - **Last Unlock** shows the last successful phone unlock and its signal, for example `2 min ago / -58 dBm`. It resets when the service or PC restarts.
 - Keep an encrypted copy of your Microsoft account password on your PC. Your password is never sent to your iPhone.
 - Manage system pairing, the product binding and saved password from the Windows tray app. The LocalSystem service verifies presence independently when the desktop app exits.
@@ -57,7 +57,7 @@ After restarting your PC or signing out, sign in once with your usual Windows pa
 2. Save your **Microsoft account password**, not your PIN. The encrypted copy stays on this PC and is never sent to the phone.
 3. On **Status**, use **Open Bluetooth settings** to pair your iPhone. Compare the Bluetooth numbers on both devices and accept only a match. Skip this step if Windows already shows the phone as paired.
 4. Return to **Status**, select your iPhone from the updated paired BLE list and click **Bind selected device**. Each BLE endpoint has its own entry; names do not select identity. Devices are never bound automatically.
-5. Confirm the selected phone. UAC permits the service to verify pairing and protected BLE communication before saving the binding. The unlock threshold starts at **−60 dBm** and can be adjusted on **Status** after binding.
+5. Approve UAC to let the service verify pairing and protected BLE communication before saving the binding. The unlock threshold starts at **−60 dBm** and can be adjusted on **Status** after binding.
 
 ## Uninstall
 

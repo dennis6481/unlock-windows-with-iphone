@@ -56,11 +56,13 @@
   the superseded implementation. Do not use glue code to maintain historical
   paths.
 - After each turn, without subagent, verify if there's overengineering or unneccesary code, or old compatibility code.
+- Add Doxygen comments for each method in C/C++
+- Use MVVM for UIs
 
 ## Documentations
 
 - Review all documents after a turn.
-- Make the least modification possible to update the documentation
+- Update documentation made outdated by code changes with minimal edits; simplify existing text rather than adding paragraphs, unless necessary.
 - Do not add long paragraphy
 - Keep the existing document writing style
 

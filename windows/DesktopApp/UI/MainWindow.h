@@ -11,9 +11,9 @@
 
 namespace unlock_windows::desktop_app {
 
-enum class DashboardPage { status, password, diagnostics, about };
+enum class MainWindowPage { status, password, diagnostics, about };
 
-struct DashboardSnapshot final {
+struct DesktopSnapshot final {
     std::optional<saved_credential::BindingSummary> binding;
     std::optional<saved_credential::LastUnlockSummary> lastUnlock;
     bool busy = false;
@@ -33,18 +33,26 @@ inline std::wstring lastUnlockText(const std::optional<saved_credential::LastUnl
     return std::to_wstring(count) + unit + L" ago / " + std::to_wstring(summary->rssi) + L" dBm";
 }
 
-class Dashboard final {
+class MainWindow final {
 public:
     using ReportError = std::function<void(std::wstring)>;
     using RefreshAction = std::function<void()>;
 
-    Dashboard(RefreshAction refresh, ReportError reportError, ReportError passwordReport);
-    ~Dashboard();
-    Dashboard(const Dashboard&) = delete;
-    Dashboard& operator=(const Dashboard&) = delete;
+    /// Attach the controller's refresh action and existing page error reporters.
+    MainWindow(RefreshAction refresh, ReportError reportError, ReportError passwordReport,
+              ReportError bindingReport, ReportError aboutReport);
+    /// Stop and release the cached window and pages.
+    ~MainWindow();
+    /// Keep ownership of the window and its cached pages unique.
+    MainWindow(const MainWindow&) = delete;
+    /// Prevent copying the window's lifecycle state.
+    MainWindow& operator=(const MainWindow&) = delete;
 
-    void show(std::optional<DashboardPage> page = std::nullopt);
-    void update(DashboardSnapshot snapshot);
+    /// Show the main window and optionally select a cached page.
+    void show(std::optional<MainWindowPage> page = std::nullopt);
+    /// Present the controller's latest desktop snapshot.
+    void update(DesktopSnapshot snapshot);
+    /// Stop page work and release the window during desktop shutdown.
     void stop();
 
 private:

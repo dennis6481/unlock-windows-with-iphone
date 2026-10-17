@@ -1,75 +1,60 @@
-// Created by Rui MA on 09 Oct 2026
+// Created by Rui MA on 16 Oct 2026
 
-#include "AboutPage.xaml.h"
-#include "AboutPage.g.cpp"
-#include "PageControls.h"
+#include "AboutViewModel.h"
+#include "AboutViewModel.g.cpp"
+#include "../../DesktopErrors.h"
 #include "../../../ProductVersion.h"
-#include "../../../Resources/resource.h"
+#include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Data.Json.h>
 #include <winrt/Windows.Web.Http.h>
 #include <winrt/Windows.Web.Http.Headers.h>
-#include <utility>
 
 namespace winrt::UnlockDesktop::implementation {
-using namespace unlock_windows::desktop_app::dashboard_ui;
-namespace { constexpr wchar_t kProjectUrl[] = L"https://github.com/dennis6481/unlock-windows-with-iphone"; }
-
-void AboutPage::OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEventArgs const&) {
-    if (aboutPanel_) return;
-    aboutPanel_ = StackPanel{};
-    aboutPanel_.Spacing(16);
-    aboutPanel_.Children().Append(text(UNLOCK_PRODUCT_DISPLAY_NAME, 24));
-    const auto& productVersion = unlock::components::kProductVersion;
-    const auto version = L"Version " + std::to_wstring(productVersion.major) + L"." + std::to_wstring(productVersion.minor) +
-        L"." + std::to_wstring(productVersion.patch) + L" (Build " + std::to_wstring(productVersion.build) + L")";
-    aboutPanel_.Children().Append(text(version.c_str()));
-    HyperlinkButton project;
-    project.Content(box_value(L"GitHub project"));
-    project.NavigateUri(Windows::Foundation::Uri(kProjectUrl));
-    aboutPanel_.Children().Append(project);
-    HyperlinkButton license;
-    license.Content(box_value(L"MIT License"));
-    license.NavigateUri(Windows::Foundation::Uri(std::wstring(kProjectUrl) + L"/blob/main/LICENSE.md"));
-    aboutPanel_.Children().Append(license);
-    checkUpdates_ = Button{};
-    checkUpdates_.Content(box_value(L"Check for updates"));
-    checkUpdates_.Click([weak = get_weak()](const auto&, const auto&) {
-        if (auto page = weak.get(); page && !page->stopped_) {
-            try {
-                page->checkUpdates_.IsEnabled(false);
-                page->updateStatus_.Text(L"Checking for updates...");
-                page->release_.Visibility(Visibility::Collapsed);
-                page->updateCheck_ = checkForUpdates(weak, page->DispatcherQueue(), page->reportError_);
-            } catch (const hresult_error& error) {
-                rethrowNonlocalUiError(error);
-                page->Stop();
-                page->reportError_(L"About: " + std::wstring(error.message()));
-            }
-        }
-    });
-    aboutPanel_.Children().Append(checkUpdates_);
-    updateStatus_ = text(L"");
-    aboutPanel_.Children().Append(updateStatus_);
-    release_ = HyperlinkButton{};
-    release_.Content(box_value(L"View release"));
-    release_.Visibility(Visibility::Collapsed);
-    aboutPanel_.Children().Append(release_);
-
-    BodyHost().Content(aboutPanel_);
+using namespace unlock_windows::desktop_app::ui;
+using namespace Microsoft::UI::Xaml;
+namespace {
+constexpr wchar_t kProjectUrl[] = L"https://github.com/dennis6481/unlock-windows-with-iphone";
 }
 
-void AboutPage::Bind(unlock_windows::desktop_app::Dashboard::ReportError reportError) {
-    reportError_ = std::move(reportError);
+AboutViewModel::AboutViewModel() {
+    const auto weak = get_weak();
+    check_ = make_self<unlock_windows::desktop_app::ViewModelCommand>(
+        [weak] { if (auto model = weak.get()) model->Check(); },
+        [weak] { const auto model = weak.get(); return model && !model->stopped_ && !model->checking_; });
 }
-
-void AboutPage::Stop() {
+hstring AboutViewModel::Version() const {
+    const auto& version = unlock::components::kProductVersion;
+    return hstring{L"Version " + std::to_wstring(version.major) + L"." + std::to_wstring(version.minor) +
+        L"." + std::to_wstring(version.patch) + L" (Build " + std::to_wstring(version.build) + L")"};
+}
+Windows::Foundation::Uri AboutViewModel::ProjectUri() const { return Windows::Foundation::Uri{kProjectUrl}; }
+Windows::Foundation::Uri AboutViewModel::LicenseUri() const { return Windows::Foundation::Uri{std::wstring(kProjectUrl) + L"/blob/main/LICENSE.md"}; }
+Visibility AboutViewModel::UpdateVisibility() const { return checked_ ? Visibility::Visible : Visibility::Collapsed; }
+Visibility AboutViewModel::ReleaseVisibility() const { return release_ ? Visibility::Visible : Visibility::Collapsed; }
+void AboutViewModel::Bind(unlock_windows::desktop_app::MainWindow::ReportError reportError) { reportError_ = std::move(reportError); }
+void AboutViewModel::Stop() {
     stopped_ = true;
     if (updateCheck_) updateCheck_.Cancel();
+    check_->Invalidate();
 }
-
-Windows::Foundation::IAsyncAction AboutPage::checkForUpdates(
-    weak_ref<AboutPage> weak, Microsoft::UI::Dispatching::DispatcherQueue dispatcher,
-    unlock_windows::desktop_app::Dashboard::ReportError reportError) {
+void AboutViewModel::Check() {
+    if (stopped_ || checking_) return;
+    try {
+        checking_ = checked_ = true;
+        message_ = L"Checking for updates...";
+        release_ = nullptr;
+        Notify({L"UpdateStatus", L"UpdateVisibility", L"ReleaseUri", L"ReleaseVisibility"});
+        check_->Invalidate();
+        updateCheck_ = checkForUpdates(get_weak(), Microsoft::UI::Dispatching::DispatcherQueue::GetForCurrentThread(), reportError_);
+    } catch (const hresult_error& error) {
+        if (isNonlocalUiError(error)) throw;
+        Stop();
+        reportError_(formatException(std::current_exception()));
+    }
+}
+Windows::Foundation::IAsyncAction AboutViewModel::checkForUpdates(
+    weak_ref<AboutViewModel> weak, Microsoft::UI::Dispatching::DispatcherQueue dispatcher,
+    unlock_windows::desktop_app::MainWindow::ReportError reportError) {
     const auto cancellation = co_await get_cancellation_token();
     cancellation.enable_propagation();
     co_await resume_background();
@@ -109,7 +94,7 @@ Windows::Foundation::IAsyncAction AboutPage::checkForUpdates(
         }
     } catch (...) {
         if (cancellation()) co_return;
-        message = failure + currentException();
+        message = failure + formatException(std::current_exception());
     }
     if (cancellation()) co_return;
     try {
@@ -117,18 +102,19 @@ Windows::Foundation::IAsyncAction AboutPage::checkForUpdates(
             const auto page = weak.get();
             if (!page || page->stopped_) return;
             try {
-                page->updateStatus_.Text(message);
-                page->checkUpdates_.IsEnabled(true);
+                page->message_ = message;
+                page->checking_ = false;
                 if (!releaseUrl.empty()) {
-                    page->release_.NavigateUri(Windows::Foundation::Uri(releaseUrl));
-                    page->release_.Visibility(Visibility::Visible);
+                    page->release_ = Windows::Foundation::Uri(releaseUrl);
                 }
+                page->Notify({L"UpdateStatus", L"ReleaseUri", L"ReleaseVisibility"});
+                page->check_->Invalidate();
             } catch (const hresult_error& error) {
-                rethrowNonlocalUiError(error);
+                if (isNonlocalUiError(error)) throw;
                 page->Stop();
-                page->reportError_(L"About: " + std::wstring(error.message()));
+                page->reportError_(formatException(std::current_exception()));
             }
         })) reportError(L"The About UI dispatcher rejected an update.");
-    } catch (...) { reportError(currentException()); }
+    } catch (...) { reportError(formatException(std::current_exception())); }
 }
 }

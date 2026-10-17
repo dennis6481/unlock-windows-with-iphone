@@ -4,8 +4,8 @@
 #include "DesktopApplication.h"
 #include "DesktopNotifications.h"
 #include "TrayManager.h"
-#include "Dashboard/Dashboard.h"
-#include "Dashboard/Pages/PageControls.h"
+#include "UI/MainWindow.h"
+#include "UI/Pages/PageControls.h"
 #include "DesktopController.h"
 #include "../Resources/DesktopUi.h"
 #include <WtsApi32.h>
@@ -28,13 +28,15 @@ public:
         tray_([this](TrayCommand command) {
                 switch (command) {
                 case TrayCommand::showWindow: show(); break;
-                case TrayCommand::status: show(DashboardPage::status); break;
-                case TrayCommand::password: show(DashboardPage::password); break;
-                case TrayCommand::about: show(DashboardPage::about); break;
+                case TrayCommand::status: show(MainWindowPage::status); break;
+                case TrayCommand::password: show(MainWindowPage::password); break;
+                case TrayCommand::about: show(MainWindowPage::about); break;
                 default: execute(command); break;
                 }
             },
-            [this](const std::wstring& message, bool error) { controller_->record((error ? L"Tray error: " : L"Tray: ") + message); }) {
+            [this](const std::wstring& message, bool error) {
+                controller_->record(DiagnosticSource::tray, error ? NoticeSeverity::error : NoticeSeverity::information, message);
+            }) {
         snapshot_.busy = true;
         snapshot_.status = L"Reading service binding status...";
     }
@@ -55,7 +57,7 @@ public:
             DWORD pid = 0, session = 0xffffffff;
             GetWindowThreadProcessId(existing, &pid);
             desktop_ui::require(pid && ProcessIdToSessionId(pid, &session) && session == session_, "Verify setup tray session");
-            desktop_ui::require(PostMessageW(existing, setup_ ? kSetupMessage : kShowDashboardMessage, 0, 0),
+            desktop_ui::require(PostMessageW(existing, setup_ ? kSetupMessage : kShowMainWindowMessage, 0, 0),
                 "Request setup or activation from tray");
         }
         return false;
@@ -73,9 +75,12 @@ public:
                 if (const auto host = weak.lock()) host->poll();
             });
         });
-        dashboard_ = std::make_unique<Dashboard>(
+        mainWindow_ = std::make_unique<MainWindow>(
             [weak] { if (const auto host = weak.lock()) host->execute(TrayCommand::status); },
-            controller_->errorReporter(L"Dashboard needs attention"), controller_->errorReporter(L"", false));
+            controller_->errorReporter(DiagnosticSource::mainWindow, L"Dashboard needs attention"),
+            controller_->errorReporter(DiagnosticSource::password, L"", false),
+            controller_->errorReporter(DiagnosticSource::binding, L"", false),
+            controller_->errorReporter(DiagnosticSource::about, L"Dashboard needs attention"));
         timer_ = dispatcher_.CreateTimer();
         timer_.Interval(std::chrono::seconds(1));
         timerToken_ = timer_.Tick([weak](const auto&, const auto&) {
@@ -116,7 +121,7 @@ public:
 
 private:
     void report(const std::wstring& message, const wchar_t* title) {
-        if (controller_) controller_->record(L"Desktop: " + message);
+        if (controller_) controller_->record(DiagnosticSource::desktop, NoticeSeverity::error, message);
         notifications_->show(message, title, NoticeSeverity::error);
     }
 
@@ -136,15 +141,15 @@ private:
         else if (!background_) show();
     }
 
-    void show(std::optional<DashboardPage> page = std::nullopt) {
+    void show(std::optional<MainWindowPage> page = std::nullopt) {
         if (stopping_) { report(L"The desktop app is stopping; the request was cancelled.", L"Operation cancelled"); return; }
-        dashboard_->update(snapshot_);
-        dashboard_->show(page);
+        mainWindow_->update(snapshot_);
+        mainWindow_->show(page);
         execute(TrayCommand::status);
     }
 
     void execute(TrayCommand command) {
-        if (command == TrayCommand::continueSetup && dashboard_) dashboard_->show(DashboardPage::status);
+        if (command == TrayCommand::continueSetup && mainWindow_) mainWindow_->show(MainWindowPage::status);
         if (command == TrayCommand::quit) { requestStop(); return; }
         if (stopping_)
             report(L"The desktop app is stopping; the request was cancelled.", L"Operation cancelled");
@@ -157,7 +162,7 @@ private:
         stopping_ = true;
         stopRequestedAt_ = GetTickCount64();
         controller_->requestStop();
-        dashboard_->stop();
+        mainWindow_->stop();
     }
 
     void poll() {
@@ -169,7 +174,7 @@ private:
         if (update.stopping) requestStop();
         if (update.snapshot && !stopping_) {
             snapshot_ = std::move(*update.snapshot);
-            dashboard_->update(snapshot_);
+            mainWindow_->update(snapshot_);
         }
         try {
             if (update.controlReady && !window_ && !stopping_) bindTray();
@@ -202,7 +207,7 @@ private:
     void finish() {
         if (completed_) return;
         if (controller_) controller_->join();
-        if (dashboard_) dashboard_->stop();
+        if (mainWindow_) mainWindow_->stop();
         if (notifications_) notifications_->stop();
         tray_.stop();
         if (window_) {
@@ -232,7 +237,7 @@ private:
         try {
             if (const auto result = self->tray_.handleMessage(message, wparam, lparam)) return *result;
             switch (message) {
-            case kShowDashboardMessage: self->show(); return 0;
+            case kShowMainWindowMessage: self->show(); return 0;
             case kSetupMessage: self->execute(TrayCommand::continueSetup); return 0;
             case WM_CLOSE: self->requestStop(); return 0;
             case WM_DESTROY: self->requestStop(); return 0;
@@ -267,9 +272,9 @@ private:
     event_token shutdownToken_{};
     Windows::Foundation::Deferral shutdownDeferral_{nullptr};
     std::unique_ptr<DesktopController> controller_;
-    std::unique_ptr<Dashboard> dashboard_;
+    std::unique_ptr<MainWindow> mainWindow_;
     std::unique_ptr<DesktopNotifications> notifications_;
-    DashboardSnapshot snapshot_;
+    DesktopSnapshot snapshot_;
     TrayManager tray_;
     bool stopping_ = false;
     bool completed_ = false;
@@ -302,7 +307,7 @@ int runTray(HINSTANCE instance, bool setup, bool background) {
             host.reset();
             return result;
         } catch (...) {
-            const auto error = dashboard_ui::currentException();
+            const auto error = ui::formatException(std::current_exception());
             showNativeUiError(L"Could not run desktop app.", error, L"Could not run desktop app");
             try { host->finishAfterLoop(); }
             catch (...) { RaiseFailFastException(nullptr, nullptr, 0); }
@@ -311,7 +316,7 @@ int runTray(HINSTANCE instance, bool setup, bool background) {
             return 1;
         }
     } catch (...) {
-        const auto error = dashboard_ui::currentException();
+        const auto error = ui::formatException(std::current_exception());
         if (uiStarted) showNativeUiError(L"Could not run desktop app.", error, L"Could not run desktop app");
         else showStartupError(error, L"Could not run desktop app");
         return 1;

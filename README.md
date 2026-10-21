@@ -110,7 +110,7 @@ Please refer to [SECURITY.md](SECURITY.md) for details about its security model 
 
 ## Contributions
 
-Contributions are welcome. Feel free to open an issue if you would like to continue where I've left off, report a bug or suggest an improvement.
+Contributions are welcome. Feel free to open an issue if you would like to continue where I've left off, report a bug or suggest an improvement. See [CONTRIBUTING.md](CONTRIBUTING.md) for project guidelines.
 
 ## License
 

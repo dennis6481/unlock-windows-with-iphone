@@ -20,3 +20,5 @@ lsa-s4u-token-probe*.txt
 unlock-lsa-convert-probe*.txt
 LsaConvertProbeInstaller/
 
+# Local agent preferences
+/AGENTS.override.md

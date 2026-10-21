@@ -97,7 +97,7 @@ Windows distribution is a single `windows/dist/UnlockWithIPhone_<version>_<archi
 
 - [x] Modernize the Windows UI and setup guidance
 - [ ] Support multiple Windows users.
-- [ ] Support local Windows accounts.
+- [ ] Support local Windows accounts. [#18](https://github.com/dennis6481/unlock-windows-with-iphone/issues/18).
 - [ ] Add watchOS support.
 - [ ] Move Windows installer packaging to an MSI architecture.
 - [ ] Investigate LSA-based Windows authentication to replace the current implementation that stores a local Windows password copy.

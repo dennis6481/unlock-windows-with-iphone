@@ -55,9 +55,9 @@ After restarting your PC or signing out, sign in once with your usual Windows pa
 
 1. Get the native x64 or ARM64 [Windows installer](https://github.com/dennis6481/unlock-windows-with-iphone/releases) and follow its steps. After restarting, sign in once with your usual Windows password or PIN, then choose **Start setup**.
 2. Save your **Microsoft account password**, not your PIN. The encrypted copy stays on this PC and is never sent to the phone.
-3. On **Status**, use **Open Bluetooth settings** to pair your iPhone. Compare the Bluetooth numbers on both devices and accept only a match. Skip this step if Windows already shows the phone as paired.
-4. Return to **Status**, select your iPhone from the updated paired-device list and click **Bind selected device**. Windows records with the same device container are combined into one named entry. Devices are never bound automatically.
-5. Confirm the selected phone and **Initial signal threshold**. UAC permits the service to verify pairing, protected BLE communication and signal strength before saving the binding.
+3. On **Status**, select your iPhone from nearby BLE devices or existing Windows BLE pairings and click **Pair**. Choose **Scan again** to repeat the 30-second scan. Names alone do not identify devices.
+4. Confirm the selected phone. If it is not paired in Windows, compare the numbers on both devices and accept only a match. Existing Windows BLE pairing skips this step.
+5. Approve UAC so the service can verify secure BLE pairing and protected communication before saving the phone to this app. Failed app verification keeps Windows pairing. The unlock threshold starts at **−60 dBm** and can be adjusted on **Status** afterward.
 
 ## Uninstall
 

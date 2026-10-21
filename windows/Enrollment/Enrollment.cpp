@@ -9,8 +9,10 @@
 #include <winrt/Windows.System.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
+#include <winrt/Windows.Devices.Bluetooth.Advertisement.h>
 #include <map>
 #include <chrono>
+#include <cwchar>
 
 namespace unlock_windows::desktop_app {
 namespace {
@@ -18,6 +20,8 @@ using namespace winrt;
 using namespace Microsoft::UI::Xaml;
 using namespace Microsoft::UI::Xaml::Controls;
 using namespace Windows::Devices::Enumeration;
+using namespace Windows::Devices::Bluetooth;
+using namespace Windows::Devices::Bluetooth::Advertisement;
 using namespace Windows::Foundation;
 using namespace dashboard_ui;
 using namespace saved_credential;
@@ -26,13 +30,27 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
     Microsoft::UI::Dispatching::DispatcherQueue dispatcher{nullptr};
     StackPanel root{nullptr};
     ListView devices{nullptr};
-    Slider threshold{nullptr};
-    TextBlock thresholdText{nullptr}, status{nullptr};
-    Button bind{nullptr}, settings{nullptr};
+    TextBlock status{nullptr};
+    Button bind{nullptr}, settings{nullptr}, scanButton{nullptr};
     TextBlock empty{nullptr};
-    struct Item { DeviceInformation information{nullptr}; bool ble = false; };
-    std::map<std::wstring, Item> items;
-    struct Choice { std::wstring endpointId, name; bool classic = false, classicName = false; };
+    std::map<std::wstring, DeviceInformation> items;
+    struct Choice {
+        std::wstring endpointId, name;
+        std::uint64_t address = 0;
+        BluetoothAddressType addressType = BluetoothAddressType::Unspecified;
+        bool paired = false, connectable = false;
+        int rssi = 0;
+    };
+    std::map<std::wstring, Choice> advertisements;
+    struct Row { ListViewItem item; TextBlock title, detail; };
+    std::map<std::wstring, Row> rows;
+    BluetoothLEAdvertisementWatcher advertisementWatcher{nullptr};
+    BluetoothLEAdvertisementWatcher::Received_revoker advertisementReceived;
+    BluetoothLEAdvertisementWatcher::Stopped_revoker advertisementStopped;
+    Microsoft::UI::Dispatching::DispatcherQueueTimer scanTimer{nullptr}, pairingMonitor{nullptr};
+    IAsyncOperation<DevicePairingResult> pairingOperation{nullptr};
+    bool visible = false;
+    std::uint64_t scanGeneration = 0;
     std::map<std::wstring, Choice> choices;
     std::wstring selectedKey;
     std::vector<std::function<void()>> revoke;
@@ -52,48 +70,172 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
     void check(std::uint64_t ticket) {
         const auto current = enrollment::queryConsole();
         if (stopping || generation != ticket || current.locked || current.sid != target.sid || current.session != target.session)
-            throw hresult_error(HRESULT_FROM_WIN32(ERROR_CANCELLED), L"Binding cancelled or console account changed");
+            throw hresult_error(HRESULT_FROM_WIN32(ERROR_CANCELLED), L"Pairing cancelled or console account changed");
         if (cancelEvent && WaitForSingleObject(cancelEvent.get(), 0) != WAIT_TIMEOUT)
-            throw hresult_error(HRESULT_FROM_WIN32(ERROR_CANCELLED), L"Binding cancelled by the desktop host");
+            throw hresult_error(HRESULT_FROM_WIN32(ERROR_CANCELLED), L"Pairing cancelled by the desktop host");
     }
     void message(const std::wstring& value) { status.Text(value); OutputDebugStringW((value + L"\n").c_str()); }
 
+    bool canPair() const {
+        const auto found = choices.find(selectedKey);
+        return found != choices.end() && (found->second.paired || found->second.connectable);
+    }
+
+    static std::wstring addressText(std::uint64_t address) {
+        wchar_t value[18]{};
+        swprintf_s(value, L"%02X:%02X:%02X:%02X:%02X:%02X",
+            static_cast<unsigned>((address >> 40) & 255), static_cast<unsigned>((address >> 32) & 255),
+            static_cast<unsigned>((address >> 24) & 255), static_cast<unsigned>((address >> 16) & 255),
+            static_cast<unsigned>((address >> 8) & 255), static_cast<unsigned>(address & 255));
+        return value;
+    }
+
     void render() {
         rendering = true;
-        devices.Items().Clear();
-        choices.clear();
+        choices = advertisements;
         for (const auto& [id, item] : items) {
-            if (!item.information.Pairing().IsPaired()) continue;
-            const auto container = system_ble::containerId(item.information);
-            const auto key = container ? L"container:" + std::wstring(to_hstring(*container)) : L"endpoint:" + id;
-            auto& choice = choices[key];
-            if (choice.endpointId.empty() || (!item.ble && !choice.classic)) {
-                choice.endpointId = id;
-                choice.classic = !item.ble;
-            }
-            const auto name = item.information.Name();
-            if (!name.empty() && (choice.name.empty() || (!item.ble && !choice.classicName))) {
-                choice.name = std::wstring(name);
-                choice.classicName = !item.ble;
-            }
+            if (!item.Pairing().IsPaired()) continue;
+            choices[id] = {id, std::wstring(item.Name()), 0, BluetoothAddressType::Unspecified, true, true};
+        }
+        // Merge only after resolving a broadcast to an actual BLE endpoint ID.
+        for (auto entry = choices.begin(); entry != choices.end();) {
+            if (entry->first != entry->second.endpointId && !entry->second.endpointId.empty() &&
+                choices.contains(entry->second.endpointId)) {
+                auto& paired = choices.at(entry->second.endpointId);
+                paired.address = entry->second.address; paired.addressType = entry->second.addressType;
+                paired.rssi = entry->second.rssi;
+                if (paired.name.empty()) paired.name = entry->second.name;
+                if (selectedKey == entry->first) selectedKey = entry->second.endpointId;
+                entry = choices.erase(entry);
+            } else ++entry;
+        }
+        for (auto row = rows.begin(); row != rows.end();) {
+            if (!choices.contains(row->first)) {
+                std::uint32_t index;
+                if (devices.Items().IndexOf(row->second.item, index)) devices.Items().RemoveAt(index);
+                row = rows.erase(row);
+            } else ++row;
         }
         for (const auto& [key, device] : choices) {
-            ListViewItem choice;
-            choice.Padding({12,12,12,12});
-            choice.HorizontalContentAlignment(HorizontalAlignment::Stretch);
-            choice.Content(text(device.name.empty() ? L"Name unavailable" : device.name.c_str(), 16));
-            choice.Tag(box_value(hstring(key))); devices.Items().Append(choice);
-            if (key == selectedKey) devices.SelectedItem(choice);
+            auto found = rows.find(key);
+            if (found == rows.end()) {
+                Row row{ListViewItem{}, TextBlock{}, TextBlock{}};
+                row.item.Padding({12,12,12,12});
+                row.item.HorizontalContentAlignment(HorizontalAlignment::Stretch);
+                row.title.FontSize(16); row.detail.TextWrapping(TextWrapping::Wrap);
+                StackPanel content; content.Spacing(4);
+                content.Children().Append(row.title); content.Children().Append(row.detail);
+                row.item.Content(content); row.item.Tag(box_value(hstring(key)));
+                devices.Items().Append(row.item);
+                found = rows.emplace(key, std::move(row)).first;
+            }
+            auto& row = found->second;
+            row.title.Text(device.name.empty() ? L"Name unavailable" : device.name);
+            std::wstring detail = device.paired ? L"Paired in Windows" :
+                device.connectable ? L"Windows pairing checked when selected" : L"Not connectable; cannot pair";
+            if (device.address) detail += L" | " + addressText(device.address) +
+                L" | " + std::to_wstring(device.rssi) + L" dBm";
+            else if (const auto item = items.find(key); item != items.end()) {
+                const auto properties = item->second.Properties();
+                if (properties.HasKey(L"System.Devices.Aep.DeviceAddress")) {
+                    const auto address = properties.Lookup(L"System.Devices.Aep.DeviceAddress").try_as<IPropertyValue>();
+                    if (address && address.Type() == PropertyType::String) detail += L" | " + std::wstring(address.GetString());
+                }
+            }
+            row.detail.Text(detail);
+            if (key == selectedKey) devices.SelectedItem(row.item);
         }
-        if (!devices.SelectedItem()) selectedKey.clear();
-        empty.Visibility(devices.Items().Size() ? Visibility::Collapsed : Visibility::Visible);
-        bind.IsEnabled(!selectedKey.empty() && !busy && !stopping);
+        if (!choices.contains(selectedKey)) selectedKey.clear();
+        empty.Visibility(choices.empty() ? Visibility::Visible : Visibility::Collapsed);
+        bind.IsEnabled(canPair() && !busy && !stopping);
         rendering = false;
     }
 
-    void watch(bool lowEnergy) {
-        auto watcher = DeviceInformation::CreateWatcher(system_ble::deviceSelector(lowEnergy),
-            single_threaded_vector<hstring>({system_ble::kContainerProperty, L"System.Devices.Aep.IsPaired"}), DeviceInformationKind::AssociationEndpoint);
+    void stopAdvertisements() {
+        ++scanGeneration;
+        if (scanTimer) { scanTimer.Stop(); scanTimer = nullptr; }
+        advertisementReceived.revoke(); advertisementStopped.revoke();
+        if (advertisementWatcher) { advertisementWatcher.Stop(); advertisementWatcher = nullptr; }
+        if (scanButton) scanButton.IsEnabled(visible && !busy && !stopping);
+    }
+
+    void scanAdvertisements() {
+        if (!visible || busy || stopping) return;
+        stopAdvertisements();
+        advertisements.clear(); render();
+        const auto ticket = scanGeneration;
+        advertisementWatcher = BluetoothLEAdvertisementWatcher{};
+        advertisementWatcher.ScanningMode(BluetoothLEScanningMode::Active);
+        const auto weak = weak_from_this();
+        const auto queue = dispatcher;
+        advertisementReceived = advertisementWatcher.Received(auto_revoke,
+            [weak, queue, ticket](const auto&, const BluetoothLEAdvertisementReceivedEventArgs& args) {
+                // Keep WinRT property reads on the UI continuation, where errors can be surfaced.
+                if (!queue.TryEnqueue([weak, ticket, args] {
+                    if (auto self = weak.lock(); self && self->visible && !self->busy &&
+                        !self->stopping && ticket == self->scanGeneration) {
+                        try {
+                            const auto address = args.BluetoothAddress();
+                            const auto type = args.BluetoothAddressType();
+                            const auto key = L"advertisement:" + std::to_wstring(address) + L":" +
+                                std::to_wstring(static_cast<int>(type));
+                            auto& entry = self->advertisements[key];
+                            entry.address = address; entry.addressType = type;
+                            const auto name = args.Advertisement().LocalName();
+                            if (!name.empty()) entry.name = std::wstring(name);
+                            if (!args.IsScanResponse()) entry.connectable = args.IsConnectable();
+                            entry.rssi = args.RawSignalStrengthInDBm();
+                            self->render();
+                        } catch (...) { self->stopAdvertisements(); self->message(currentException()); }
+                    }
+                })) OutputDebugStringW(L"BLE discovery dispatcher rejected advertisement\n");
+            });
+        advertisementStopped = advertisementWatcher.Stopped(auto_revoke,
+            [weak, queue, ticket](const auto&, const BluetoothLEAdvertisementWatcherStoppedEventArgs& args) {
+                if (!queue.TryEnqueue([weak, ticket, args] {
+                    if (auto self = weak.lock(); self && !self->stopping && ticket == self->scanGeneration) {
+                        try {
+                            const auto error = args.Error();
+                            self->stopAdvertisements();
+                            self->message(L"BLE scan stopped; Bluetooth error=" + std::to_wstring(static_cast<int>(error)));
+                        } catch (...) { self->message(currentException()); }
+                    }
+                })) OutputDebugStringW(L"BLE discovery dispatcher rejected stopped event\n");
+            });
+        scanTimer = dispatcher.CreateTimer();
+        scanTimer.IsRepeating(false); scanTimer.Interval(std::chrono::seconds(30));
+        scanTimer.Tick([weak, ticket](const auto&, const auto&) {
+            if (auto self = weak.lock(); self && ticket == self->scanGeneration) {
+                try { self->stopAdvertisements(); self->message(L"Scan complete. Select an iPhone or choose Scan again."); }
+                catch (...) { self->message(currentException()); }
+            }
+        });
+        try { advertisementWatcher.Start(); scanTimer.Start(); scanButton.IsEnabled(false); message(L"Scanning nearby BLE devices…"); }
+        catch (...) { stopAdvertisements(); throw; }
+    }
+
+    void setVisible(bool value) {
+        if (visible == value || stopping) return;
+        visible = value;
+        if (value) {
+            scan();
+            try { scanAdvertisements(); } catch (...) { message(currentException()); }
+        } else {
+            stopAdvertisements();
+            if (busy) {
+                ++generation;
+                if (!SetEvent(cancelEvent.get())) message(L"Pair cancellation event could not be signalled");
+                if (dialog) dialog.Hide();
+                if (pairingOperation) {
+                    try { pairingOperation.Cancel(); } catch (...) { message(currentException()); }
+                }
+            }
+        }
+    }
+
+    void watch() {
+        auto watcher = DeviceInformation::CreateWatcher(system_ble::deviceSelector(),
+            single_threaded_vector<hstring>({L"System.Devices.Aep.IsPaired", L"System.Devices.Aep.DeviceAddress"}), DeviceInformationKind::AssociationEndpoint);
         const auto weak = weak_from_this();
         auto post = [weak](std::function<void(BindingPanel&)> action) {
             if (auto self = weak.lock()) {
@@ -105,13 +247,13 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
                 })) OutputDebugStringW(L"Binding device update dispatcher rejected\n");
             }
         };
-        auto added = watcher.Added([post, lowEnergy](const auto&, DeviceInformation item) {
-            post([item, lowEnergy](auto& self) { self.items[std::wstring(item.Id())] = {item, lowEnergy}; });
+        auto added = watcher.Added([post](const auto&, DeviceInformation item) {
+            post([item](auto& self) { self.items.insert_or_assign(std::wstring(item.Id()), item); });
         });
         auto updated = watcher.Updated([post](const auto&, DeviceInformationUpdate update) {
             post([update](auto& self) {
                 const auto found = self.items.find(std::wstring(update.Id()));
-                if (found != self.items.end()) found->second.information.Update(update);
+                if (found != self.items.end()) found->second.Update(update);
                 else self.scan();
             });
         });
@@ -135,12 +277,10 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
         scanning = true;
         const auto revision = listRevision;
         try {
-            const auto classicItems = co_await system_ble::pairedEndpoints(false);
-            const auto bleItems = co_await system_ble::pairedEndpoints(true);
+            const auto bleItems = co_await system_ble::pairedEndpoints();
             if (!stopping && revision == listRevision) {
                 items.clear();
-                for (auto item : classicItems) items[std::wstring(item.Id())] = {item, false};
-                for (auto item : bleItems) items[std::wstring(item.Id())] = {item, true};
+                for (auto item : bleItems) items.insert_or_assign(std::wstring(item.Id()), item);
                 render();
             } else if (!stopping) scanAgain = true;
         } catch (...) { if (!stopping) message(currentException()); }
@@ -152,9 +292,36 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
     void start(bool clear = false) {
         if (busy || stopping) return;
         remove = clear;
-        busy = true; bind.IsEnabled(false); threshold.IsEnabled(false); devices.IsEnabled(false);
+        busy = true; stopAdvertisements(); bind.IsEnabled(false); devices.IsEnabled(false);
         reportError(L""); message(L"");
         run();
+    }
+
+    fire_and_forget confirmPairing(DevicePairingRequestedEventArgs args, std::uint64_t ticket, apartment_context foreground) {
+        auto lifetime = shared_from_this();
+        const auto deferral = args.GetDeferral();
+        try {
+            co_await foreground;
+            check(ticket);
+            if (args.PairingKind() != DevicePairingKinds::ConfirmPinMatch)
+                throw hresult_error(E_FAIL, L"Unsupported Bluetooth pairing confirmation");
+            dialog = ContentDialog{}; dialog.XamlRoot(dialogRoot());
+            dialog.Title(box_value(L"Do the pairing numbers match?"));
+            dialog.Content(box_value(L"Compare this number with your iPhone: " + args.Pin() +
+                L"\nAccept only if both devices show the same number."));
+            dialog.PrimaryButtonText(L"Numbers match"); dialog.CloseButtonText(L"Cancel");
+            dialog.DefaultButton(ContentDialogButton::Close);
+            const auto answer = co_await dialog.ShowAsync();
+            dialog = nullptr;
+            check(ticket);
+            if (answer == ContentDialogResult::Primary) args.Accept();
+        } catch (...) {
+            const auto failure = currentException();
+            if (!SetEvent(cancelEvent.get())) message(L"Pair cancellation event could not be signalled");
+            message(failure); reportError(failure);
+        }
+        try { deferral.Complete(); }
+        catch (...) { message(currentException()); reportError(currentException()); }
     }
 
     fire_and_forget run() {
@@ -162,7 +329,7 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
         const auto ticket = generation;
         apartment_context foreground;
         std::wstring failure;
-        bool bindingChanged = false;
+        bool bindingChanged = false, windowsPaired = false;
         try {
             check_bool(ResetEvent(cancelEvent.get()));
             check(ticket);
@@ -170,7 +337,7 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
             check(ticket);
             if (remove) {
                 dialog = ContentDialog{}; dialog.XamlRoot(dialogRoot()); dialog.Title(box_value(L"Remove iPhone?"));
-                dialog.Content(box_value(L"Remove this iPhone binding from the app? Windows Bluetooth pairing and the saved password will remain."));
+                dialog.Content(box_value(L"Remove this iPhone pairing from the app? Windows Bluetooth pairing and the saved password will remain."));
                 dialog.PrimaryButtonText(L"Remove"); dialog.CloseButtonText(L"Cancel");
                 dialog.DefaultButton(ContentDialogButton::Close);
                 if (co_await dialog.ShowAsync() == ContentDialogResult::Primary) {
@@ -179,61 +346,93 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
                     if (!encodeBindingRemoval({original, eventName}, bytes)) throw hresult_error(E_INVALIDARG);
                     co_await resume_background(); enrollment::manageBinding(Operation::removeBinding, bytes); co_await foreground;
                     bindingChanged = true;
-                    message(L"Product binding removed. Windows pairing is unchanged.");
+                    message(L"iPhone removed from this app. Windows pairing is unchanged.");
                 }
             } else {
                 if (original.state == system_ble::BindingState::bound)
-                    throw hresult_error(E_FAIL, L"Remove the current iPhone binding before binding another device");
-                if (!choices.contains(selectedKey)) throw hresult_error(E_FAIL, L"Select a paired device first");
-                const auto choice = choices.at(selectedKey);
-                auto selected = items.at(choice.endpointId).information;
-                if (!selected.Pairing().IsPaired()) throw hresult_error(E_FAIL, L"Finish pairing in Windows Bluetooth settings, then return and select the device");
-                check(ticket);
-                const auto refreshed = co_await DeviceInformation::CreateFromIdAsync(hstring(choice.endpointId),
-                    single_threaded_vector<hstring>({system_ble::kContainerProperty}), DeviceInformationKind::AssociationEndpoint);
-                check(ticket);
-                const auto container = system_ble::containerId(refreshed);
-                if (!container) throw hresult_error(E_FAIL, L"No system ContainerId; names and guessed addresses cannot bind a phone");
-                if (selectedKey != L"container:" + std::wstring(to_hstring(*container)))
-                    throw hresult_error(E_FAIL, L"The selected device association changed. Select it again.");
-                DeviceInformation classicItem{nullptr}, bleItem{nullptr};
-                const auto associationDeadline = GetTickCount64() + system_ble::kOperationLifetimeMs;
-                for (;;) {
-                    const auto classicItems = co_await system_ble::pairedEndpoints(false);
-                    const auto bleItems = co_await system_ble::pairedEndpoints(true);
-                    check(ticket);
-                    classicItem = system_ble::findUniqueEndpoint(classicItems, *container);
-                    bleItem = system_ble::findUniqueEndpoint(bleItems, *container);
-                    if (classicItem && bleItem) break;
-                    if (GetTickCount64() >= associationDeadline) throw hresult_error(E_FAIL, L"Windows did not expose a unique paired Classic/BLE relationship");
-                    message(L"Waiting for Windows system pairing records to update...");
-                    co_await resume_after(std::chrono::milliseconds(200)); co_await foreground;
-                }
-                const auto name = !classicItem.Name().empty() ? classicItem.Name() : bleItem.Name();
-                BindingChange change{original, {target.sid, std::wstring(classicItem.Id()), std::wstring(bleItem.Id()),
-                    *container, std::wstring(name), static_cast<int>(threshold.Value())}, eventName};
+                    throw hresult_error(E_FAIL, L"Remove the current iPhone from the app before pairing another device");
+                if (!canPair()) throw hresult_error(E_FAIL, L"Select a paired or connectable BLE device first");
+                const auto key = selectedKey;
+                const auto choice = choices.at(key);
                 dialog = ContentDialog{}; dialog.XamlRoot(dialogRoot());
-                dialog.Title(box_value(L"Bind selected iPhone?"));
-                dialog.Content(box_value(hstring(change.candidate.displayName + L"\nThe service will verify pairing, protected BLE communication and RSSI before saving.")));
-                dialog.PrimaryButtonText(L"Confirm binding"); dialog.CloseButtonText(L"Cancel");
+                dialog.Title(box_value(L"Pair selected iPhone?"));
+                dialog.Content(box_value(hstring((choice.name.empty() ? L"Name unavailable" : choice.name) +
+                    std::wstring(L"\nWindows will pair this BLE device if needed. After UAC, the app will verify and save it."))));
+                dialog.PrimaryButtonText(L"Pair"); dialog.CloseButtonText(L"Cancel");
                 dialog.DefaultButton(ContentDialogButton::Close);
                 if (co_await dialog.ShowAsync() == ContentDialogResult::Primary) {
                     dialog = nullptr; check(ticket);
+                    BluetoothLEDevice device{nullptr};
+                    DeviceInformation selected{nullptr};
+                    message(L"Opening selected BLE device…");
+                    if (!choice.endpointId.empty()) device = co_await BluetoothLEDevice::FromIdAsync(choice.endpointId);
+                    else device = co_await BluetoothLEDevice::FromBluetoothAddressAsync(choice.address, choice.addressType);
+                    check(ticket);
+                    if (!device) throw hresult_error(E_FAIL, L"The selected BLE device could not be opened. Scan again.");
+                    selected = device.DeviceInformation();
+                    if (auto entry = advertisements.find(key); entry != advertisements.end())
+                        entry->second.endpointId = std::wstring(selected.Id());
+                    if (!selected.Pairing().IsPaired()) {
+                        if (!selected.Pairing().CanPair()) throw hresult_error(E_FAIL, L"Windows reports that this BLE device cannot pair.");
+                        message(L"Pairing in Windows. Complete any confirmation on both devices…");
+                        // Basic PairAsync depends on UWP UI and is unsupported in desktop apps.
+                        const auto custom = selected.Pairing().Custom();
+                        const auto weak = weak_from_this();
+                        const auto requested = custom.PairingRequested(auto_revoke,
+                            [weak, ticket, foreground](const auto&, const DevicePairingRequestedEventArgs& args) {
+                                if (auto self = weak.lock()) self->confirmPairing(args, ticket, foreground);
+                            });
+                        pairingOperation = custom.PairAsync(DevicePairingKinds::ConfirmPinMatch,
+                            DevicePairingProtectionLevel::EncryptionAndAuthentication);
+                        pairingMonitor = dispatcher.CreateTimer();
+                        pairingMonitor.Interval(std::chrono::milliseconds(250));
+                        pairingMonitor.Tick([weak, ticket](const auto&, const auto&) {
+                            if (auto self = weak.lock()) {
+                                try { self->check(ticket); }
+                                catch (...) {
+                                    self->pairingMonitor.Stop();
+                                    const auto failure = currentException();
+                                    if (!SetEvent(self->cancelEvent.get())) self->message(L"Pair cancellation event could not be signalled");
+                                    if (self->dialog) self->dialog.Hide();
+                                    try { if (self->pairingOperation) self->pairingOperation.Cancel(); }
+                                    catch (...) { self->message(currentException()); }
+                                    self->message(failure);
+                                }
+                            }
+                        });
+                        pairingMonitor.Start();
+                        const auto result = co_await pairingOperation;
+                        pairingMonitor.Stop(); pairingMonitor = nullptr; pairingOperation = nullptr;
+                        windowsPaired = result.Status() == DevicePairingResultStatus::Paired ||
+                            result.Status() == DevicePairingResultStatus::AlreadyPaired;
+                        check(ticket);
+                        if (!windowsPaired)
+                            throw hresult_error(E_FAIL, L"Windows BLE pairing failed; status=" +
+                                std::to_wstring(static_cast<int>(result.Status())));
+                    }
+                    check(ticket);
+                    const auto paired = co_await system_ble::pairedEndpoints();
+                    check(ticket);
+                    const auto bleItem = system_ble::findUniqueEndpoint(paired, selected.Id());
+                    if (!bleItem || !bleItem.Pairing().IsPaired())
+                        throw hresult_error(E_FAIL, L"Windows did not return the selected device as a paired BLE endpoint. Scan again.");
+                    BindingChange change{original, {target.sid, {}, std::wstring(bleItem.Id()),
+                        {}, std::wstring(bleItem.Name()), system_ble::kDefaultThreshold}, eventName};
                     SensitiveBytes bytes;
-                    if (!encodeBindingChange(change, bytes)) throw hresult_error(E_INVALIDARG, L"Invalid system binding");
+                    if (!encodeBindingChange(change, bytes)) throw hresult_error(E_INVALIDARG, L"Invalid app pairing request");
                     message(L"Waiting for UAC and independent service verification…");
                     co_await resume_background(); enrollment::manageBinding(Operation::beginBinding, bytes); co_await foreground;
                     for (;;) {
                         check(ticket); co_await resume_background();
                         Packet response;
-                        if (!call(Operation::bindingTaskStatus, SensitiveBytes{}, response)) throw std::runtime_error("Binding task status unavailable");
+                        if (!call(Operation::bindingTaskStatus, SensitiveBytes{}, response)) throw std::runtime_error("App pairing task status unavailable");
                         AuthenticationStatus progress;
                         if (response.result != Result::success || !decodeAuthenticationStatus(response.payload.value.data(), response.payload.value.size(), progress))
-                            throw std::runtime_error("Binding status rejected or malformed");
+                            throw std::runtime_error("App pairing status rejected or malformed");
                         co_await foreground;
                         if (progress.stage == AuthenticationStage::failed) throw hresult_error(E_FAIL, authenticationStatusText(progress));
-                        if (progress.stage == AuthenticationStage::completed) { message(L"iPhone binding saved. Lock this PC and click Unlock to try it."); break; }
-                        if (progress.stage != AuthenticationStage::verifying) throw hresult_error(E_FAIL, L"No active binding task");
+                        if (progress.stage == AuthenticationStage::completed) { message(L"iPhone paired with this app. Lock this PC and click Unlock to try it."); break; }
+                        if (progress.stage != AuthenticationStage::verifying) throw hresult_error(E_FAIL, L"No active app pairing task");
                         co_await resume_after(std::chrono::milliseconds(100)); co_await foreground;
                     }
                     bindingChanged = true;
@@ -242,9 +441,13 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
             co_await resume_background(); original = enrollment::readBinding(); co_await foreground;
         } catch (...) { failure = currentException(); }
         co_await foreground;
+        if (pairingMonitor) { pairingMonitor.Stop(); pairingMonitor = nullptr; }
+        pairingOperation = nullptr;
+        if (!failure.empty() && windowsPaired)
+            failure += L"\nWindows BLE pairing is retained.";
         if (!failure.empty()) { message(failure); reportError(failure); }
         busy = false; dialog = nullptr;
-        bind.IsEnabled(!selectedKey.empty()); threshold.IsEnabled(true); devices.IsEnabled(true);
+        bind.IsEnabled(canPair() && !stopping); devices.IsEnabled(true); scanButton.IsEnabled(visible && !stopping);
         if (stopping && !scanning) finish(); else if (!stopping) scan();
         if (bindingChanged && failure.empty() && !stopping) {
             try { changed(original); }
@@ -255,7 +458,11 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
     void stop() {
         if (stopping) return;
         stopping = true; ++generation;
-        if (cancelEvent && !SetEvent(cancelEvent.get())) message(L"Binding cancellation event could not be signalled");
+        stopAdvertisements();
+        if (pairingOperation) {
+            try { pairingOperation.Cancel(); } catch (...) { message(currentException()); }
+        }
+        if (cancelEvent && !SetEvent(cancelEvent.get())) message(L"Pair cancellation event could not be signalled");
         if (dialog) dialog.Hide();
         if (!busy && !scanning) finish();
     }
@@ -268,11 +475,11 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
         dispatcher = Microsoft::UI::Dispatching::DispatcherQueue::GetForCurrentThread();
         target = enrollment::queryConsole();
         if (target.locked || target.sid != system_ble::EnrollmentStore::currentUserSid() || enrollment::elevatedAdmin())
-            throw hresult_error(E_ACCESSDENIED, L"Bind from the ordinary target user's unlocked physical console");
+            throw hresult_error(E_ACCESSDENIED, L"Pair from the ordinary target user's unlocked physical console");
         cancelEvent = enrollment::createCancellation(target.sid, eventName);
-        root = StackPanel{}; devices = ListView{}; threshold = Slider{};
-        thresholdText = TextBlock{}; status = TextBlock{}; empty = TextBlock{};
-        bind = Button{}; settings = Button{};
+        root = StackPanel{}; devices = ListView{};
+        status = TextBlock{}; empty = TextBlock{};
+        bind = Button{}; settings = Button{}; scanButton = Button{};
         root.Spacing(12);
         auto card = Markup::XamlReader::Load(LR"(<Border
             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -280,43 +487,43 @@ struct BindingPanel final : std::enable_shared_from_this<BindingPanel> {
             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
             BorderThickness="1" CornerRadius="8" Padding="20,18"/>)").as<Border>();
         StackPanel guidance; guidance.Spacing(12);
-        guidance.Children().Append(text(L"Pair your iPhone in Windows Bluetooth settings", 16));
-        guidance.Children().Append(text(L"Complete pairing in Windows, then select your iPhone below and bind it to this PC."));
+        guidance.Children().Append(text(L"Select your iPhone and choose Pair", 16));
+        guidance.Children().Append(text(L"Discover nearby BLE devices or select an existing Windows BLE pairing. Confirm any pairing numbers on both devices."));
         settings.Content(box_value(L"Open Bluetooth settings"));
         guidance.Children().Append(settings); card.Child(guidance); root.Children().Append(card);
-        root.Children().Append(text(L"Paired devices", 16));
+        root.Children().Append(text(L"Nearby and paired BLE devices", 16));
         devices.SelectionMode(ListViewSelectionMode::Single);
         ScrollViewer::SetVerticalScrollBarVisibility(devices, ScrollBarVisibility::Disabled);
         ScrollViewer::SetHorizontalScrollBarVisibility(devices, ScrollBarVisibility::Disabled);
         devices.HorizontalContentAlignment(HorizontalAlignment::Stretch);
-        Automation::AutomationProperties::SetName(devices, L"Devices paired in Windows");
+        Automation::AutomationProperties::SetName(devices, L"Nearby and paired BLE devices");
         root.Children().Append(devices);
-        empty.Text(L"No paired devices found. Pair your iPhone in Windows Bluetooth settings, then return here.");
+        empty.Text(L"No BLE devices found. Keep your iPhone nearby and discoverable, then choose Scan again.");
         empty.TextWrapping(TextWrapping::Wrap); root.Children().Append(empty);
-        threshold.Minimum(system_ble::kMinimumThreshold); threshold.Maximum(system_ble::kMaximumThreshold);
-        threshold.StepFrequency(system_ble::kThresholdStep); threshold.Value(system_ble::kDefaultThreshold);
-        thresholdText.Text(to_hstring(system_ble::kDefaultThreshold) + L" dBm");
-        Automation::AutomationProperties::SetName(threshold, L"Initial signal threshold in dBm");
-        bind.Content(box_value(L"Bind selected device")); bind.IsEnabled(false);
+        bind.Content(box_value(L"Pair")); bind.IsEnabled(false);
         bind.Style(Application::Current().Resources().Lookup(box_value(L"AccentButtonStyle")).as<Style>());
-        root.Children().Append(signalThresholdCard(L"Initial signal threshold", thresholdText, threshold));
         bind.HorizontalAlignment(HorizontalAlignment::Right);
-        root.Children().Append(bind);
+        StackPanel actions; actions.Orientation(Orientation::Horizontal); actions.Spacing(12);
+        scanButton.Content(box_value(L"Scan again"));
+        actions.Children().Append(scanButton); actions.Children().Append(bind);
+        root.Children().Append(actions);
         status.TextWrapping(TextWrapping::Wrap); root.Children().Append(status);
         const auto weak = weak_from_this();
-        threshold.ValueChanged([weak](const auto&, const auto&) {
-            if (auto self = weak.lock()) self->thresholdText.Text(to_hstring(static_cast<int>(self->threshold.Value())) + L" dBm");
-        });
         devices.SelectionChanged([weak](const auto&, const auto&) {
             if (auto self = weak.lock(); self && !self->rendering) {
                 if (auto choice = self->devices.SelectedItem().try_as<ListViewItem>()) self->selectedKey = std::wstring(unbox_value<hstring>(choice.Tag()));
                 else self->selectedKey.clear();
-                self->bind.IsEnabled(!self->selectedKey.empty() && !self->busy && !self->stopping);
+                self->bind.IsEnabled(self->canPair() && !self->busy && !self->stopping);
             }
         });
         bind.Click([weak](const auto&, const auto&) { if (auto self = weak.lock()) self->start(); });
         settings.Click([weak](const auto&, const auto&) { openSettings(weak); });
-        watch(false); watch(true); scan();
+        scanButton.Click([weak](const auto&, const auto&) {
+            if (auto self = weak.lock()) {
+                try { self->scan(); self->scanAdvertisements(); } catch (...) { self->message(currentException()); }
+            }
+        });
+        watch(); scan();
     }
     static fire_and_forget openSettings(std::weak_ptr<BindingPanel> weak) {
         if (auto self = weak.lock()) {
@@ -342,6 +549,6 @@ BindingView createBindingView(std::function<XamlRoot()> dialogRoot,
     content.HorizontalContentAlignment(HorizontalAlignment::Stretch);
     content.Content(panel->root);
     return {content, [panel] { panel->scan(); }, [panel] { panel->stop(); },
-        [panel] { panel->start(true); }, [panel] { return panel->busy; }};
+        [panel] { panel->start(true); }, [panel] { return panel->busy; }, [panel](bool visible) { panel->setVisible(visible); }};
 }
 }

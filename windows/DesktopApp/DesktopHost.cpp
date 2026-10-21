@@ -36,7 +36,7 @@ public:
             },
             [this](const std::wstring& message, bool error) { controller_->record((error ? L"Tray error: " : L"Tray: ") + message); }) {
         snapshot_.busy = true;
-        snapshot_.status = L"Reading service binding status...";
+        snapshot_.status = L"Reading app pairing status...";
     }
     ~DesktopHost() { if (singleton_) CloseHandle(singleton_); }
 

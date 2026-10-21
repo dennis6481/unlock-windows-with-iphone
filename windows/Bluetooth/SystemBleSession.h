@@ -9,32 +9,52 @@
 #include <winrt/Windows.Devices.Enumeration.h>
 #include <functional>
 #include <memory>
-#include <optional>
 #include <string>
 
 namespace unlock_windows::system_ble {
 using Failure = saved_credential::AuthenticationFailure;
 
-std::optional<winrt::guid> containerId(const winrt::Windows::Devices::Enumeration::DeviceInformation& item);
-winrt::hstring deviceSelector(bool ble);
+winrt::hstring deviceSelector();
 winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Devices::Enumeration::DeviceInformationCollection>
-    pairedEndpoints(bool ble);
+    pairedEndpoints();
 winrt::Windows::Devices::Enumeration::DeviceInformation findUniqueEndpoint(
-    const winrt::Windows::Devices::Enumeration::DeviceInformationCollection& items, const winrt::guid& container);
+    const winrt::Windows::Devices::Enumeration::DeviceInformationCollection& items, const winrt::hstring& endpointId);
 winrt::Windows::Devices::Enumeration::DeviceInformation uniqueEndpoint(
-    const winrt::Windows::Devices::Enumeration::DeviceInformationCollection& items, const winrt::guid& container);
+    const winrt::Windows::Devices::Enumeration::DeviceInformationCollection& items, const winrt::hstring& endpointId);
 
 struct VerificationError final : std::runtime_error {
     Failure reason;
     VerificationError(Failure value, const char* message) : std::runtime_error(message), reason(value) {}
 };
 
-struct Evidence final {
+struct CommunicationEvidence final {
     Failure failure = Failure::none;
     std::uint64_t communicationAt = 0;
-    std::uint64_t rssiAt = 0;
-    int rssi = -127;
+    std::uint64_t revision = 0;
 };
+
+inline Failure communicationFailure(const CommunicationEvidence& proof, std::uint64_t started, std::uint64_t now) noexcept {
+    if (proof.failure != Failure::none) return proof.failure;
+    return freshEvidence(proof.communicationAt, started, now) ? Failure::none : Failure::evidenceExpired;
+}
+
+struct ConnectionTarget final {
+    std::wstring endpointId;
+    std::uint64_t address = 0;
+    winrt::Windows::Devices::Bluetooth::BluetoothAddressType addressType{};
+    std::uint64_t revision = 0;
+    bool operator==(const ConnectionTarget&) const = default;
+};
+
+namespace detail {
+inline Failure communicationStateFailure(const CommunicationEvidence& proof, const ConnectionTarget& current,
+    const ConnectionTarget* expected = nullptr) noexcept {
+    if (proof.failure != Failure::none) return proof.failure;
+    if (!proof.communicationAt || proof.revision != current.revision) return Failure::protectedOperationFailed;
+    if (expected && *expected != current) return Failure::rssiUnavailable;
+    return Failure::none;
+}
+}
 
 class PreparationState final {
 public:
@@ -52,7 +72,7 @@ private:
 
 class Session final {
 public:
-    Session(BindingRecord binding,
+    Session(std::wstring endpointId,
         std::function<void(const std::string&)> report = {});
     ~Session();
     Session(const Session&) = delete;
@@ -60,12 +80,15 @@ public:
     void prepare(std::uint64_t started, std::function<bool()> valid);
     void beginRequest(std::uint64_t started, std::function<bool()> valid);
     void endRequest();
-    void verify();
+    void connect();
+    void verifyCommunication();
     void refresh();
     void close();
     bool healthy() const;
     std::uint64_t revision() const;
-    Evidence evidence() const;
+    CommunicationEvidence evidence() const;
+    CommunicationEvidence evidence(const ConnectionTarget& expected) const;
+    ConnectionTarget target() const;
 private:
     struct State;
     std::shared_ptr<State> state_;

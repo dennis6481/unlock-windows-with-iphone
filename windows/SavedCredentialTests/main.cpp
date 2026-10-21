@@ -541,6 +541,38 @@ void testPresenceContracts() {
     BindingRecord decoded;
     require(encodeBinding(record, bytes) && decodeBinding(bytes.value.data(), bytes.value.size(), decoded) && decoded == record,
         "binding codec must preserve SID, both IDs, container, display text and threshold");
+    // Fixed pre-change binding bytes: independent of the current encoder.
+    const std::uint8_t legacy[] = {
+        0x67,0x45,0x23,0x01,0xab,0x89,0xef,0xcd,0x01,0x23,0x45,0x67,0x89,0xab,0xcd,0xef,
+        0xc4,0xff,0xff,0xff,
+        8,0, 'S',0, '-',0, '1',0, '-',0, '5',0, '-',0, '1',0, '8',0,
+        1,0, 'c',0,
+        6,0, 'b',0, 'l',0, 'e',0, '-',0, 'i',0, 'd',0,
+        3,0, 'o',0, 'l',0, 'd',0
+    };
+    const BindingRecord legacyRecord{L"S-1-5-18", L"c", L"ble-id",
+        winrt::guid{L"01234567-89ab-cdef-0123-456789abcdef"}, L"old", -60};
+    require(decodeBinding(legacy, sizeof(legacy), decoded) && decoded == legacyRecord,
+        "pre-change binding layout must remain readable without migration");
+    auto newRecord = record; newRecord.classicId.clear(); newRecord.containerId = {};
+    SensitiveBytes newBytes;
+    require(encodeBinding(legacyRecord, newBytes) && newBytes.value.size() == sizeof(legacy) &&
+        std::equal(newBytes.value.begin(), newBytes.value.end(), legacy),
+        "legacy record encoding must retain the exact pre-change byte layout");
+    require(encodeBinding(newRecord, newBytes) && decodeBinding(newBytes.value.data(), newBytes.value.size(), decoded) && decoded == newRecord,
+        "new bindings must round trip with empty legacy fields");
+    for (std::size_t size = 0; size < newBytes.value.size(); ++size)
+        require(!decodeBinding(newBytes.value.data(), size, decoded), "truncated new bindings must reject");
+    newBytes.value.push_back(0);
+    require(!decodeBinding(newBytes.value.data(), newBytes.value.size(), decoded), "new binding trailing data must reject");
+    auto invalidRecord = newRecord; invalidRecord.bleId.clear();
+    require(!encodeBinding(invalidRecord, newBytes), "empty BLE ID must reject");
+    invalidRecord = newRecord; invalidRecord.accountSid = L"invalid";
+    require(!encodeBinding(invalidRecord, newBytes), "invalid target SID must reject");
+    invalidRecord = newRecord; invalidRecord.classicId.assign(2049, L'x');
+    require(!encodeBinding(invalidRecord, newBytes), "oversized legacy fields must reject");
+    invalidRecord = newRecord; invalidRecord.bleId.push_back(L'\0');
+    require(!encodeBinding(invalidRecord, newBytes), "embedded NUL in BLE ID must reject");
     for (std::size_t size = 0; size < bytes.value.size(); ++size)
         require(!decodeBinding(bytes.value.data(), size, decoded), "all truncated binding packets must fail");
     bytes.value.push_back(0);
@@ -555,6 +587,10 @@ void testPresenceContracts() {
     require(encodeBindingChange(change, bytes) && decodeBindingChange(bytes.value.data(), bytes.value.size(), restored) &&
         restored.expected == change.expected && restored.candidate == change.candidate && restored.cancelEvent == change.cancelEvent,
         "management request must preserve the expected record and cancellation event");
+    change.expected = {BindingState::bound, legacyRecord}; change.candidate = newRecord;
+    require(encodeBindingChange(change, bytes) && decodeBindingChange(bytes.value.data(), bytes.value.size(), restored) &&
+        restored.expected == change.expected && restored.candidate == newRecord,
+        "management codec must preserve old expected state and new empty legacy fields");
     bytes.value[0] = 255;
     require(!decodeBindingChange(bytes.value.data(), bytes.value.size(), restored), "malformed expected-length must fail");
     BindingRemoval removal{{BindingState::bound, record}, L"Global\\test-cancellation"};
@@ -562,6 +598,9 @@ void testPresenceContracts() {
     require(encodeBindingRemoval(removal, bytes) && decodeBindingRemoval(bytes.value.data(), bytes.value.size(), removed) &&
         removed.expected == removal.expected && removed.cancelEvent == removal.cancelEvent, "removal must bind its expected state and cancellation");
     require(!decodeBindingRemoval(bytes.value.data(), bytes.value.size() - 1, removed), "truncated removal must fail");
+    removal.expected.record = newRecord;
+    require(encodeBindingRemoval(removal, bytes) && decodeBindingRemoval(bytes.value.data(), bytes.value.size(), removed) &&
+        removed.expected == removal.expected, "new bindings must remain removable with empty legacy fields");
     for (auto state : {BindingState::absent, BindingState::bound}) {
         BindingSummary summary{state, state == BindingState::bound ? record : BindingRecord{}};
         BindingSummary read;
@@ -586,22 +625,43 @@ void testPresenceContracts() {
     require(authenticationExpiry(30'000, 30'000, true, true) == AuthenticationFailure::expired &&
         authenticationExpiry(1, 30'000, false, true) == AuthenticationFailure::sessionChanged &&
         authenticationExpiry(1, 30'000, true, false) == AuthenticationFailure::sessionChanged, "deadline and console boundary must reject");
-    const Evidence fresh{Failure::none, 10'000, 10'000, kDefaultThreshold};
+    const ConnectionTarget target{L"selected-ble-id", 42, winrt::Windows::Devices::Bluetooth::BluetoothAddressType::Random, 7};
+    const PresenceEvidence fresh{{Failure::none, 10'000, 7}, {Failure::none, 9'000, 10'000, kDefaultThreshold, target}, target};
     PresenceAuthorization oneTime;
     require(!oneTime.consume(false, fresh, 9'000, 10'001, 39'000, kDefaultThreshold), "wrong request/registration/connection/account/session context must reject");
     require(oneTime.consume(true, fresh, 9'000, 10'001, 39'000, kDefaultThreshold), "current evidence at threshold must authorize once");
     require(!oneTime.consume(true, fresh, 9'000, 10'002, 39'000, kDefaultThreshold), "duplicate credential claim must reject");
-    for (auto proof : {Evidence{Failure::none, 8'999, 10'000, -50}, Evidence{Failure::none, 10'000, 8'999, -50},
-            Evidence{Failure::none, 10'000, 0, -50}, Evidence{Failure::none, 10'000, 10'000, kDefaultThreshold - 1},
-            Evidence{Failure::connectionLost, 10'000, 10'000, -50}}) {
+    for (unsigned scenario = 0; scenario < 14; ++scenario) {
+        auto proof = fresh;
+        switch (scenario) {
+        case 0: proof.communication.communicationAt = 8'999; break;
+        case 1: proof.proximity.sampledAt = 8'999; break;
+        case 2: proof.proximity.sampledAt = 0; break;
+        case 3: proof.proximity.rssi = kDefaultThreshold - 1; break;
+        case 4: proof.communication.failure = Failure::connectionLost; break;
+        case 5: ++proof.target.address; break;
+        case 6: proof.target.addressType = winrt::Windows::Devices::Bluetooth::BluetoothAddressType::Public; break;
+        case 7: ++proof.target.revision; break;
+        case 8: proof.target.endpointId = L"other-ble-id"; break;
+        case 9: proof.communication.revision = 6; break;
+        case 10: proof.proximity.started = 8'000; break;
+        case 11: proof.proximity.sampledAt = 10'002; break;
+        case 12: proof.communication.failure = Failure::protectedOperationFailed; break;
+        case 13: proof.proximity.failure = Failure::rssiUnavailable; break;
+        }
         PresenceAuthorization rejected;
-        require(!rejected.consume(true, proof, 9'000, 10'001, 39'000, kDefaultThreshold), "cached, missing, low or disconnected evidence must reject");
+        require(!rejected.consume(true, proof, 9'000, 10'001, 39'000, kDefaultThreshold),
+            "stale, missing, low, mismatched, failed or disconnected evidence must reject");
     }
     PresenceAuthorization expired;
     require(!expired.consume(true, fresh, 9'000, 13'001, 39'000, kDefaultThreshold), "communication and RSSI older than three seconds must reject");
     require(!expired.consume(true, fresh, 9'000, 10'001, 10'001, kDefaultThreshold), "request deadline must not extend");
     require(!freshEvidence(10'002, 9'000, 10'001), "future/late evidence must reject");
     require(!freshEvidence(0, 0, 1), "missing evidence must reject even at the clock origin");
+    require(presenceFailure(fresh, 9'000, 13'000, 39'000, kDefaultThreshold) == Failure::none,
+        "three-second evidence boundary remains accepted");
+    require(presenceFailure(fresh, 9'000, 10'001, 39'000, 0) == Failure::internalError,
+        "invalid unlock thresholds must reject");
     Packet packet;
     auto wire = packetBytes(packet);
     wire[4] = static_cast<std::uint8_t>(kProtocolVersion + 1); wire[5] = 0;
@@ -611,17 +671,277 @@ void testPresenceContracts() {
         "unsupported packet versions must reject");
 }
 
+void testRssiSamples() {
+    using namespace unlock_windows::system_ble;
+    using winrt::Windows::Devices::Bluetooth::BluetoothAddressType;
+    const ConnectionTarget target{L"selected-ble-id", 42, BluetoothAddressType::Random, 7};
+    const CommunicationEvidence communication{Failure::none, 10'000, 7};
+    detail::RssiSamples samples(target, 9'000);
+    require(communicationFailure(communication, 9'000, 10'001) == Failure::none && samples.evidence(target).sampledAt == 0,
+        "binding communication can succeed without any RSSI sample");
+    require(communicationFailure(communication, 9'000, 13'001) == Failure::evidenceExpired,
+        "binding still rejects expired communication");
+    require(communicationFailure({Failure::bondRejected, 10'000, 7}, 9'000, 10'001) == Failure::bondRejected,
+        "binding still rejects an invalid secure bond");
+    samples.record(43, BluetoothAddressType::Random, 10'000, -50, 10'001);
+    samples.record(42, BluetoothAddressType::Public, 10'000, -50, 10'001);
+    samples.record(42, BluetoothAddressType::Random, 8'999, -50, 10'001);
+    samples.record(42, BluetoothAddressType::Random, 10'002, -50, 10'001);
+    samples.record(42, BluetoothAddressType::Random, 10'000, 0, 10'001);
+    require(samples.evidence(target).sampledAt == 0, "wrong targets, old/future timestamps and invalid signals cannot create evidence");
+    samples.record(42, BluetoothAddressType::Random, 10'000, -50, 10'001);
+    samples.record(42, BluetoothAddressType::Random, 9'999, -80, 10'001);
+    require(samples.evidence(target).rssi == -50, "a delayed sample cannot replace newer evidence");
+    auto changed = target;
+    ++changed.revision;
+    require(samples.evidence(changed).sampledAt == 0, "reading against a changed connection rejects old samples before target update");
+    samples.updateTarget(changed, 10'100);
+    samples.record(42, BluetoothAddressType::Random, 10'000, -50, 10'101);
+    require(samples.evidence(changed).sampledAt == 0, "a previous connection's queued advertisement cannot refill cleared evidence");
+    samples.record(42, BluetoothAddressType::Random, 10'100, -55, 10'101);
+    require(samples.evidence(changed).rssi == -55, "fresh evidence can be collected after a target revision change");
+    changed.address = 43;
+    samples.updateTarget(changed, 10'200);
+    require(samples.evidence(changed).sampledAt == 0, "address rotation clears the old sample");
+    samples.fail();
+    require(samples.evidence(changed).failure == Failure::rssiUnavailable &&
+        communicationFailure(communication, 9'000, 10'201) == Failure::none,
+        "RSSI collection failure does not invalidate protected communication");
+    samples.stop();
+    detail::RssiSamples next(changed, 10'300);
+    samples.record(43, BluetoothAddressType::Random, 10'301, -40, 10'302);
+    samples.fail();
+    require(samples.evidence(changed).failure == Failure::cancelled && samples.evidence(changed).sampledAt == 0 &&
+        next.evidence(changed).failure == Failure::none && next.evidence(changed).sampledAt == 0,
+        "callbacks from a stopped request cannot revive its evidence or modify the next request");
+    next.record(43, BluetoothAddressType::Random, 10'301, -40, 10'302);
+    next.updateTarget(changed, 10'303);
+    require(next.evidence(changed).sampledAt == 10'301, "an unchanged target preserves a current sample");
+}
+
+struct PresenceSessionFixture {
+    using Failure = unlock_windows::system_ble::Failure;
+    unlock_windows::system_ble::ConnectionTarget current{L"selected-ble-id", 42,
+        winrt::Windows::Devices::Bluetooth::BluetoothAddressType::Random, 7};
+    unlock_windows::system_ble::CommunicationEvidence proof{Failure::none, 10'000, 7};
+    std::uint64_t now = 10'001;
+    std::uint64_t started = 9'000;
+    std::uint64_t deadline = 39'000;
+    std::function<void()> onVerify;
+
+    unlock_windows::system_ble::ConnectionTarget target() const { return current; }
+    unlock_windows::system_ble::CommunicationEvidence currentEvidence(
+        const unlock_windows::system_ble::ConnectionTarget* expected = nullptr) const {
+        auto result = proof;
+        result.failure = unlock_windows::system_ble::detail::communicationStateFailure(result, current, expected);
+        if (result.failure == Failure::none && now >= deadline) result.failure = Failure::expired;
+        return result;
+    }
+    unlock_windows::system_ble::CommunicationEvidence evidence(
+        const unlock_windows::system_ble::ConnectionTarget& expected) const {
+        auto result = currentEvidence(&expected);
+        result.failure = unlock_windows::system_ble::communicationFailure(result, started, now);
+        return result;
+    }
+    void connect() { refresh(); }
+    void refresh() const {
+        if (now >= deadline) throw unlock_windows::system_ble::VerificationError(Failure::expired, "Fixture deadline");
+        if (proof.failure != Failure::none)
+            throw unlock_windows::system_ble::VerificationError(proof.failure, "Fixture invalidated");
+    }
+    void verifyCommunication() {
+        refresh();
+        if (onVerify) onVerify();
+        const auto result = currentEvidence();
+        if (result.failure != Failure::none)
+            throw unlock_windows::system_ble::VerificationError(result.failure, "Fixture communication invalidated");
+    }
+};
+
+struct PresenceSamplerFixture {
+    PresenceSessionFixture& session;
+    mutable std::optional<unlock_windows::system_ble::detail::RssiSamples> samples;
+    std::function<void()> beforeEvidence, afterEvidence;
+    bool recordSamples = true;
+    int rssi = unlock_windows::system_ble::kDefaultThreshold;
+
+    void start(unlock_windows::system_ble::ConnectionTarget target, std::uint64_t started) {
+        samples.emplace(std::move(target), started);
+    }
+    void updateTarget(unlock_windows::system_ble::ConnectionTarget target) {
+        samples->updateTarget(std::move(target), session.now);
+    }
+    unlock_windows::system_ble::RssiEvidence evidence(const unlock_windows::system_ble::ConnectionTarget& expected) const {
+        if (beforeEvidence) beforeEvidence();
+        if (recordSamples) samples->record(session.current.address, session.current.addressType, session.now, rssi, session.now);
+        const auto result = samples->evidence(expected);
+        if (afterEvidence) afterEvidence();
+        return result;
+    }
+};
+
+void testCommunicationStateAndFreshness() {
+    using namespace unlock_windows::system_ble;
+    PresenceSessionFixture session;
+    session.now = 13'001;
+    require(session.currentEvidence().failure == Failure::none,
+        "completed communication remains successful after slow unsubscribe");
+    require(session.evidence(session.current).failure == Failure::evidenceExpired,
+        "the same stale communication cannot authorize binding or a claim");
+    ++session.current.revision;
+    require(session.currentEvidence().failure == Failure::protectedOperationFailed,
+        "communication from an invalidated revision is a state failure, not renewable time expiry");
+    session.proof.failure = Failure::associationInvalid;
+    require(session.currentEvidence().failure == Failure::associationInvalid,
+        "the real failure takes precedence over revision mismatch and time expiry");
+    session.proof = {Failure::none, 0, session.current.revision};
+    require(session.currentEvidence().failure == Failure::protectedOperationFailed,
+        "missing communication is not a successful operation awaiting time renewal");
+}
+
+void testPresenceEvidenceInterleaving() {
+    using namespace unlock_windows::system_ble;
+    for (unsigned timing = 0; timing < 2; ++timing) {
+        for (unsigned scenario = 0; scenario < 8; ++scenario) {
+            PresenceSessionFixture session;
+            PresenceSamplerFixture sampler{session};
+            sampler.start(session.current, session.started);
+            const auto invalidate = [&] {
+                switch (scenario) {
+                case 0: ++session.current.revision; session.proof.failure = Failure::connectionLost; break;
+                case 1: ++session.current.revision; session.proof.failure = Failure::protectedOperationFailed; break;
+                case 2: ++session.current.address; break;
+                case 3: session.current.addressType = winrt::Windows::Devices::Bluetooth::BluetoothAddressType::Public; break;
+                case 4: ++session.current.revision; session.proof.revision = session.current.revision; break;
+                case 5: session.proof.failure = Failure::associationInvalid; break;
+                case 6: session.proof.failure = Failure::cancelled; break;
+                case 7: ++session.current.revision; break;
+                }
+            };
+            if (timing == 0) sampler.beforeEvidence = invalidate;
+            else sampler.afterEvidence = invalidate;
+            const auto evidence = detail::collectPresenceEvidence(session, sampler);
+            const auto expected = scenario == 0 ? Failure::connectionLost :
+                scenario == 1 || scenario == 7 ? Failure::protectedOperationFailed :
+                scenario == 5 ? Failure::associationInvalid : scenario == 6 ? Failure::cancelled : Failure::rssiUnavailable;
+            require(evidence.communication.failure == expected,
+                "final session validation must observe invalidation before or after the RSSI snapshot");
+            PresenceAuthorization authorization;
+            require(!authorization.consume(true, evidence, session.started, session.now, session.deadline, kDefaultThreshold),
+                "an interleaved state change must prevent consumption of the old combined evidence");
+        }
+    }
+}
+
+void testPresenceRenewal() {
+    using namespace unlock_windows::system_ble;
+    for (unsigned scenario = 0; scenario < 3; ++scenario) {
+        PresenceSessionFixture session;
+        PresenceSamplerFixture sampler{session};
+        unsigned verifications = 0;
+        session.onVerify = [&] {
+            ++verifications;
+            session.proof.communicationAt = session.now;
+            session.now += ((scenario == 0 && verifications == 1) || (scenario == 2 && verifications == 2)) ? 3'001 : 1;
+        };
+        bool delayed = false;
+        sampler.beforeEvidence = [&] {
+            if (scenario != 0 && !delayed) { session.now += 3'001; delayed = true; }
+        };
+        detail::verifyUnlockPresence(session, sampler, session.started, session.deadline, kDefaultThreshold, {},
+            [&] { return session.now; }, [&] { session.now += 20; });
+        require(verifications == (scenario == 2 ? 3u : 2u),
+            "both initially stale communication and a slow renewal must permit another verification");
+        const auto evidence = detail::collectPresenceEvidence(session, sampler);
+        PresenceAuthorization authorization;
+        require(authorization.consume(true, evidence, session.started, session.now, session.deadline, kDefaultThreshold) &&
+            !authorization.consume(true, evidence, session.started, session.now, session.deadline, kDefaultThreshold),
+            "renewed communication and current RSSI authorize exactly one claim");
+    }
+
+    const auto rejected = [](auto& session, auto& sampler) {
+        try {
+            detail::verifyUnlockPresence(session, sampler, session.started, session.deadline, kDefaultThreshold, {},
+                [&] { return session.now; }, [&] { session.now += 20; });
+        } catch (const VerificationError& error) { return error.reason; }
+        return Failure::none;
+    };
+    {
+        PresenceSessionFixture session;
+        PresenceSamplerFixture sampler{session};
+        session.onVerify = [&] { session.proof.communicationAt = session.now; session.now += 3'001; };
+        require(rejected(session, sampler) == Failure::expired && session.deadline == 39'000,
+            "repeated slow operations terminate at the original deadline without extending it");
+    }
+    {
+        PresenceSessionFixture session;
+        PresenceSamplerFixture sampler{session};
+        sampler.recordSamples = false;
+        require(rejected(session, sampler) == Failure::expired,
+            "missing RSSI waits only within the original deadline");
+    }
+    {
+        PresenceSessionFixture session;
+        PresenceSamplerFixture sampler{session};
+        sampler.rssi = kDefaultThreshold - 1;
+        unsigned verifications = 0;
+        session.onVerify = [&] { ++verifications; session.now += 3'001; };
+        require(rejected(session, sampler) == Failure::rssiTooLow && verifications == 1,
+            "fresh low RSSI rejects instead of renewing expired communication");
+    }
+    for (auto failure : {Failure::protectedOperationFailed, Failure::connectionLost, Failure::cancelled}) {
+        for (unsigned failedVerification : {1u, 2u}) {
+            PresenceSessionFixture session;
+            PresenceSamplerFixture sampler{session};
+            unsigned verifications = 0;
+            session.onVerify = [&] {
+                if (++verifications == failedVerification) session.proof.failure = failure;
+                else session.now += 3'001;
+            };
+            require(rejected(session, sampler) == failure && verifications == failedVerification,
+                "real failures during initial communication or renewal terminate without another attempt");
+        }
+    }
+    {
+        PresenceSessionFixture session;
+        PresenceSamplerFixture sampler{session};
+        sampler.recordSamples = false;
+        unsigned verifications = 0, waits = 0;
+        session.onVerify = [&] {
+            if (++verifications == 1) session.now += 3'001;
+            else session.proof.communicationAt = session.now;
+        };
+        detail::verifyUnlockPresence(session, sampler, session.started, session.deadline, kDefaultThreshold, {},
+            [&] { return session.now; }, [&] {
+                require(verifications == 1, "missing RSSI cannot trigger communication renewal");
+                ++waits; session.now += 20; sampler.recordSamples = true;
+            });
+        require(waits == 1 && verifications == 2, "communication renewal waits for a fresh qualifying RSSI sample");
+    }
+    {
+        PresenceSessionFixture session;
+        PresenceSamplerFixture sampler{session};
+        bool changed = false;
+        unsigned waits = 0, verifications = 0;
+        session.onVerify = [&] { ++verifications; };
+        sampler.afterEvidence = [&] { if (!changed) { ++session.current.address; changed = true; } };
+        detail::verifyUnlockPresence(session, sampler, session.started, session.deadline, kDefaultThreshold, {},
+            [&] { return session.now; }, [&] { ++waits; session.now += 20; });
+        require(waits == 1 && verifications == 1 && sampler.samples->evidence(session.current).target == session.current,
+            "a changed address requires a new sample without needless communication renewal");
+    }
+}
+
 struct EndpointFixture : winrt::implements<EndpointFixture, winrt::Windows::Devices::Enumeration::IDeviceInformation> {
-    winrt::guid container;
-    explicit EndpointFixture(winrt::guid value) : container(value) {}
-    winrt::hstring Id() { return L"fixture"; }
+    winrt::hstring endpointId;
+    explicit EndpointFixture(winrt::hstring value) : endpointId(std::move(value)) {}
+    winrt::hstring Id() { return endpointId; }
     winrt::hstring Name() { return L"fixture"; }
     bool IsEnabled() { return true; }
     bool IsDefault() { return false; }
     winrt::Windows::Devices::Enumeration::EnclosureLocation EnclosureLocation() { return nullptr; }
     winrt::Windows::Foundation::Collections::IMapView<winrt::hstring, winrt::Windows::Foundation::IInspectable> Properties() {
         auto properties = winrt::single_threaded_map<winrt::hstring, winrt::Windows::Foundation::IInspectable>();
-        properties.Insert(unlock_windows::system_ble::kContainerProperty, winrt::box_value(container));
         return properties.GetView();
     }
     void Update(winrt::Windows::Devices::Enumeration::DeviceInformationUpdate const&) { throw winrt::hresult_not_implemented(); }
@@ -633,26 +953,27 @@ struct EndpointFixture : winrt::implements<EndpointFixture, winrt::Windows::Devi
     }
 };
 
-void testEndpointAssociation() {
+void testEndpointSelection() {
     using namespace winrt::Windows::Devices::Enumeration;
     using namespace unlock_windows::system_ble;
     winrt::init_apartment();
     {
-        const winrt::guid target{L"12345678-1234-1234-1234-123456789abc"};
+        const winrt::hstring target{L"selected-ble-id"};
         const auto selected = winrt::make<EndpointFixture>(target).as<DeviceInformation>();
-        const auto unrelated = winrt::make<EndpointFixture>(winrt::guid{}).as<DeviceInformation>();
+        const auto unrelated = winrt::make<EndpointFixture>(winrt::hstring{L"other-ble-id"}).as<DeviceInformation>();
         auto entries = winrt::single_threaded_vector<DeviceInformation>();
         const auto collection = entries.GetView().as<DeviceInformationCollection>();
-        require(!findUniqueEndpoint(collection, target), "missing association returns no endpoint for UI waiting");
-        try { (void)uniqueEndpoint(collection, target); require(false, "service must reject a missing association"); }
-        catch (const VerificationError& error) { require(error.reason == Failure::associationInvalid, "missing association has the correct failure"); }
+        require(!findUniqueEndpoint(collection, target), "missing BLE ID returns no selected endpoint");
+        try { (void)uniqueEndpoint(collection, target); require(false, "service must reject a missing BLE endpoint"); }
+        catch (const VerificationError& error) { require(error.reason == Failure::associationInvalid, "missing BLE endpoint has the correct failure"); }
         entries.Append(unrelated);
         entries.Append(selected);
+        require(!findUniqueEndpoint(collection, winrt::hstring{}), "empty BLE ID must not select a device");
         require(findUniqueEndpoint(collection, target) == selected && uniqueEndpoint(collection, target) == selected,
-            "one matching container returns its endpoint despite unrelated devices");
+            "exact BLE ID selects its endpoint despite same-name unrelated devices");
         entries.Append(winrt::make<EndpointFixture>(target).as<DeviceInformation>());
-        try { (void)findUniqueEndpoint(collection, target); require(false, "duplicate association must reject immediately"); }
-        catch (const VerificationError& error) { require(error.reason == Failure::associationInvalid, "ambiguous association has the correct failure"); }
+        try { (void)findUniqueEndpoint(collection, target); require(false, "duplicate BLE ID must reject immediately"); }
+        catch (const VerificationError& error) { require(error.reason == Failure::associationInvalid, "duplicate BLE ID has the correct failure"); }
     }
     winrt::uninit_apartment();
 }
@@ -721,7 +1042,7 @@ void testConsoleLockState() {
 
 int main() {
     testBindingSummaryReadback();
-    testEndpointAssociation();
+    testEndpointSelection();
     testPreparationState();
     testConsoleLockState();
     testLastUnlockCodec();
@@ -737,6 +1058,10 @@ int main() {
     testAutoSubmitOffer();
     testAuthenticationOperationPackets();
     testPresenceContracts();
+    testRssiSamples();
+    testCommunicationStateAndFreshness();
+    testPresenceEvidenceInterleaving();
+    testPresenceRenewal();
     std::cout << "Saved credential protocol tests passed.\n";
     return EXIT_SUCCESS;
 }

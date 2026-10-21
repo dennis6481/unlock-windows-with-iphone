@@ -76,6 +76,8 @@ struct Dashboard::State::View final {
             if (page) nav_.SelectedItem(pages_.at(static_cast<std::size_t>(*page)));
             ShowWindow(hwnd_, SW_RESTORE);
             window_.Activate();
+            if (statusPage_ && nav_.SelectedItem() == pages_[0])
+                get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->SetVisible(true);
             SetForegroundWindow(hwnd_);
             if (passwordPage_ && nav_.SelectedItem() == pages_[1])
                 get_self<winrt::UnlockDesktop::implementation::PasswordPage>(passwordPage_)->Refresh();
@@ -119,6 +121,7 @@ private:
         closingToken_ = appWindow_.Closing([this](const auto&, const Windowing::AppWindowClosingEventArgs& args) {
             try {
                 args.Cancel(true);
+                if (statusPage_) get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->SetVisible(false);
                 appWindow_.Hide();
             } catch (const hresult_error& error) { state_->fail(error); }
         });
@@ -184,6 +187,7 @@ private:
                 const auto item = args.SelectedItem().try_as<NavigationViewItem>();
                 if (!item) return;
                 const auto pageId = static_cast<DashboardPage>(unbox_value<std::int32_t>(item.Tag()));
+                if (statusPage_) get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->Stop();
                 if (currentPage_) scrollOffsets_[*currentPage_] = scroll_.VerticalOffset();
                 currentPage_ = pageId;
                 const bool statusPage = pageId == DashboardPage::status;
@@ -198,6 +202,7 @@ private:
                         state_->refresh();
                     });
                     get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->Update(state_->snapshot);
+                    get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->SetVisible(IsWindowVisible(hwnd_) != FALSE);
                 } else if (diagnosticsPage) {
                     diagnosticsPage_ = navigateTo<winrt::UnlockDesktop::DiagnosticsPage>();
                     get_self<winrt::UnlockDesktop::implementation::DiagnosticsPage>(diagnosticsPage_)->SetScrollHost(scroll_);

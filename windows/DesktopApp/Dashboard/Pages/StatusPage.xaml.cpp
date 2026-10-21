@@ -52,7 +52,7 @@ void StatusPage::OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEventA
         if (auto page = weak.get()) page->Remove();
     });
     const auto removeGlyph = std::wstring(1, static_cast<wchar_t>(Symbol::Delete));
-    removalCard_ = settingsCard(L"Remove bound iPhone", remove_, removeGlyph.c_str());
+    removalCard_ = settingsCard(L"Remove paired iPhone", remove_, removeGlyph.c_str());
     statusPanel_.Children().Append(removalCard_);
 
     error_ = InfoBar{};
@@ -69,8 +69,8 @@ void StatusPage::Update(unlock_windows::desktop_app::DashboardSnapshot const& sn
     const bool bound = snapshot.binding && snapshot.binding->state == unlock_windows::system_ble::BindingState::bound;
     lastUnlockCard_.Visibility(bound ? Visibility::Visible : Visibility::Collapsed);
     lastUnlockText_.Text(unlock_windows::desktop_app::lastUnlockText(snapshot.lastUnlock, GetTickCount64()));
-    name_.Text(!known ? L"Binding status unavailable" : bound ?
-        (snapshot.binding->record.displayName.empty() ? L"Name unavailable" : snapshot.binding->record.displayName) : L"No iPhone bound");
+    name_.Text(!known ? L"App pairing status unavailable" : bound ?
+        (snapshot.binding->record.displayName.empty() ? L"Name unavailable" : snapshot.binding->record.displayName) : L"No iPhone paired with this app");
     error_.Title(L"Status needs attention");
     const bool resetView = resetBindingView_ && known && !bound && !Busy();
     if ((bound || resetView) && bindingView_ && !bindingView_->busy()) {
@@ -101,6 +101,7 @@ void StatusPage::Update(unlock_windows::desktop_app::DashboardSnapshot const& sn
             updating_ = false;
         }
     }
+    if (bindingView_) bindingView_->setVisible(visible_ && known && !bound && !stopped_);
     thresholdText_.Text(to_hstring(static_cast<int>(threshold_.Value())) + L" dBm");
     thresholdCard_.Visibility(bound ? Visibility::Visible : Visibility::Collapsed);
     threshold_.IsEnabled(bound && !hostBusy_ && !Busy() && !stopped_);
@@ -185,6 +186,11 @@ void StatusPage::EnsureBindingView() {
 
 void StatusPage::SetHost(std::function<void(bool)> refresh) {
     refreshSnapshot_ = std::move(refresh);
+}
+
+void StatusPage::SetVisible(bool visible) {
+    visible_ = visible;
+    if (bindingView_) bindingView_->setVisible(!stopped_ && visible && (!binding_ || binding_->state != unlock_windows::system_ble::BindingState::bound));
 }
 
 void StatusPage::Refresh() {

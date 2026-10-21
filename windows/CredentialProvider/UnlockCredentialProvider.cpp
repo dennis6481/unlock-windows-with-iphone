@@ -1,4 +1,5 @@
 // Created by Rui MA on 27 Sep 2026
+// Modified by Liam on 21 Oct 2026
 
 #include <initguid.h>
 #include "UnlockCredentialProvider.h"
@@ -14,6 +15,7 @@
 #include <exception>
 #include <new>
 #include <memory>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -57,6 +59,72 @@ struct TemporaryPassword final {
         if (!value.empty()) SecureZeroMemory(value.data(), value.size() * sizeof(wchar_t));
     }
 };
+
+HRESULT packLocalUnlockCredential(const std::wstring& qualifiedName,
+                                  TemporaryPassword& password,
+                                  CREDENTIAL_PROVIDER_USAGE_SCENARIO scenario,
+                                  BYTE** output, DWORD* outputBytes) noexcept {
+    if (!output || !outputBytes) return E_POINTER;
+    *output = nullptr;
+    *outputBytes = 0;
+    if (scenario != CPUS_LOGON && scenario != CPUS_UNLOCK_WORKSTATION) return E_INVALIDARG;
+    const auto separator = qualifiedName.find(L'\\');
+    if (separator == std::wstring::npos || separator == 0 ||
+        separator + 1 >= qualifiedName.size() ||
+        qualifiedName.find(L'\\', separator + 1) != std::wstring::npos ||
+        password.value.empty() || password.value[0] == L'\0') return E_INVALIDARG;
+
+    try {
+        DWORD protectedChars = 0;
+        const auto sourceChars = static_cast<DWORD>(std::wcslen(password.value.data()) + 1);
+        if (CredProtectW(FALSE, password.value.data(), sourceChars,
+                         nullptr, &protectedChars, nullptr) ||
+            GetLastError() != ERROR_INSUFFICIENT_BUFFER || protectedChars == 0)
+            return HRESULT_FROM_WIN32(GetLastError() == ERROR_SUCCESS ? ERROR_INVALID_DATA : GetLastError());
+
+        TemporaryPassword protectedPassword;
+        protectedPassword.value.resize(protectedChars, L'\0');
+        if (!CredProtectW(FALSE, password.value.data(), sourceChars,
+                          protectedPassword.value.data(), &protectedChars, nullptr))
+            return HRESULT_FROM_WIN32(GetLastError());
+        const auto encodedChars = wcsnlen_s(protectedPassword.value.data(), protectedPassword.value.size());
+        if (encodedChars == 0 || encodedChars == protectedPassword.value.size())
+            return HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
+
+        constexpr auto kMaxChars = std::numeric_limits<USHORT>::max() / sizeof(wchar_t);
+        const auto domainChars = separator;
+        const auto userChars = qualifiedName.size() - separator - 1;
+        if (domainChars > kMaxChars || userChars > kMaxChars || encodedChars > kMaxChars)
+            return HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW);
+
+        const auto bytes = static_cast<DWORD>(
+            sizeof(KERB_INTERACTIVE_UNLOCK_LOGON) +
+            (domainChars + userChars + encodedChars) * sizeof(wchar_t));
+        auto* buffer = static_cast<BYTE*>(CoTaskMemAlloc(bytes));
+        if (!buffer) return E_OUTOFMEMORY;
+        SecureZeroMemory(buffer, bytes);
+        auto* packed = reinterpret_cast<KERB_INTERACTIVE_UNLOCK_LOGON*>(buffer);
+        packed->Logon.MessageType = scenario == CPUS_UNLOCK_WORKSTATION
+            ? KerbWorkstationUnlockLogon : KerbInteractiveLogon;
+        DWORD offset = sizeof(KERB_INTERACTIVE_UNLOCK_LOGON);
+        const auto appendString = [&](UNICODE_STRING& target, const wchar_t* source, std::size_t characters) {
+            const auto length = static_cast<USHORT>(characters * sizeof(wchar_t));
+            target.Length = length;
+            target.MaximumLength = length;
+            target.Buffer = reinterpret_cast<PWSTR>(static_cast<ULONG_PTR>(offset));
+            std::memcpy(buffer + offset, source, length);
+            offset += length;
+        };
+        appendString(packed->Logon.LogonDomainName, qualifiedName.c_str(), domainChars);
+        appendString(packed->Logon.UserName, qualifiedName.c_str() + separator + 1, userChars);
+        appendString(packed->Logon.Password, protectedPassword.value.data(), encodedChars);
+        *output = buffer;
+        *outputBytes = bytes;
+        return S_OK;
+    } catch (const std::bad_alloc&) {
+        return E_OUTOFMEMORY;
+    }
+}
 
 void logAutoSubmitError(const wchar_t* operation, const HRESULT status) noexcept {
     wchar_t message[256]{};
@@ -846,30 +914,39 @@ public:
             return E_OUTOFMEMORY;
         }
 
-        constexpr DWORD flags = CRED_PACK_PROTECTED_CREDENTIALS | CRED_PACK_ID_PROVIDER_CREDENTIALS;
         DWORD size = 0;
-        const auto sized = CredPackAuthenticationBufferW(
-            flags, const_cast<LPWSTR>(qualifiedUserName_.c_str()), savedPassword.value.data(), nullptr, &size
-        );
-        if (sized || GetLastError() != ERROR_INSUFFICIENT_BUFFER || size == 0) {
-            return copyString(
-                L"Windows couldn't prepare phone unlock. Use your PIN or password.",
-                optionalStatusText
+        BYTE* packed = nullptr;
+        if (IsEqualGUID(providerId_, Identity_LocalUserProvider)) {
+            const auto status = packLocalUnlockCredential(
+                qualifiedUserName_, savedPassword, usageScenario_, &packed, &size);
+            if (FAILED(status)) {
+                logAutoSubmitError(L"local account credential packing", status);
+                return copyString(L"Windows couldn't prepare local account unlock. Use your password.",
+                                  optionalStatusText);
+            }
+        } else {
+            constexpr DWORD flags = CRED_PACK_PROTECTED_CREDENTIALS | CRED_PACK_ID_PROVIDER_CREDENTIALS;
+            const auto sized = CredPackAuthenticationBufferW(
+                flags, const_cast<LPWSTR>(qualifiedUserName_.c_str()), savedPassword.value.data(), nullptr, &size
             );
-        }
-
-        const DWORD allocatedSize = size;
-        auto* packed = static_cast<BYTE*>(CoTaskMemAlloc(allocatedSize));
-        if (packed == nullptr) {
-            return E_OUTOFMEMORY;
-        }
-        const auto packedResult = CredPackAuthenticationBufferW(
-            flags, const_cast<LPWSTR>(qualifiedUserName_.c_str()), savedPassword.value.data(), packed, &size
-        );
-        if (!packedResult) {
-            SecureZeroMemory(packed, allocatedSize);
-            CoTaskMemFree(packed);
-            return copyString(L"Windows couldn't prepare phone unlock. Use your PIN or password.", optionalStatusText);
+            if (sized || GetLastError() != ERROR_INSUFFICIENT_BUFFER || size == 0) {
+                return copyString(
+                    L"Windows couldn't prepare phone unlock. Use your PIN or password.",
+                    optionalStatusText
+                );
+            }
+            const DWORD allocatedSize = size;
+            packed = static_cast<BYTE*>(CoTaskMemAlloc(allocatedSize));
+            if (packed == nullptr) return E_OUTOFMEMORY;
+            const auto packedResult = CredPackAuthenticationBufferW(
+                flags, const_cast<LPWSTR>(qualifiedUserName_.c_str()), savedPassword.value.data(), packed, &size
+            );
+            if (!packedResult) {
+                SecureZeroMemory(packed, allocatedSize);
+                CoTaskMemFree(packed);
+                return copyString(L"Windows couldn't prepare phone unlock. Use your PIN or password.",
+                                  optionalStatusText);
+            }
         }
 
         serialization->ulAuthenticationPackage = authenticationPackage;
@@ -951,6 +1028,10 @@ public:
         return S_OK;
     }
 
+    void setUsageScenario(const CREDENTIAL_PROVIDER_USAGE_SCENARIO scenario) noexcept {
+        usageScenario_ = scenario;
+    }
+
     void clearIdentity() noexcept {
         userSid_.clear();
         primarySid_.clear();
@@ -977,6 +1058,7 @@ private:
     std::wstring primarySid_;
     std::wstring qualifiedUserName_;
     GUID providerId_{};
+    CREDENTIAL_PROVIDER_USAGE_SCENARIO usageScenario_ = CPUS_LOGON;
     DWORD consoleSessionId_ = 0xffffffff;
     std::optional<std::array<std::uint8_t,
         unlock_windows::saved_credential::kNonceSize>> automaticApproval_;
@@ -1057,6 +1139,7 @@ public:
             return E_NOTIMPL;
         }
         usageScenarioSet_ = true;
+        if (credential_ != nullptr) credential_->setUsageScenario(scenario);
         return S_OK;
     }
 

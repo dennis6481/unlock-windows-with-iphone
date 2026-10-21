@@ -1,4 +1,5 @@
 // Created by Rui MA on 30 Sep 2026
+// Modified by Liam on 21 Oct 2026
 
 #include "SavedCredentialIpc.h"
 #include "../DesktopApp/DesktopApp.h"
@@ -71,13 +72,13 @@ public:
         root_.Children().Append(text(L"Saved Windows password", 24));
         account_ = text(L"Windows account: loading...", 18);
         root_.Children().Append(account_);
-        root_.Children().Append(text(L"Save a local encrypted copy of the actual Microsoft Account password for the displayed console user. This does not change your account password or create an unlock approval."));
+        root_.Children().Append(text(L"Save a local encrypted copy of the actual Windows account password for the displayed console user. This does not change your account password or create an unlock approval."));
         status_ = text(L"Loading account information...");
         root_.Children().Append(status_);
         notice_ = InfoBar{};
         root_.Children().Append(notice_);
         password_ = PasswordBox{};
-        password_.Header(box_value(L"Microsoft Account password"));
+        password_.Header(box_value(L"Windows account password"));
         password_.MaxLength(static_cast<std::int32_t>(kMaxPasswordChars));
         password_.PasswordChanged([weak](const auto&, const auto&) {
             if (const auto self = weak.lock(); self && !self->stopped_) self->applyState();
@@ -275,7 +276,7 @@ private:
         confirmation_ = ContentDialog{};
         confirmation_.XamlRoot(root_.XamlRoot());
         confirmation_.Title(box_value(L"Remove your saved password copy?"));
-        confirmation_.Content(box_value(L"iPhone unlock will be unavailable until you save a password again. Your Microsoft Account password will not change."));
+        confirmation_.Content(box_value(L"iPhone unlock will be unavailable until you save a password again. Your Windows account password will not change."));
         confirmation_.PrimaryButtonText(L"Remove saved password");
         confirmation_.CloseButtonText(L"Cancel");
         confirmation_.DefaultButton(ContentDialogButton::Close);

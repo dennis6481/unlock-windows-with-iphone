@@ -1,4 +1,5 @@
 <!-- Created by Rui MA on 27 Sep 2026 -->
+<!-- Modified by Liam on 21 Oct 2026 -->
 
 # Credential Provider
 
@@ -37,3 +38,5 @@ Install/update through the [installer](../Setup/README.md) and honor its restart
 - [Microsoft V2 Credential Provider sample](https://github.com/microsoft/Windows-classic-samples/blob/main/Samples/CredentialProvider/cpp/CSampleCredential.cpp)
 - [CredentialsChanged](https://learn.microsoft.com/en-us/windows/win32/api/credentialprovider/nf-credentialprovider-icredentialproviderevents-credentialschanged)
 - [GetCredentialCount and automatic submission](https://learn.microsoft.com/en-us/windows/win32/api/credentialprovider/nf-credentialprovider-icredentialprovider-getcredentialcount)
+
+Local Windows accounts use native Kerberos interactive logon serialization (experimental; Windows validation pending).

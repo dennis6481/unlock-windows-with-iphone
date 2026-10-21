@@ -1,4 +1,5 @@
 <!-- Created by Rui MA on 26 Sep 2026 -->
+<!-- Modified by Liam on 21 Oct 2026 -->
 
 # Windows developer guide
 
@@ -49,7 +50,7 @@ For installation and setup, see the [main guide](../README.md#installation).
 
 Open **Unlock with iPhone** from the Start Menu to show the main window. Install/update creates the all-users shortcut; uninstall removes it.
 
-- Save your Microsoft account password, not your PIN. Update the saved copy whenever the account password changes; see [password management](SavedCredential/README.md#password-management).
+- Save your Windows account password, not your PIN. Update the saved copy whenever the account password changes; see [password management](SavedCredential/README.md#password-management).
 - Remove the paired iPhone on **Status**, or delete the saved password on **Password**; these are separate actions.
 
 ## Update and uninstall

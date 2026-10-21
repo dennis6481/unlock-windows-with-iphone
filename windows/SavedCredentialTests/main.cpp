@@ -1,6 +1,7 @@
 // Created by Rui MA on 30 Sep 2026
 // Modified by Liam on 21 Oct 2026
 
+#include <initguid.h>
 #include "../SavedCredential/SavedCredentialIpc.h"
 #include "../DesktopApp/DesktopApp.h"
 #include "../Bluetooth/PresenceAuthorization.h"

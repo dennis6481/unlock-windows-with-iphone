@@ -1,0 +1,53 @@
+# Created by Liam on 21 Oct 2026
+
+name: Local account test installer (x64)
+
+on:
+  push:
+    branches:
+      - feature/local-windows-account-unlock
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: local-account-installer-x64
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build Windows x64 Release installer
+    runs-on: windows-2022
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: windows
+    env:
+      UNLOCK_TARGET_ARCH: x64
+      UNLOCK_VS_DEV_CMD: auto
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Build Release installer
+        shell: cmd
+        run: |
+          if not exist "..\.tmp" mkdir "..\.tmp"
+          if errorlevel 1 exit /b %errorlevel%
+          set "TEMP=%CD%\..\.tmp"
+          set "TMP=%TEMP%"
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File WindowsBuild.ps1 -Prepare -OutputDirectory build
+          if errorlevel 1 exit /b %errorlevel%
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File WindowsBuild.ps1 -InvokeMSBuild "UnlockWindows.sln" /restore /m /nologo "/p:Configuration=Release" "/p:UnlockBuildDirectory=%CD%\build" "/p:BuildTesting=OFF"
+          if errorlevel 1 exit /b %errorlevel%
+
+      - name: Upload x64 setup EXE
+        uses: actions/upload-artifact@v7
+        with:
+          name: local-windows-account-x64-installer
+          path: windows/dist/*_x64_setup.exe
+          if-no-files-found: error
+          retention-days: 7

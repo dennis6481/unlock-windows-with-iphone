@@ -16,6 +16,7 @@
 #include <bcrypt.h>
 #include <sddl.h>
 #include <identitystore.h>
+#include <credentialprovider.h>
 #include <ShlGuid.h>
 #include <propsys.h>
 #include <propkey.h>

@@ -9,6 +9,7 @@
 #include "../ConsoleSession.h"
 #include <winrt/Windows.Foundation.Collections.h>
 #include <sddl.h>
+#include <credentialprovider.h>
 #include <ShlGuid.h>
 
 #include <cstdlib>

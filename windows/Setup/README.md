@@ -51,6 +51,8 @@ Setup requires Windows 10 2004, build 19041, or later, using the minimum from [C
 
 Versions earlier than **1.0.0** must be uninstalled in Windows **Settings → Apps** before running this installer. The fixed maintenance floor is defined in `ProductVersion.h`; old installations and transactions are rejected before changes. Version read failures are errors, not an empty installation.
 
+Versions use `major.minor.patch.build`, compared numerically across all four parts. Three-part installed/transaction versions default to build `0`; malformed versions remain errors. Project binary and text versions must agree, including build.
+
 | Operation | Behavior |
 |---|---|
 | Install | Confirm and deploy a new complete installation. |
@@ -89,8 +91,6 @@ File removal is not physical erasure of SSD, backup or snapshot history. See [SE
 ## UI and diagnostics
 
 The wizard uses themed Win32 controls, PerMonitorV2 layout, Task Dialog confirmations/errors and a scrollable operation log. Execution disallows cancel/close; Restart now / Later preserves the restart state as appropriate. UI display failure is distinct from the transaction result.
-
-[Get-ComponentsStatus.ps1](../Diagnostics/Get-ComponentsStatus.ps1) reads shared definitions and reports component architecture/version/hash, installation/transaction/result records and related tasks. It separates absent records from read failures. It does not run tasks, mount offline hives or repair state.
 
 Verify versions, restarts, cancellation, failure, result handoff and complete removal. Tests must check the actual final state, not just whether the app entry disappeared.
 

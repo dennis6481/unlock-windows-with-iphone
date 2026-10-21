@@ -15,7 +15,6 @@
   `Modified by <real Git author name> on <date(dd mmm yyyy)>`.
 - The author name must be a real person's name from Git history or Git configuration. Never use `Codex`, `Agent`, or any other agent name.
 - Do not add duplicate or contradictory author comments.
-- Do not add comments in the middle of a file
 
 ## Project
 

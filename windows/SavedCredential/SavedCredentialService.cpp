@@ -327,6 +327,7 @@ struct BleTask final {
     bool binding = false;
     std::atomic<bool> cancelled{false};
     std::shared_ptr<unlock_windows::system_ble::Session> connection;
+    std::shared_ptr<unlock_windows::system_ble::RssiSampler> sampler;
 };
 void setText(SensitiveBytes& target, const std::string& value) {
     target.value.assign(value.begin(), value.end());
@@ -469,6 +470,7 @@ public:
                     response.result = Result::success;
                     return response;
                 }
+                change.candidate.threshold = unlock_windows::system_ble::kDefaultThreshold;
                 queueTask(provisioning_->identity, console, std::move(change), true);
                 if (!encodeAuthenticationStatus(managementStatus_, response.payload)) fail("binding task status encoding failed");
                 response.result = Result::success;
@@ -652,7 +654,7 @@ public:
                     latest.logonId.LowPart == task_->logonId.LowPart && latest.logonId.HighPart == task_->logonId.HighPart &&
                     grant_->consoleGeneration == gConsoleGeneration.load() && !task_->cancelled &&
                     task_->change.expected == bindingSummary();
-                const auto evidence = task_->connection->evidence();
+                const auto evidence = unlock_windows::system_ble::presenceEvidence(*task_->connection, *task_->sampler);
                 const auto claimedNonce = grant_->nonce;
                 UnlockContext context{identity, console.session, console.logonId, task_->change.candidate,
                     gUnlockHistoryGeneration.load(), task_->identityGeneration};
@@ -670,7 +672,7 @@ public:
                 if (task_) task_->cancelled = true;
                 response.payload = vault_.release(identity);
                 unlockProcess_ = std::move(client.process);
-                unlockHistory_.beginClaim(std::move(context), claimedNonce, client.pid, evidence.rssi);
+                unlockHistory_.beginClaim(std::move(context), claimedNonce, client.pid, evidence.proximity.rssi);
             } else {
                 response.result = Result::invalidRequest;
                 return response;
@@ -737,8 +739,14 @@ private:
     }
 
     bool bindingMatches() const {
-        return task_ && !task_->binding && task_->change.expected == bindingSummary() && task_->connection &&
-            task_->connection->evidence().failure == AuthenticationFailure::none && !task_->cancelled;
+        return task_ && !task_->binding && !task_->cancelled && task_->change.expected == bindingSummary() &&
+            task_->connection && task_->sampler && unlockFailure() == AuthenticationFailure::none;
+    }
+
+    AuthenticationFailure unlockFailure() const {
+        return unlock_windows::system_ble::presenceFailure(
+            unlock_windows::system_ble::presenceEvidence(*task_->connection, *task_->sampler),
+            task_->started, GetTickCount64(), task_->deadline, task_->change.candidate.threshold);
     }
 
     void appendDiagnostic(const std::string& message) {
@@ -780,7 +788,7 @@ private:
         if (reason == AuthenticationFailure::none && task_->change.expected != bindingSummary())
             reason = AuthenticationFailure::bindingChanged;
         if (reason == AuthenticationFailure::none && grant_ && task_->connection)
-            reason = task_->connection->evidence().failure;
+            reason = unlockFailure();
         if (reason != AuthenticationFailure::none) rejectTask(reason);
     }
 
@@ -888,7 +896,7 @@ private:
                             backgroundError.clear();
                         }
                         if (desired && !retained && !preparation.failed()) {
-                            retained = std::make_shared<unlock_windows::system_ble::Session>(*desired, report);
+                            retained = std::make_shared<unlock_windows::system_ble::Session>(desired->bleId, report);
                             { std::lock_guard lock(mutex_); diagnosticSid_ = desired->accountSid; }
                             report("Maintain selected phone after native sign-in; no authorization created");
                         }
@@ -924,6 +932,7 @@ private:
                     continue;
                 }
                 std::shared_ptr<unlock_windows::system_ble::Session> connection;
+                std::shared_ptr<unlock_windows::system_ble::RssiSampler> sampler;
                 try {
                     if (preparation.failed() || !retainedBinding || *retainedBinding != task->change.candidate ||
                         !retainedConsole || retainedConsole->session != task->session ||
@@ -936,7 +945,7 @@ private:
                         retainedBinding = task->change.candidate;
                         retainedConsole = Console{task->session, task->identity.sid, !task->binding, task->logonId};
                         retainedGeneration = gConnectionGeneration.load();
-                        retained = std::make_shared<unlock_windows::system_ble::Session>(*retainedBinding, report);
+                        retained = std::make_shared<unlock_windows::system_ble::Session>(retainedBinding->bleId, report);
                     }
                     connection = retained;
                     const auto connectionGeneration = retainedGeneration;
@@ -947,7 +956,15 @@ private:
                             task->consoleGeneration == gConsoleGeneration.load() &&
                             task->identityGeneration == gIdentityGeneration.load();
                     });
-                    connection->verify();
+                    if (task->binding) {
+                        connection->connect();
+                        connection->verifyCommunication();
+                    }
+                    else {
+                        sampler = std::make_shared<unlock_windows::system_ble::RssiSampler>();
+                        unlock_windows::system_ble::verifyUnlockPresence(*connection, *sampler,
+                            task->started, task->deadline, task->change.candidate.threshold, report);
+                    }
                     {
                         std::lock_guard lock(mutex_);
                         const auto console = currentConsole();
@@ -957,6 +974,7 @@ private:
                         if (!stored || !sameIdentity(*stored, task->identity) || !sameIdentity(consoleIdentity(console), task->identity))
                             throw unlock_windows::system_ble::VerificationError(AuthenticationFailure::sessionChanged, "Full account identity changed");
                         task->connection = connection;
+                        task->sampler = sampler;
                         if (task->binding) {
                             enrollmentStore_.save(task->change.candidate, [&] {
                                 const auto latest = currentConsole();
@@ -971,8 +989,9 @@ private:
                             task->cancelled = true;
                         } else {
                             const auto proof = connection->evidence();
-                            if (proof.failure != AuthenticationFailure::none)
-                                throw unlock_windows::system_ble::VerificationError(proof.failure, "Evidence expired before approval");
+                            const auto failure = unlockFailure();
+                            if (failure != AuthenticationFailure::none)
+                                throw unlock_windows::system_ble::VerificationError(failure, "Evidence expired before approval");
                             std::array<std::uint8_t, kNonceSize> nonce{};
                             if (BCryptGenRandom(nullptr, nonce.data(), kNonceSize, BCRYPT_USE_SYSTEM_PREFERRED_RNG) < 0)
                                 fail("BLE grant nonce RNG failed");
@@ -984,11 +1003,14 @@ private:
                     }
                     while (!task->cancelled && !gStopping) {
                         connection->refresh();
+                        sampler->updateTarget(connection->target());
                         {
                             std::lock_guard lock(mutex_);
                             expireRequest(currentConsole());
-                            if (!task->cancelled && connection->evidence().failure != AuthenticationFailure::none)
-                                rejectTask(connection->evidence().failure);
+                            if (!task->cancelled) {
+                                const auto failure = unlockFailure();
+                                if (failure != AuthenticationFailure::none) rejectTask(failure);
+                            }
                         }
                         std::this_thread::sleep_for(std::chrono::milliseconds(20));
                     }
@@ -1004,6 +1026,19 @@ private:
                     preparation.fail();
                     std::lock_guard lock(mutex_);
                     if (!task->cancelled) rejectTask(task->binding ? AuthenticationFailure::storageFailed : AuthenticationFailure::internalError, winrt::to_string(error));
+                }
+                if (sampler) {
+                    try {
+                        std::lock_guard lock(mutex_);
+                        sampler->stop();
+                        task->sampler.reset();
+                    } catch (...) {
+                        const auto error = winrt::to_string(winrt::to_message());
+                        std::lock_guard lock(mutex_);
+                        appendDiagnostic("RSSI request cleanup failed: " + error);
+                        rejectTask(AuthenticationFailure::rssiUnavailable, error);
+                        task->sampler.reset();
+                    }
                 }
                 if (connection) {
                     try { connection->endRequest(); }

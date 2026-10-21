@@ -6,17 +6,17 @@ No iPhone app is used. Windows system pairing identifies the selected phone; the
 
 ## Shared contracts
 
-- [SystemBleContract.h](windows/Bluetooth/SystemBleContract.h): ANCS/Notification Source UUIDs, ContainerId property, RSSI range −100…−20 dBm, 1 dBm step, −60 dBm default, 30-second request deadline and 3-second evidence lifetime.
+- [SystemBleContract.h](windows/Bluetooth/SystemBleContract.h): ANCS/Notification Source UUIDs, binding record layout, RSSI range −100…−20 dBm, 1 dBm step, −60 dBm default, 30-second request deadline and 3-second evidence lifetime.
 - [SavedCredentialIpc.h](windows/SavedCredential/SavedCredentialIpc.h): IPC version **3**, operations, status/failure enums, binding and packet codecs. Unsupported versions and operations are rejected.
-- [SystemBleSession](windows/Bluetooth/SystemBleSession.cpp): reusable system relationship, protected GATT and address-associated RSSI operations, shared with the independent diagnostic.
+- [SystemBleSession](windows/Bluetooth/SystemBleSession.cpp): reusable paired BLE endpoint and protected GATT operations. [PresenceAuthorization](windows/Bluetooth/PresenceAuthorization.h) combines communication with request-local RSSI from [RssiSampler](windows/Bluetooth/RssiSampler.h), shared with the independent diagnostic.
 
 ## Setup and binding
 
 1. Save the password for the complete Windows-verified target identity: SID, QualifiedUserName and ProviderID.
 2. Windows Bluetooth settings owns pairing and numeric confirmation. Existing Windows pairing is reused; the app does not initiate a pairing ceremony.
-3. The ordinary unlocked console user's Status page watches paired Classic and BLE endpoints when no iPhone is bound. Added, Updated and Removed events update the list; returning from Windows settings performs another enumeration. Entries share one named row per valid ContainerId; missing containers remain separate, with no name-based identity matching. The user selects the device and clicks **Bind selected device**.
-4. Only a unique Windows ContainerId relationship links one paired Classic endpoint to one paired BLE endpoint. Display names and guessed MAC addresses do not select identity.
-5. Explicit confirmation and UAC submit an expected-record/candidate change. The service independently verifies the system relationship, authenticated Secure Connections pairing record, protected communication and RSSI before atomic commit. Cancellation or failure retains the old binding.
+3. The ordinary unlocked console user's Status page watches paired BLE endpoints when no iPhone is bound. Added, Updated and Removed events update the list; returning from Windows settings performs another enumeration. Each endpoint ID has its own named row, with no name-based identity matching. The user selects the device and clicks **Bind selected device**.
+4. The selected BLE endpoint ID must still appear in the system paired BLE list. Display names and guessed MAC addresses do not select identity.
+5. Explicit confirmation and UAC submit an expected-record/candidate change. The service independently verifies the selected paired BLE endpoint, authenticated Secure Connections pairing record and fresh protected communication before atomic commit; binding does not collect RSSI. Cancellation or failure retains the old binding.
 
 Newly paired devices are never registered automatically. The UI offers removal only for an existing binding; remove it before binding another device. Removal deletes the product binding, not Windows pairing. Threshold dragging changes only the pending UI value; Save requires UAC and restores the saved value on refusal or failure.
 
@@ -26,19 +26,21 @@ The read-only `serviceDiagnostics` IPC operation returns the latest request's ve
 
 `%ProgramData%\UnlockWindowsWithIPhone\enrollment.dat` retains machine-bound DPAPI encryption, protected pending-file creation, flushing and atomic replacement. SYSTEM and Administrators alone can write the file and its parent directory. The service owns storage; ordinary desktop clients read non-sensitive status over IPC.
 
-The encrypted version-2 record stores target SID, Classic/BLE endpoint IDs, ContainerId, display name and threshold. Unsupported formats and invalid binding states are errors; they are never migrated or silently overwritten. Read/corruption/permission errors are distinct from an absent record. Password vault format and LocalSystem user-scope DPAPI remain unchanged.
+The encrypted version-2 record retains its byte layout. It stores target SID, BLE endpoint ID, display name and threshold; legacy Classic ID and ContainerId slots are unused for identity verification. New bindings write empty/zero legacy values; old records remain readable without migration, and threshold edits preserve their values.
+
+Deploy matching desktop/service binaries; older software cannot read new bindings. Unsupported formats, corruption and permission failures remain errors, distinct from an absent record. Password storage is unchanged.
 
 ## Request and one-time approval
 
 1. Clicking **Unlock** lets an eligible LogonUI caller create a unique request for the locked physical console, with a fixed 30-second deadline. Selection and lock events alone do not start verification.
-2. One MTA BLE worker maintains the bound phone's connection after native sign-in, rechecks system endpoints and authenticated Secure Connections bond metadata for each request, and clears request evidence at request end. IPC only validates, queues and reads state; it never waits for GATT. An active or still-finishing BLE task returns **busy**; an idle retained connection does not.
+2. One MTA BLE worker maintains the bound phone's connection after native sign-in, rechecks the selected paired BLE endpoint and authenticated Secure Connections bond metadata for each request, and clears request evidence at request end. IPC only validates, queues and reads state; it never waits for GATT. An active or still-finishing BLE task returns **busy**; an idle retained connection does not.
 3. ANCS, Notification Source and CCCD structure queries use Windows Cached mode (which may query the device on a miss); valid objects are reused on the current connection. Each request performs authenticated/encrypted subscription, Uncached CCCD read and unsubscribe without reading notification contents. Service-list changes before the first complete protected subscribe/read/unsubscribe discard provisional structure and evidence within the original deadline; changes after that stability point invalidate the request.
-4. RSSI must be sampled after request start, match the current Bluetooth address **and address type**, be at most 3 seconds old and reach the saved threshold. Missing/old samples wait within the original deadline; fresh low samples fail immediately. Expired communication evidence is renewed when an eligible sample arrives. Address changes discard samples until a current associated sample exists.
+4. RSSI must be sampled after request start, match the current endpoint, Bluetooth address **and address type** and connection revision, be at most 3 seconds old and reach the saved threshold. After collection, the session rechecks the target and communication state under one lock. Missing/old samples wait within the original deadline; fresh low samples fail immediately. Time-expired communication evidence is renewed when an eligible sample arrives, within the same deadline. Address changes discard samples until a current associated sample exists.
 5. Request, binding, connection, full account identity, console session, logon identity and lock generation must still match before a one-time grant is made. Connection and invalidation listeners persist across requests; no historical request evidence is reused.
 6. CP receives one auto-submit offer and notifies LogonUI through `CredentialsChanged`. Claim rechecks communication/RSSI freshness and all contexts, **consumes authorization before decrypting the password**, then CP submits through native Negotiate.
 7. `ReportResult` sends the claim nonce and native status through `reportUnlockResult`. Only the matching pinned LogonUI process and unchanged account/session/binding can complete it. Native success records monotonic time and claimed RSSI in service memory; failures and duplicates cannot advance history or restore authorization.
 
-Disconnect, cancel, timeout, suspend/resume, unlock, logoff, account/console change, system relationship change or registration change invalidates the affected request/grant. Late callbacks cannot approve a cancelled or expired request; an unfinished native operation keeps the worker busy. No automatic retry creates another request or extends its deadline.
+Disconnect, cancel, timeout, suspend/resume, unlock, logoff, account/console change, selected BLE pairing/removal or registration change invalidates the affected request/grant. Late callbacks cannot approve a cancelled or expired request; an unfinished native operation keeps the worker busy. No automatic retry creates another request or extends its deadline.
 
 Unlock, request cancellation/expiry and credential consumption keep a valid connection. Disconnect clears old structure/evidence while Windows retains reconnection intent; reconnection creates no authorization. Logoff, account/binding change, suspend and service stop release the connection; native login/resume re-evaluates eligibility. Stable preparation errors remain attached to their target context after connection cleanup, without periodic reconstruction; an explicit request, changed context or changed healthy structure may prepare again. The independent diagnostic closes its one-shot session.
 

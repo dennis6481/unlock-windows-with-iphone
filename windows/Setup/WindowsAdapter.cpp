@@ -249,10 +249,10 @@ ProductVersion WindowsAdapter::binaryVersion(const std::filesystem::path& file) 
     checkWin32(GetFileVersionInfoW(file.c_str(), 0, size, data.data()), L"Read component product version");
     VS_FIXEDFILEINFO* info = nullptr; UINT bytes = 0;
     checkWin32(VerQueryValueW(data.data(), L"\\", reinterpret_cast<void**>(&info), &bytes), L"Read fixed product version");
-    if (bytes < sizeof(*info) || info->dwSignature != 0xFEEF04BD || LOWORD(info->dwProductVersionLS) != 0 ||
+    if (bytes < sizeof(*info) || info->dwSignature != 0xFEEF04BD ||
         info->dwProductVersionMS != info->dwFileVersionMS || info->dwProductVersionLS != info->dwFileVersionLS)
         fail(L"Invalid or inconsistent component version: " + file.wstring());
-    return {HIWORD(info->dwProductVersionMS), LOWORD(info->dwProductVersionMS), HIWORD(info->dwProductVersionLS)};
+    return {HIWORD(info->dwProductVersionMS), LOWORD(info->dwProductVersionMS), HIWORD(info->dwProductVersionLS), LOWORD(info->dwProductVersionLS)};
 }
 void WindowsAdapter::ensureDeploymentDirectories() const {
     ensureProtectedDirectory(desktopDirectory(), true);

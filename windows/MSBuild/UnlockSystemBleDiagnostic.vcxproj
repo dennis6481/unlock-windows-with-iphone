@@ -36,6 +36,8 @@
   <ItemGroup>
     <ClCompile Include="..\SystemBleDiagnostic\main.cpp" />
     <ClCompile Include="..\Bluetooth\SystemBleSession.cpp" />
+    <ClCompile Include="..\Bluetooth\RssiSampler.cpp" />
+    <ClCompile Include="..\Bluetooth\PresenceAuthorization.cpp" />
     <ClInclude Include="..\Bluetooth\SystemBleContract.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

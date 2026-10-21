@@ -19,7 +19,9 @@ void AboutPage::OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEventAr
     aboutPanel_ = StackPanel{};
     aboutPanel_.Spacing(16);
     aboutPanel_.Children().Append(text(UNLOCK_PRODUCT_DISPLAY_NAME, 24));
-    const auto version = L"Version " + unlock::components::kProductVersion.text();
+    const auto& productVersion = unlock::components::kProductVersion;
+    const auto version = L"Version " + std::to_wstring(productVersion.major) + L"." + std::to_wstring(productVersion.minor) +
+        L"." + std::to_wstring(productVersion.patch) + L" (Build " + std::to_wstring(productVersion.build) + L")";
     aboutPanel_.Children().Append(text(version.c_str()));
     HyperlinkButton project;
     project.Content(box_value(L"GitHub project"));
@@ -98,12 +100,12 @@ Windows::Foundation::IAsyncAction AboutPage::checkForUpdates(
             const auto remote = unlock::components::parseProductVersion(version);
             if (!remote || object.GetNamedBoolean(L"draft") || object.GetNamedBoolean(L"prerelease"))
                 message = L"GitHub returned an invalid release version or release type.";
-            else if (*remote > unlock::components::kProductVersion) {
-                message = L"Version " + remote->text() + L" is available.";
+            else if (remote->release() > unlock::components::kProductVersion.release()) {
+                message = L"Version " + std::wstring(version) + L" is available.";
                 releaseUrl = std::wstring(kProjectUrl) + L"/releases/tag/" + std::wstring(tag);
-            } else if (*remote == unlock::components::kProductVersion)
+            } else if (remote->release() == unlock::components::kProductVersion.release())
                 message = L"You are using the latest release.";
-            else message = L"Your version is newer than the latest published release (" + remote->text() + L").";
+            else message = L"Your version is newer than the latest published release (" + std::wstring(version) + L").";
         }
     } catch (...) {
         if (cancellation()) co_return;

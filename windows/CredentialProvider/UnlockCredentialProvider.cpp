@@ -189,7 +189,7 @@ struct ApprovalWatch final {
     void run() noexcept {
         using namespace unlock_windows::saved_credential;
         HRESULT previousError = S_OK;
-        bool automaticStarted = false;
+        ULONGLONG nextAutomaticCheck = 0;
         try {
             while (WaitForSingleObject(stop, 0) == WAIT_TIMEOUT) {
                 SensitiveBytes request;
@@ -243,10 +243,17 @@ struct ApprovalWatch final {
                 } else {
                     latest = L"Unlock with iPhone is temporarily unavailable. Use your PIN or password.";
                 }
-                // The privileged service admits one request only after an actual wake.
-                if (!automaticStarted && latestStatus &&
-                    latestStatus->stage == AuthenticationStage::idle &&
-                    automaticUnlockEnabled()) {
+                // Any newly activated locked-session sign-in screen may initiate
+                // an opt-in attempt. The LocalSystem service allows only one per
+                // lock/display-wake activation, independent of sleep state.
+                const auto now = GetTickCount64();
+                if (latestStatus &&
+                    (latestStatus->stage == AuthenticationStage::idle ||
+                     latestStatus->stage == AuthenticationStage::failed ||
+                     latestStatus->stage == AuthenticationStage::completed) &&
+                    now >= nextAutomaticCheck && automaticUnlockEnabled()) {
+                    // Keep polling light even when no wake ticket is available.
+                    nextAutomaticCheck = now + 1500;
                     SensitiveBytes startRequest;
                     Packet startReply;
                     if (encodeIdentity(identity, startRequest) &&
@@ -255,10 +262,8 @@ struct ApprovalWatch final {
                         AuthenticationStatus started;
                         if (decodeAuthenticationStatus(startReply.payload.value.data(),
                                 startReply.payload.value.size(), started) &&
-                            started.stage == AuthenticationStage::verifying) {
-                            automaticStarted = true;
+                            started.stage == AuthenticationStage::verifying)
                             latestStatus = std::move(started);
-                        }
                     }
                 }
                 {

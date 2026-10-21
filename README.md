@@ -89,13 +89,15 @@ Do not mix service, Credential Provider and desktop binaries from different buil
 Windows distribution is a single `windows/dist/UnlockWithIPhone_<version>_<architecture>_setup.exe` with the desktop app, service and Credential Provider embedded. The product version uses `major.minor.patch.build`; installer filenames omit build. Existing three-part versions are read with build `0`.
 
 
-## Optional automatic unlock after sleep
+## Optional automatic unlock on the sign-in screen
 
-The Status page offers **Automatic unlock after waking**, disabled by default and requiring UAC administrator confirmation to change. When enabled, Windows may initiate one fresh iPhone check after a genuine suspend/resume event if the existing locked-session Credential Provider is active. The existing single-use, native Windows authentication path remains unchanged; password and PIN providers remain available.
+The Status page offers **Automatic unlock on sign-in screen**, disabled by default and requiring administrator UAC approval. This broader mode uses a **new registry opt-in**; enabling the earlier "after sleep only" mode does not silently enable it. With this option turned on, the existing locked-session Credential Provider can start one fresh iPhone check when Windows enters the sign-in UI, even if the PC has **not** slept. Display-off to display-on transitions may enable one new attempt, without relying on S3 sleep or Modern Standby power resume. Existing one-time native credential submission and Windows password/PIN alternatives are preserved.
 
-- Ordinary **Win + L** locking never initiates automatic verification; the service must have seen system suspend and resume.
-- Some Windows lock-screen cover/Modern Standby scenarios may not activate the Credential Provider or emit the expected power event. Zero-click wake cannot be guaranteed until tested on hardware.
-- **Security:** someone can wake an unattended PC when the authorized iPhone is nearby. Keep this option off for shared or security-sensitive machines.
+- A manual **Win + L** lock can now be followed by immediate automatic unlock if the trusted iPhone is nearby. This behavior is intentional in the opt-in mode and makes manual locking ineffective while the iPhone is present.
+- Attempts are single-use for the current lock/display wake. Failure does not cause repeated Bluetooth retries on the same activation. A display-off/on transition may allow another attempt.
+- Windows may initially show its lock-screen cover before presenting LogonUI. A screen-wake event is not a guarantee LogonUI is loaded or that the cover automatically dismisses.
+- Initial sign-in after a restart, signed-out sessions and remote sessions remain ineligible. Real Windows hardware and Bluetooth validation are still required.
+- **Security:** anyone who wakes this PC with the authorized iPhone nearby may unlock it. Leave the option off on shared or security-sensitive machines.
 
 ## Known limitations
 

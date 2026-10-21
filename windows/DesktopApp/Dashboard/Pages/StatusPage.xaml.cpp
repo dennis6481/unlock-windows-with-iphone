@@ -62,7 +62,7 @@ void StatusPage::OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEventA
     automaticUnlock_.Click([weak = get_weak()](const auto&, const auto&) {
         changeAutomaticUnlock(weak);
     });
-    statusPanel_.Children().Append(settingsCard(L"Automatic unlock after waking",
+    statusPanel_.Children().Append(settingsCard(L"Automatic unlock on sign-in screen",
         automaticUnlockStatus_, L"\xE8F2", false));
     statusPanel_.Children().Append(automaticUnlock_);
     refreshAutomaticUnlock();
@@ -79,7 +79,7 @@ void StatusPage::refreshAutomaticUnlock() {
     if (!automaticUnlock_ || !automaticUnlockStatus_) return;
     const bool enabled = unlock_windows::saved_credential::automaticUnlockEnabled();
     automaticUnlockStatus_.Text(enabled
-        ? L"On: one iPhone check after sleep/resume only. Manual Win+L stays locked."
+        ? L"On: one iPhone check on each locked sign-in activation, including Win+L and display wake. Anyone near the paired iPhone may unlock this PC."
         : L"Off (default): click Unlock on the Windows sign-in tile.");
     automaticUnlock_.Content(box_value(hstring(enabled ? L"Disable automatic unlock (UAC)" : L"Enable automatic unlock (UAC)")));
     automaticUnlock_.IsEnabled(!stopped_ && !changingAutomaticUnlock_);

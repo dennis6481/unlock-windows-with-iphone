@@ -201,7 +201,7 @@ void testAuthenticationOperationPackets() {
         Packet inbound;
         const bool accepted = readPacket(pipe.server.get(), inbound, context);
         const DWORD error = GetLastError();
-        const bool known = operation == 9 || operation == 12 || operation == 15 || operation == 16 || (operation >= 18 && operation <= 28);
+        const bool known = operation == 9 || operation == 12 || operation == 15 || operation == 16 || (operation >= 18 && operation <= 29);
         require(isKnownOperation(operation) == known, "operation whitelist rejected new operation or accepted unknown operation");
         require(accepted == known, "packet parser must accept authentication operations and reject unknown operations");
         if (accepted) {
@@ -214,6 +214,8 @@ void testAuthenticationOperationPackets() {
 }
 
 void testLastUnlockCodec() {
+    require(requiresLogonUi(Operation::beginAutomaticVerification),
+        "automatic verification must only be callable by verified LogonUI");
     require(requiresLogonUi(Operation::reportUnlockResult) && !requiresLogonUi(Operation::lastUnlockStatus),
         "unlock result writes must require LogonUI; history reads must not");
     SensitiveBytes bytes;

@@ -7,13 +7,19 @@ namespace unlock_windows::saved_credential {
 // The machine-wide policy is off unless a DWORD value explicitly equals one.
 // Administrators must approve changes. It contains no password or device identifier.
 inline constexpr wchar_t kAutomaticUnlockKey[] = L"SOFTWARE\\UnlockWindowsWithIPhone";
-inline constexpr wchar_t kAutomaticUnlockValue[] = L"AutomaticUnlockOnResume";
-inline constexpr ULONGLONG kAutomaticResumeWindowMs = 20000;
+// Deliberately separate from the older on-resume setting. The expanded behavior
+// must be explicitly opted into again rather than silently widening consent.
+inline constexpr wchar_t kAutomaticUnlockValue[] = L"AutomaticUnlockAtLockScreen";
 
-inline bool automaticResumeEligible(bool enabled, bool locked, bool suspended,
-    ULONGLONG resumedAt, ULONGLONG now, bool consumed) noexcept {
-    return enabled && locked && !suspended && !consumed &&
-        resumedAt != 0 && now >= resumedAt && now - resumedAt <= kAutomaticResumeWindowMs;
+inline constexpr bool automaticUnlockEligible(bool enabled, bool locked,
+    bool suspended, bool sessionArmed, bool attemptConsumed) noexcept {
+    return enabled && locked && !suspended && sessionArmed && !attemptConsumed;
+}
+
+// A real display-off -> display-on transition may re-arm one attempt while
+// the same authenticated Windows session remains locked.
+inline constexpr bool automaticDisplayWakeRearms(bool previouslyOff, bool sessionArmed) noexcept {
+    return previouslyOff && sessionArmed;
 }
 
 inline bool automaticUnlockEnabled() noexcept {

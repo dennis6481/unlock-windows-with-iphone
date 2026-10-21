@@ -231,14 +231,18 @@ std::wstring moduleDirectory() {
 }
 
 void run() {
-    using unlock_windows::saved_credential::automaticResumeEligible;
-    require(!automaticResumeEligible(false, true, false, 100, 110, false), "default off must deny");
-    require(!automaticResumeEligible(true, false, false, 100, 110, false), "unlocked console must deny");
-    require(!automaticResumeEligible(true, true, true, 100, 110, false), "suspended system must deny");
-    require(!automaticResumeEligible(true, true, false, 0, 110, false), "ordinary lock must deny");
-    require(!automaticResumeEligible(true, true, false, 100, 110, true), "consumed wake must deny");
-    require(!automaticResumeEligible(true, true, false, 100, 20101, false), "old wake must deny");
-    require(automaticResumeEligible(true, true, false, 100, 110, false), "fresh wake should permit one attempt");
+    using unlock_windows::saved_credential::automaticUnlockEligible;
+    using unlock_windows::saved_credential::automaticDisplayWakeRearms;
+    require(!automaticUnlockEligible(false, true, false, true, false), "default-off policy must deny");
+    require(!automaticUnlockEligible(true, false, false, true, false), "unlocked session must deny");
+    require(!automaticUnlockEligible(true, true, true, true, false), "suspended machine must deny");
+    require(!automaticUnlockEligible(true, true, false, false, false), "initial logon without lock must deny");
+    require(!automaticUnlockEligible(true, true, false, true, true), "consumed screen attempt must deny");
+    require(automaticUnlockEligible(true, true, false, true, false),
+        "locked LogonUI must qualify without sleep or power-resume event");
+    require(!automaticDisplayWakeRearms(false, true), "initial display-on cannot rearm");
+    require(!automaticDisplayWakeRearms(true, false), "signed-out display-on cannot rearm");
+    require(automaticDisplayWakeRearms(true, true), "display off/on must permit a new locked-session attempt");
     const auto comResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     require(SUCCEEDED(comResult), "CoInitializeEx failed");
 

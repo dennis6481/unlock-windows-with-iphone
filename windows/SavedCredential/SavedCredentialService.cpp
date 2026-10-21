@@ -53,10 +53,12 @@ std::atomic<ULONGLONG> gIdentityGeneration{0};
 std::atomic<ULONGLONG> gUnlockHistoryGeneration{0};
 std::atomic<ULONGLONG> gConnectionGeneration{0};
 std::atomic_bool gSuspended{false};
-// A fresh service-observed suspend/resume permits only one automatic attempt.
-std::atomic_bool gAutoWasSuspended{false};
+// Fail closed until a real existing-session lock event is observed.
+// A display-off -> display-on transition may re-arm one attempt. No timers
+// or bluetooth proximity alone can initiate authentication.
+std::atomic_bool gAutoSessionArmed{false};
 std::atomic_bool gAutoAttemptConsumed{true};
-std::atomic<ULONGLONG> gAutoResumedAt{0};
+std::atomic_bool gAutoDisplayWasOff{false};
 std::atomic<DWORD> gObservedConsoleSession{0xffffffff};
 std::atomic_bool gPipeFailed{false};
 SERVICE_STATUS_HANDLE gStatusHandle = nullptr;
@@ -538,9 +540,9 @@ public:
                 request.operation == Operation::beginAutomaticVerification) {
                 if (!client.logonUi || !console.locked) return response;
                 const bool automatic = request.operation == Operation::beginAutomaticVerification;
-                if (automatic && !automaticResumeEligible(automaticUnlockEnabled(), console.locked,
-                        gSuspended.load(), gAutoResumedAt.load(), GetTickCount64(),
-                        gAutoAttemptConsumed.load())) return response;
+                if (automatic && !automaticUnlockEligible(automaticUnlockEnabled(), console.locked,
+                        gSuspended.load(), gAutoSessionArmed.load(), gAutoAttemptConsumed.load()))
+                    return response;
                 Identity identity;
                 if (!decodeIdentity(request.payload.value.data(), request.payload.value.size(), identity) ||
                     identity.sid != console.sid) return response;
@@ -553,7 +555,10 @@ public:
                 if (!stored || !sameIdentity(*stored, identity)) return response;
                 if (task_) { response.result = Result::busy; setText(response.payload, "Bluetooth verification is still finishing. Try again."); return response; }
                 // Consume before BLE starts; failure never loops or extends the deadline.
+                // Manual verification also consumes this screen activation to avoid
+                // an automatic retry after an explicit Unlock attempt.
                 if (automatic && gAutoAttemptConsumed.exchange(true)) return response;
+                if (!automatic) gAutoAttemptConsumed = true;
                 queueTask(identity, console, {original, original.record}, false);
                 if (!encodeAuthenticationStatus(authenticationStatus_, response.payload)) fail("authentication status encoding failed");
                 response.result = Result::success;
@@ -1197,20 +1202,34 @@ DWORD WINAPI serviceControl(const DWORD control, const DWORD eventType, void* ev
         return NO_ERROR;
     }
     if (control == SERVICE_CONTROL_POWEREVENT) {
+        if (eventType == PBT_POWERSETTINGCHANGE) {
+            const auto* setting = static_cast<const POWERBROADCAST_SETTING*>(eventData);
+            if (setting != nullptr &&
+                IsEqualGUID(setting->PowerSetting, GUID_CONSOLE_DISPLAY_STATE) &&
+                setting->DataLength == sizeof(DWORD)) {
+                DWORD state = 0;
+                std::memcpy(&state, setting->Data, sizeof(state));
+                if (state == PowerMonitorOff) {
+                    gAutoDisplayWasOff = true;
+                } else if (state == PowerMonitorOn) {
+                    const bool previouslyOff = gAutoDisplayWasOff.exchange(false);
+                    if (automaticDisplayWakeRearms(previouslyOff, gAutoSessionArmed.load()))
+                        gAutoAttemptConsumed = false;
+                }
+            }
+            return NO_ERROR;
+        }
         ++gConsoleGeneration;
         if (eventType == PBT_APMSUSPEND) {
             gSuspended = true;
-            gAutoWasSuspended = true;
-            gAutoResumedAt = 0;
+            gAutoDisplayWasOff = true;
             gAutoAttemptConsumed = true;
             ++gConnectionGeneration;
         } else if (eventType == PBT_APMRESUMEAUTOMATIC || eventType == PBT_APMRESUMESUSPEND ||
                    eventType == PBT_APMRESUMECRITICAL) {
+            // A background resume alone cannot authorize an unattended unlock.
+            // Display-on or a fresh session-lock event initiates the next attempt.
             gSuspended = false;
-            if (gAutoWasSuspended.exchange(false)) {
-                gAutoResumedAt = GetTickCount64();
-                gAutoAttemptConsumed = false;
-            }
             ++gConnectionGeneration;
         }
         return NO_ERROR;
@@ -1222,9 +1241,15 @@ DWORD WINAPI serviceControl(const DWORD control, const DWORD eventType, void* ev
             eventType == WTS_CONSOLE_CONNECT ||
             eventType == WTS_CONSOLE_DISCONNECT || eventType == WTS_REMOTE_DISCONNECT)) {
             ++gConsoleGeneration;
-            if (eventType == WTS_SESSION_UNLOCK || eventType == WTS_SESSION_LOGON ||
-                eventType == WTS_SESSION_LOGOFF || eventType == WTS_CONSOLE_DISCONNECT) {
-                gAutoResumedAt = 0;
+            if (eventType == WTS_SESSION_LOCK) {
+                gAutoSessionArmed = true;
+                gAutoDisplayWasOff = false;
+                gAutoAttemptConsumed = false;
+            } else if (eventType == WTS_SESSION_UNLOCK || eventType == WTS_SESSION_LOGON ||
+                       eventType == WTS_SESSION_LOGOFF || eventType == WTS_CONSOLE_DISCONNECT ||
+                       eventType == WTS_REMOTE_DISCONNECT) {
+                gAutoSessionArmed = false;
+                gAutoDisplayWasOff = false;
                 gAutoAttemptConsumed = true;
             }
             if (eventType != WTS_SESSION_UNLOCK) ++gIdentityGeneration;
@@ -1288,6 +1313,12 @@ void WINAPI serviceMain(DWORD, LPWSTR*) {
     reportServiceState(SERVICE_START_PENDING);
     try {
         {
+            // Services receive console monitor power events even when the user
+            // session is locked. Normal screen wake does not require S3 sleep.
+            const HPOWERNOTIFY displayNotification = RegisterPowerSettingNotification(
+                gStatusHandle, &GUID_CONSOLE_DISPLAY_STATE, DEVICE_NOTIFY_SERVICE_HANDLE);
+            if (!displayNotification)
+                OutputDebugStringW(L"[SavedCredential] console display notification unavailable; session-lock trigger remains available\n");
             Handler handler;
             PSECURITY_DESCRIPTOR descriptor = nullptr;
             if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
@@ -1306,6 +1337,8 @@ void WINAPI serviceMain(DWORD, LPWSTR*) {
             reportServiceState(SERVICE_RUNNING);
             servePipe(pipe.value, handler);
             gStopping = true;
+            if (displayNotification && !UnregisterPowerSettingNotification(displayNotification))
+                OutputDebugStringW(L"[SavedCredential] console display notification unregister failed\n");
         }
         reportServiceState(SERVICE_STOPPED,
             gPipeFailed.load() ? ERROR_SERVICE_SPECIFIC_ERROR : NO_ERROR);

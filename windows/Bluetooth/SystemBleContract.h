@@ -13,7 +13,7 @@ inline constexpr int kMinimumThreshold = -100;
 inline constexpr int kMaximumThreshold = -20;
 inline constexpr int kDefaultThreshold = -60;
 inline constexpr std::uint64_t kEvidenceLifetimeMs = 3'000;
-inline constexpr std::uint64_t kOperationLifetimeMs = 30'000;
+inline constexpr std::uint64_t kOperationLifetimeMs = 15'000;
 inline constexpr int kThresholdStep = 1;
 
 inline constexpr bool validThreshold(int value) noexcept {

@@ -35,7 +35,9 @@ using unlock_windows::credential_provider::kUnlockCredentialProviderClsid;
 constexpr DWORD kIconField = 0;
 constexpr DWORD kTitleField = 1;
 constexpr DWORD kSubmitField = 2;
-constexpr DWORD kFieldCount = 3;
+constexpr DWORD kErrorField = 3;
+constexpr DWORD kOkField = 4;
+constexpr DWORD kFieldCount = 5;
 constexpr UINT kApprovalMessage = WM_APP + 73;
 
 struct FieldDefinition final {
@@ -48,7 +50,9 @@ struct FieldDefinition final {
 const FieldDefinition kFields[] = {
     {kIconField, CPFT_TILE_IMAGE, nullptr, CPFG_CREDENTIAL_PROVIDER_LOGO},
     {kTitleField, CPFT_LARGE_TEXT, UNLOCK_PRODUCT_DISPLAY_NAME, GUID{}},
-    {kSubmitField, CPFT_SUBMIT_BUTTON, L"Unlock", GUID{}},
+    {kSubmitField, CPFT_SUBMIT_BUTTON, L"Unlock", CPFG_STANDALONE_SUBMIT_BUTTON},
+    {kErrorField, CPFT_SMALL_TEXT, nullptr, GUID{}},
+    {kOkField, CPFT_COMMAND_LINK, L"OK", CPFG_STYLE_LINK_AS_BUTTON},
 };
 
 struct TemporaryPassword final {
@@ -108,6 +112,7 @@ struct ApprovalWatch final {
     std::mutex mutex;
     std::optional<unlock_windows::saved_credential::AutoSubmitOffer> offer;
     std::wstring failure;
+    ULONGLONG sampledAt = 0;
     std::optional<unlock_windows::saved_credential::AuthenticationStatus> authenticationStatus;
     std::thread worker;
 
@@ -122,9 +127,10 @@ struct ApprovalWatch final {
         HRESULT previousError = S_OK;
         try {
             while (WaitForSingleObject(stop, 0) == WAIT_TIMEOUT) {
+                const auto sampleStarted = GetTickCount64();
+                CallDiagnostics diagnostics;
                 SensitiveBytes request;
                 Packet reply;
-                CallDiagnostics diagnostics;
                 HRESULT status = S_OK;
                 if (!encodeIdentity(identity, request)) {
                     status = E_INVALIDARG;
@@ -173,9 +179,11 @@ struct ApprovalWatch final {
                 } else {
                     latest = L"Unlock with iPhone is temporarily unavailable. Use your PIN or password.";
                 }
+                if (FAILED(status)) latest = L"Unlock with iPhone is temporarily unavailable. Use your PIN or password.";
                 {
                     std::lock_guard lock(mutex);
                     failure = latest;
+                    sampledAt = sampleStarted;
                     authenticationStatus = std::move(latestStatus);
                 }
                 if (!PostMessageW(window, kApprovalMessage, generation, 0)) {
@@ -527,7 +535,7 @@ public:
     }
 
     HRESULT STDMETHODCALLTYPE SetDeselected() override {
-        if (authenticationPending_) {
+        if (uiState_ == UiState::waiting) {
             try {
                 using namespace unlock_windows::saved_credential;
                 SensitiveBytes request;
@@ -535,10 +543,9 @@ public:
                 Packet reply;
                 if (!call(Operation::cancelVerification, std::move(request), reply, 250) || reply.result != Result::success)
                     OutputDebugStringW(L"[UnlockCP] verification cancellation failed; service deadline still applies\n");
-                authenticationPending_ = false;
-                automaticApproval_.reset();
             } catch (...) { return E_FAIL; }
         }
+        resetAttempt();
         return S_OK;
     }
 
@@ -552,13 +559,21 @@ public:
         }
         switch (fieldId) {
             case kIconField:
-            case kTitleField:
                 *state = CPFS_DISPLAY_IN_BOTH;
                 *interactiveState = CPFIS_READONLY;
                 return S_OK;
+            case kTitleField:
+                *state = uiState_ == UiState::failed ? CPFS_HIDDEN : CPFS_DISPLAY_IN_BOTH;
+                *interactiveState = CPFIS_READONLY;
+                return S_OK;
             case kSubmitField:
-                *state = CPFS_DISPLAY_IN_SELECTED_TILE;
+                *state = uiState_ == UiState::initial ? CPFS_DISPLAY_IN_SELECTED_TILE : CPFS_HIDDEN;
                 *interactiveState = CPFIS_NONE;
+                return S_OK;
+            case kErrorField:
+            case kOkField:
+                *state = uiState_ == UiState::failed ? CPFS_DISPLAY_IN_SELECTED_TILE : CPFS_HIDDEN;
+                *interactiveState = fieldId == kErrorField ? CPFIS_READONLY : CPFIS_NONE;
                 return S_OK;
             default:
                 return E_INVALIDARG;
@@ -577,7 +592,13 @@ public:
                 *value = nullptr;
                 return S_OK;
             case kTitleField:
-                return copyString(UNLOCK_PRODUCT_DISPLAY_NAME, value);
+                return copyString(uiState_ == UiState::waiting || uiState_ == UiState::submitting
+                    ? L"   Just a moment..." : L"  " UNLOCK_PRODUCT_DISPLAY_NAME, value);
+            case kSubmitField:
+            case kOkField:
+                return copyString(kFields[fieldId].label, value);
+            case kErrorField:
+                return copyString(errorText_.c_str(), value);
             default:
                 if (value != nullptr) {
                     *value = nullptr;
@@ -622,7 +643,7 @@ public:
         if (fieldId != kSubmitField) {
             return E_INVALIDARG;
         }
-        *adjacentTo = kTitleField;
+        *adjacentTo = kSubmitField;
         return S_OK;
     }
 
@@ -663,38 +684,69 @@ public:
         return E_INVALIDARG;
     }
 
-    HRESULT STDMETHODCALLTYPE CommandLinkClicked(DWORD) override {
-        return E_INVALIDARG;
+    HRESULT STDMETHODCALLTYPE CommandLinkClicked(DWORD fieldId) override {
+        if (fieldId != kOkField || uiState_ != UiState::failed) return E_INVALIDARG;
+        resetAttempt();
+        return S_OK;
     }
 
-    void showAuthenticationStatus(const std::wstring& text) {
-        if (events_ != nullptr) {
-            const HRESULT result = events_->SetFieldString(this, kTitleField,
-                text.empty() ? UNLOCK_PRODUCT_DISPLAY_NAME : text.c_str());
-            if (FAILED(result)) logAutoSubmitError(L"authentication status field", result);
+    void refreshFields() {
+        if (events_ == nullptr) return;
+        for (const DWORD fieldId : {kTitleField, kSubmitField, kErrorField, kOkField}) {
+            HRESULT result = S_OK;
+            if (fieldId == kTitleField || fieldId == kErrorField) {
+                LPWSTR text = nullptr;
+                result = GetStringValue(fieldId, &text);
+                if (SUCCEEDED(result)) result = events_->SetFieldString(this, fieldId, text);
+                CoTaskMemFree(text);
+                if (FAILED(result)) logAutoSubmitError(L"authentication field text", result);
+            }
+            CREDENTIAL_PROVIDER_FIELD_STATE state;
+            CREDENTIAL_PROVIDER_FIELD_INTERACTIVE_STATE interactiveState;
+            result = GetFieldState(fieldId, &state, &interactiveState);
+            if (SUCCEEDED(result)) result = events_->SetFieldState(this, fieldId, state);
+            if (FAILED(result)) logAutoSubmitError(L"authentication field visibility", result);
         }
     }
 
-    void showAuthenticationStatus(const unlock_windows::saved_credential::AuthenticationStatus& status) {
-        using namespace unlock_windows::saved_credential;
-        showAuthenticationStatus(status.stage == AuthenticationStage::verifying
-            ? L"Just a moment\u2026" : authenticationStatusText(status));
+    void resetAttempt() {
+        uiState_ = UiState::initial;
+        errorText_.clear();
+        authenticationRequestId_.clear();
+        automaticApproval_.reset();
+        refreshFields();
+    }
+
+    HRESULT showFailure(const wchar_t* text) {
+        try {
+            errorText_ = text;
+        } catch (const std::bad_alloc&) {
+            logAutoSubmitError(L"authentication error text", E_OUTOFMEMORY);
+            return E_OUTOFMEMORY;
+        }
+        uiState_ = UiState::failed;
+        automaticApproval_.reset();
+        refreshFields();
+        return S_OK;
+    }
+
+    bool awaitingApproval() const noexcept {
+        return uiState_ == UiState::waiting;
     }
 
     void updateAuthenticationStatus(const std::optional<unlock_windows::saved_credential::AuthenticationStatus>& status,
-                                    const std::wstring& failure) {
-        if (!authenticationPending_) return;
+                                    const std::wstring& failure, ULONGLONG sampledAt) {
+        if (uiState_ != UiState::waiting) return;
         if (!failure.empty()) {
-            authenticationPending_ = false;
-            showAuthenticationStatus(failure);
+            if (sampledAt >= authenticationStartedAt_) showFailure(failure.c_str());
         } else if (status && status->requestId == authenticationRequestId_) {
             if (status->stage == unlock_windows::saved_credential::AuthenticationStage::failed ||
-                status->stage == unlock_windows::saved_credential::AuthenticationStage::consumed)
-                authenticationPending_ = false;
-            showAuthenticationStatus(*status);
-        } else if (status && status->stage == unlock_windows::saved_credential::AuthenticationStage::idle) {
-            authenticationPending_ = false;
-            showAuthenticationStatus(L"Click Unlock to verify your iPhone presence.");
+                status->stage == unlock_windows::saved_credential::AuthenticationStage::consumed) {
+                showFailure(unlock_windows::saved_credential::authenticationStatusText(*status));
+            }
+        } else if (status && status->stage == unlock_windows::saved_credential::AuthenticationStage::idle &&
+                   sampledAt >= authenticationStartedAt_) {
+            showFailure(L"The iPhone presence request is no longer available. Click OK, then Unlock to try again.");
         }
     }
 
@@ -711,19 +763,22 @@ public:
 
         *serialization = {};
         *optionalStatusText = nullptr;
-        *optionalStatusIcon = CPSI_WARNING;
+        *optionalStatusIcon = CPSI_NONE;
         *response = CPGSR_NO_CREDENTIAL_NOT_FINISHED;
+        if (uiState_ == UiState::failed || (uiState_ == UiState::submitting && !automaticApproval_)) {
+            return S_OK;
+        }
         serializedClaim_.reset();
 
         const auto automaticApproval = std::exchange(automaticApproval_, std::nullopt);
 
         if (qualifiedUserName_.empty() || userSid_.empty() || primarySid_ != userSid_ ||
             consoleSessionId_ == 0xffffffff) {
-            return copyString(L"This Windows account couldn't be verified. Use your PIN or password.", optionalStatusText);
+            return showFailure(L"This Windows account couldn't be verified. Use your PIN or password.");
         }
 
         if (WTSGetActiveConsoleSessionId() != consoleSessionId_) {
-            return copyString(L"Your Windows session changed. Start again.", optionalStatusText);
+            return showFailure(L"Your Windows session changed. Start again.");
         }
         std::wstring consoleSid;
         DWORD consoleSessionId = 0xffffffff;
@@ -739,14 +794,14 @@ public:
                 consoleIdentityStage, static_cast<unsigned long>(consoleStatus)
             );
             OutputDebugStringW(statusText);
-            return copyString(L"This Windows account couldn't be verified. Use your PIN or password.", optionalStatusText);
+            return showFailure(L"This Windows account couldn't be verified. Use your PIN or password.");
         }
         if (consoleSessionId != consoleSessionId_ || consoleSid != userSid_) {
-            return copyString(L"Phone unlock is unavailable for this Windows account. Use your PIN or password.", optionalStatusText);
+            return showFailure(L"Phone unlock is unavailable for this Windows account. Use your PIN or password.");
         }
 
         if (!automaticApproval) {
-            if (authenticationPending_) {
+            if (uiState_ == UiState::waiting) {
                 *optionalStatusIcon = CPSI_NONE;
                 return S_OK;
             }
@@ -758,27 +813,28 @@ public:
                 const Identity identity{userSid_, qualifiedUserName_, providerId_};
                 if (!encodeIdentity(identity, request)) {
                     logAutoSubmitError(L"phone authentication identity encoding", E_INVALIDARG);
-                    return copyString(L"This Windows account couldn't be verified. Use your PIN or password.", optionalStatusText);
+                    return showFailure(L"This Windows account couldn't be verified. Use your PIN or password.");
                 }
                 if (!call(Operation::beginVerification, std::move(request), reply, 250, &diagnostics)) {
                     logAutoSubmitError(L"begin phone authentication", HRESULT_FROM_WIN32(diagnostics.win32Error));
-                    return copyString(L"Unlock with iPhone is temporarily unavailable. Use your PIN or password.", optionalStatusText);
+                    return showFailure(L"Unlock with iPhone is temporarily unavailable. Use your PIN or password.");
                 }
                 if (reply.result != Result::success) {
                     const std::string text(reply.payload.value.begin(), reply.payload.value.end());
                     const std::wstring message(text.begin(), text.end());
-                    return copyString(message.empty() ? L"Phone unlock is unavailable for this account. Use your PIN or password." :
-                        message.c_str(), optionalStatusText);
+                    return showFailure(message.empty() ? L"Phone unlock is unavailable for this account. Use your PIN or password." :
+                        message.c_str());
                 }
                 AuthenticationStatus started;
                 if (!decodeAuthenticationStatus(reply.payload.value.data(), reply.payload.value.size(), started) ||
                     started.stage != AuthenticationStage::verifying) {
                     logAutoSubmitError(L"phone request framing", HRESULT_FROM_WIN32(ERROR_INVALID_DATA));
-                    return copyString(L"Unlock with iPhone is temporarily unavailable. Use your PIN or password.", optionalStatusText);
+                    return showFailure(L"Unlock with iPhone is temporarily unavailable. Use your PIN or password.");
                 }
                 authenticationRequestId_ = started.requestId;
-                authenticationPending_ = true;
-                showAuthenticationStatus(started);
+                authenticationStartedAt_ = GetTickCount64();
+                uiState_ = UiState::waiting;
+                refreshFields();
                 *optionalStatusIcon = CPSI_NONE;
                 return S_OK;
             } catch (const std::bad_alloc&) {
@@ -790,10 +846,8 @@ public:
         ULONG authenticationPackage = 0;
         const auto packageStatus = negotiatePackage(authenticationPackage);
         if (FAILED(packageStatus)) {
-            return copyString(
-                L"The Windows Negotiate authentication package is unavailable.",
-                optionalStatusText
-            );
+            return showFailure(
+                L"The Windows Negotiate authentication package is unavailable.");
         }
 
         TemporaryPassword savedPassword;
@@ -810,18 +864,16 @@ public:
                     std::move(captureRequest), captureReply
                 ) || captureReply.result != unlock_windows::saved_credential::Result::success ||
                 captureReply.payload.value.size() != savedNonce.size()) {
-                return copyString(L"This Windows account couldn't be verified. Use your PIN or password, then try again.",
-                    optionalStatusText);
+                return showFailure(L"This Windows account couldn't be verified. Use your PIN or password, then try again.");
             }
             std::copy_n(captureReply.payload.value.begin(), savedNonce.size(), savedNonce.begin());
             if (automaticApproval && *automaticApproval != savedNonce) {
-                return copyString(L"The iPhone presence check is no longer valid. Click Unlock again.",
-                    optionalStatusText);
+                return showFailure(L"The iPhone presence check is no longer valid. Click Unlock again.");
             }
             unlock_windows::saved_credential::SensitiveBytes request;
             unlock_windows::saved_credential::Packet reply;
             if (!unlock_windows::saved_credential::encodeIdentity(identity, request)) {
-                return copyString(L"This Windows account couldn't be verified. Use your PIN or password.", optionalStatusText);
+                return showFailure(L"This Windows account couldn't be verified. Use your PIN or password.");
             }
             request.value.insert(request.value.end(), savedNonce.begin(), savedNonce.end());
             if (!unlock_windows::saved_credential::call(
@@ -830,8 +882,7 @@ public:
                 ) || reply.result != unlock_windows::saved_credential::Result::success ||
                 reply.payload.value.empty() || reply.payload.value.size() > 2048 ||
                 reply.payload.value.size() % sizeof(wchar_t) != 0) {
-                return copyString(L"The iPhone presence check could not be used. Click Unlock again.",
-                    optionalStatusText);
+                return showFailure(L"The iPhone presence check could not be used. Click Unlock again.");
             }
             const auto chars = reply.payload.value.size() / sizeof(wchar_t);
             savedPassword.value.resize(chars + 1, L'\0');
@@ -839,7 +890,7 @@ public:
             if (savedPassword.value[0] == L'\0' ||
                 std::find(savedPassword.value.begin(), savedPassword.value.begin() + chars, L'\0') !=
                     savedPassword.value.begin() + chars) {
-                return copyString(L"The saved password couldn't be retrieved. Use your PIN or password.", optionalStatusText);
+                return showFailure(L"The saved password couldn't be retrieved. Use your PIN or password.");
             }
             reply.payload.clear();
         } catch (const std::bad_alloc&) {
@@ -852,10 +903,8 @@ public:
             flags, const_cast<LPWSTR>(qualifiedUserName_.c_str()), savedPassword.value.data(), nullptr, &size
         );
         if (sized || GetLastError() != ERROR_INSUFFICIENT_BUFFER || size == 0) {
-            return copyString(
-                L"Windows couldn't prepare phone unlock. Use your PIN or password.",
-                optionalStatusText
-            );
+            return showFailure(
+                L"Windows couldn't prepare phone unlock. Use your PIN or password.");
         }
 
         const DWORD allocatedSize = size;
@@ -869,7 +918,7 @@ public:
         if (!packedResult) {
             SecureZeroMemory(packed, allocatedSize);
             CoTaskMemFree(packed);
-            return copyString(L"Windows couldn't prepare phone unlock. Use your PIN or password.", optionalStatusText);
+            return showFailure(L"Windows couldn't prepare phone unlock. Use your PIN or password.");
         }
 
         serialization->ulAuthenticationPackage = authenticationPackage;
@@ -911,6 +960,7 @@ public:
                 logAutoSubmitError(L"native unlock result reporting", E_FAIL);
             }
         }
+        resetAttempt();
         return S_OK;
     }
 
@@ -957,21 +1007,24 @@ public:
         qualifiedUserName_.clear();
         providerId_ = GUID{};
         consoleSessionId_ = 0xffffffff;
-        automaticApproval_.reset();
+        // SetUserArray preserves an attempt only after matching the identity/session.
         serializedClaim_.reset();
-        authenticationPending_ = false;
     }
 
     void armAutomaticSubmission(const std::array<std::uint8_t,
             unlock_windows::saved_credential::kNonceSize>& nonce) noexcept {
-        authenticationPending_ = false;
+        uiState_ = UiState::submitting;
         automaticApproval_ = nonce;
+        refreshFields();
     }
 
 private:
     std::atomic<ULONG> refCount_{1};
-    bool authenticationPending_ = false;
+    enum class UiState { initial, waiting, submitting, failed };
+    UiState uiState_ = UiState::initial;
+    std::wstring errorText_;
     std::string authenticationRequestId_;
+    ULONGLONG authenticationStartedAt_ = 0;
     ICredentialProviderCredentialEvents* events_ = nullptr;
     std::wstring userSid_;
     std::wstring primarySid_;
@@ -1291,6 +1344,10 @@ public:
             sidValue, primarySid, qualifiedName, providerId, consoleSessionId
         );
         if (SUCCEEDED(result)) {
+            const bool sameUser = previousSession == consoleSessionId &&
+                previousIdentity.sid == sidValue && previousIdentity.qualifiedUserName == qualifiedName &&
+                IsEqualGUID(previousIdentity.providerId, providerId);
+            if (!sameUser) credential_->resetAttempt();
             hasUserSid_ = true;
             try {
                 identity_ = {sidValue, qualifiedName, providerId};
@@ -1301,11 +1358,10 @@ public:
             consoleSessionId_ = SUCCEEDED(consoleStatus) && consoleSid == sidValue
                 ? consoleSessionId : 0xffffffff;
             result = startWatching();
-            if (SUCCEEDED(result) && previousOffer && previousSession == consoleSessionId_ &&
-                previousIdentity.sid == identity_.sid &&
-                previousIdentity.qualifiedUserName == identity_.qualifiedUserName &&
-                IsEqualGUID(previousIdentity.providerId, identity_.providerId) &&
-                GetTickCount64() < previousOffer->expiresAt) pendingAutomaticOffer_ = previousOffer;
+            if (SUCCEEDED(result) && previousOffer && sameUser &&
+                credential_->awaitingApproval() && GetTickCount64() < previousOffer->expiresAt) {
+                pendingAutomaticOffer_ = previousOffer;
+            }
         }
         return result;
     }
@@ -1361,7 +1417,7 @@ public:
         *autoLogonWithDefault = FALSE;
         if (pendingAutomaticOffer_) {
             const auto offer = std::exchange(pendingAutomaticOffer_, std::nullopt);
-            if (events_ != nullptr && GetTickCount64() < offer->expiresAt &&
+            if (credential_->awaitingApproval() && events_ != nullptr && GetTickCount64() < offer->expiresAt &&
                 WTSGetActiveConsoleSessionId() == consoleSessionId_) {
                 credential_->armAutomaticSubmission(offer->nonce);
                 *defaultIndex = 0;
@@ -1476,15 +1532,17 @@ private:
         if (!watch_ || generation != watchGeneration_ || !hasUserSid_ || events_ == nullptr) return;
         std::optional<unlock_windows::saved_credential::AutoSubmitOffer> offer;
         std::wstring failure;
+        ULONGLONG sampledAt = 0;
         std::optional<unlock_windows::saved_credential::AuthenticationStatus> authenticationStatus;
         {
             std::lock_guard lock(watch_->mutex);
             offer = std::exchange(watch_->offer, std::nullopt);
             failure = watch_->failure;
+            sampledAt = watch_->sampledAt;
             authenticationStatus = watch_->authenticationStatus;
         }
-        credential_->updateAuthenticationStatus(authenticationStatus, failure);
-        if (!offer || GetTickCount64() >= offer->expiresAt ||
+        credential_->updateAuthenticationStatus(authenticationStatus, failure, sampledAt);
+        if (!offer || !credential_->awaitingApproval() || GetTickCount64() >= offer->expiresAt ||
             WTSGetActiveConsoleSessionId() != consoleSessionId_) return;
         pendingAutomaticOffer_ = offer;
         auto* events = events_;
@@ -1494,6 +1552,7 @@ private:
         if (FAILED(status)) {
             pendingAutomaticOffer_.reset();
             logAutoSubmitError(L"CredentialsChanged", status);
+            credential_->showFailure(L"Unlock with iPhone is temporarily unavailable. Use your PIN or password.");
         } else {
             OutputDebugStringW(L"[UnlockCP] presence authorization triggered CredentialsChanged\n");
         }

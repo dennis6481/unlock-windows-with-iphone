@@ -21,12 +21,6 @@ Keep each pull request focused on one objective. Include a description of the ch
 - Before replacing installation paths or changing persisted formats, agree with the maintainer on compatibility with older product versions.
 - When older-version compatibility is unnecessary, remove superseded implementations, migration branches, contracts, tests and documentation in the same change.
 
-## File authorship
-
-- Start new files with `Created by <name> on <dd mmm yyyy>`, using the file's comment syntax.
-- Check the original creator before editing. If you are a different person, add `Modified by <name> on <dd mmm yyyy>` below the author comment; otherwise, leave it unchanged.
-- Use real names from Git configuration or history, never AI agent names. Avoid duplicate or contradictory author comments.
-
 ## Documentation and validation
 
 - Update documentation affected by your change, including `README.md` where relevant. Keep edits concise and follow the existing style.

@@ -3,6 +3,7 @@
 
 #include <initguid.h>
 #include "SavedCredentialIpc.h"
+#include "AutomaticUnlock.h"
 #include "SavedCredentialVault.h"
 #include "LastUnlock.h"
 #include "EnrollmentStore.h"
@@ -52,6 +53,10 @@ std::atomic<ULONGLONG> gIdentityGeneration{0};
 std::atomic<ULONGLONG> gUnlockHistoryGeneration{0};
 std::atomic<ULONGLONG> gConnectionGeneration{0};
 std::atomic_bool gSuspended{false};
+// A fresh service-observed suspend/resume permits only one automatic attempt.
+std::atomic_bool gAutoWasSuspended{false};
+std::atomic_bool gAutoAttemptConsumed{true};
+std::atomic<ULONGLONG> gAutoResumedAt{0};
 std::atomic<DWORD> gObservedConsoleSession{0xffffffff};
 std::atomic_bool gPipeFailed{false};
 SERVICE_STATUS_HANDLE gStatusHandle = nullptr;
@@ -529,8 +534,13 @@ public:
                 response.result = Result::success;
                 return response;
             }
-            if (request.operation == Operation::beginVerification) {
+            if (request.operation == Operation::beginVerification ||
+                request.operation == Operation::beginAutomaticVerification) {
                 if (!client.logonUi || !console.locked) return response;
+                const bool automatic = request.operation == Operation::beginAutomaticVerification;
+                if (automatic && !automaticResumeEligible(automaticUnlockEnabled(), console.locked,
+                        gSuspended.load(), gAutoResumedAt.load(), GetTickCount64(),
+                        gAutoAttemptConsumed.load())) return response;
                 Identity identity;
                 if (!decodeIdentity(request.payload.value.data(), request.payload.value.size(), identity) ||
                     identity.sid != console.sid) return response;
@@ -542,6 +552,8 @@ public:
                 const auto stored = vault_.storedIdentity();
                 if (!stored || !sameIdentity(*stored, identity)) return response;
                 if (task_) { response.result = Result::busy; setText(response.payload, "Bluetooth verification is still finishing. Try again."); return response; }
+                // Consume before BLE starts; failure never loops or extends the deadline.
+                if (automatic && gAutoAttemptConsumed.exchange(true)) return response;
                 queueTask(identity, console, {original, original.record}, false);
                 if (!encodeAuthenticationStatus(authenticationStatus_, response.payload)) fail("authentication status encoding failed");
                 response.result = Result::success;
@@ -1186,9 +1198,19 @@ DWORD WINAPI serviceControl(const DWORD control, const DWORD eventType, void* ev
     }
     if (control == SERVICE_CONTROL_POWEREVENT) {
         ++gConsoleGeneration;
-        if (eventType == PBT_APMSUSPEND) { gSuspended = true; ++gConnectionGeneration; }
-        else if (eventType == PBT_APMRESUMEAUTOMATIC || eventType == PBT_APMRESUMESUSPEND || eventType == PBT_APMRESUMECRITICAL) {
+        if (eventType == PBT_APMSUSPEND) {
+            gSuspended = true;
+            gAutoWasSuspended = true;
+            gAutoResumedAt = 0;
+            gAutoAttemptConsumed = true;
+            ++gConnectionGeneration;
+        } else if (eventType == PBT_APMRESUMEAUTOMATIC || eventType == PBT_APMRESUMESUSPEND ||
+                   eventType == PBT_APMRESUMECRITICAL) {
             gSuspended = false;
+            if (gAutoWasSuspended.exchange(false)) {
+                gAutoResumedAt = GetTickCount64();
+                gAutoAttemptConsumed = false;
+            }
             ++gConnectionGeneration;
         }
         return NO_ERROR;
@@ -1200,6 +1222,11 @@ DWORD WINAPI serviceControl(const DWORD control, const DWORD eventType, void* ev
             eventType == WTS_CONSOLE_CONNECT ||
             eventType == WTS_CONSOLE_DISCONNECT || eventType == WTS_REMOTE_DISCONNECT)) {
             ++gConsoleGeneration;
+            if (eventType == WTS_SESSION_UNLOCK || eventType == WTS_SESSION_LOGON ||
+                eventType == WTS_SESSION_LOGOFF || eventType == WTS_CONSOLE_DISCONNECT) {
+                gAutoResumedAt = 0;
+                gAutoAttemptConsumed = true;
+            }
             if (eventType != WTS_SESSION_UNLOCK) ++gIdentityGeneration;
             if (eventType != WTS_SESSION_LOCK && eventType != WTS_SESSION_UNLOCK) {
                 ++gConnectionGeneration;

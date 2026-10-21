@@ -1,6 +1,8 @@
 // Created by Rui MA on 27 Sep 2026
+// Modified by Liam on 21 Oct 2026
 
 #include "UnlockCredentialProvider.h"
+#include "../SavedCredential/AutomaticUnlock.h"
 #include "../ComponentFiles.h"
 #include "../Resources/resource.h"
 
@@ -229,6 +231,14 @@ std::wstring moduleDirectory() {
 }
 
 void run() {
+    using unlock_windows::saved_credential::automaticResumeEligible;
+    require(!automaticResumeEligible(false, true, false, 100, 110, false), "default off must deny");
+    require(!automaticResumeEligible(true, false, false, 100, 110, false), "unlocked console must deny");
+    require(!automaticResumeEligible(true, true, true, 100, 110, false), "suspended system must deny");
+    require(!automaticResumeEligible(true, true, false, 0, 110, false), "ordinary lock must deny");
+    require(!automaticResumeEligible(true, true, false, 100, 110, true), "consumed wake must deny");
+    require(!automaticResumeEligible(true, true, false, 100, 20101, false), "old wake must deny");
+    require(automaticResumeEligible(true, true, false, 100, 110, false), "fresh wake should permit one attempt");
     const auto comResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     require(SUCCEEDED(comResult), "CoInitializeEx failed");
 

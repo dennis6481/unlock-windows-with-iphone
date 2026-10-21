@@ -4,6 +4,7 @@
 #include <initguid.h>
 #include "UnlockCredentialProvider.h"
 #include "SavedCredentialIpc.h"
+#include "../SavedCredential/AutomaticUnlock.h"
 #include "../Setup/SetupIdentity.h"
 #include "../Resources/resource.h"
 #include <algorithm>
@@ -188,6 +189,7 @@ struct ApprovalWatch final {
     void run() noexcept {
         using namespace unlock_windows::saved_credential;
         HRESULT previousError = S_OK;
+        bool automaticStarted = false;
         try {
             while (WaitForSingleObject(stop, 0) == WAIT_TIMEOUT) {
                 SensitiveBytes request;
@@ -240,6 +242,24 @@ struct ApprovalWatch final {
                     } else latestStatus = std::move(received);
                 } else {
                     latest = L"Unlock with iPhone is temporarily unavailable. Use your PIN or password.";
+                }
+                // The privileged service admits one request only after an actual wake.
+                if (!automaticStarted && latestStatus &&
+                    latestStatus->stage == AuthenticationStage::idle &&
+                    automaticUnlockEnabled()) {
+                    SensitiveBytes startRequest;
+                    Packet startReply;
+                    if (encodeIdentity(identity, startRequest) &&
+                        call(Operation::beginAutomaticVerification, std::move(startRequest),
+                            startReply, 250) && startReply.result == Result::success) {
+                        AuthenticationStatus started;
+                        if (decodeAuthenticationStatus(startReply.payload.value.data(),
+                                startReply.payload.value.size(), started) &&
+                            started.stage == AuthenticationStage::verifying) {
+                            automaticStarted = true;
+                            latestStatus = std::move(started);
+                        }
+                    }
                 }
                 {
                     std::lock_guard lock(mutex);

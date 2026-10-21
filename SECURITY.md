@@ -12,7 +12,7 @@
 
 ## Presence authorization
 
-The user explicitly clicks **Unlock** on the PC. The phone needs no fresh Face ID, Touch ID, tap or app interaction. Locking the PC alone does not initiate unlock.
+By default the user explicitly clicks **Unlock** on the PC. An administrator may enable optional automatic verification on genuine system suspend/resume; a Win+L-only lock cannot start it. The phone needs no fresh Face ID, Touch ID, tap or app interaction. **An unattended PC could unlock if someone wakes it with the authorized iPhone nearby.** Keep the option off on shared systems.
 
 For unlock, the service checks the selected system-paired BLE endpoint ID, authenticated Secure Connections pairing records, fresh protected ANCS/CCCD operations and current address/type-associated RSSI. Full account identity, request, binding, connection, session, logon and lock generation remain bound to one short-lived, single-use authorization.
 

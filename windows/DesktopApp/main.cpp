@@ -1,9 +1,11 @@
 // Created by Rui MA on 05 Oct 2026
+// Modified by Liam on 21 Oct 2026
 
 #include "DesktopApp.h"
 #include "DesktopNotifications.h"
 #include "../Enrollment/EnrollmentSession.h"
 #include "../Enrollment/BindingClient.h"
+#include "../SavedCredential/AutomaticUnlock.h"
 #include "../Resources/resource.h"
 #include <shellapi.h>
 #include <cstdio>
@@ -32,6 +34,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
             return runSavedPassword(instance, show, launch.setup, launch.passwordOperation, launch.setupCancelEvent);
         case Role::bindingHelper:
             return unlock_windows::enrollment::runBindingHelper(arguments.value[2], arguments.value[3]);
+        case Role::automaticUnlockSetting:
+            if (!unlock_windows::enrollment::elevatedAdmin())
+                throw std::runtime_error("Automatic unlock settings require administrator approval");
+            return static_cast<int>(unlock_windows::saved_credential::setAutomaticUnlockEnabled(
+                std::wstring_view(arguments.value[2]) == L"on"));
         }
         throw std::runtime_error("Invalid application role");
     } catch (...) {

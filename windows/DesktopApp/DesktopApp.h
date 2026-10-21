@@ -1,4 +1,5 @@
 // Created by Rui MA on 05 Oct 2026
+// Modified by Liam on 21 Oct 2026
 
 #pragma once
 
@@ -18,7 +19,7 @@ inline constexpr wchar_t kTrayWindowClass[] = L"UnlockWindowsWithIPhoneDesktopHo
 inline constexpr UINT kSetupMessage = WM_APP + 3;
 inline constexpr UINT kShowDashboardMessage = WM_APP + 4;
 enum class SetupResult : DWORD { cancelled = 0, error = 1, credentialReady = 2 };
-enum class Role { tray, setup, savedPassword, bindingHelper };
+enum class Role { tray, setup, savedPassword, bindingHelper, automaticUnlockSetting };
 struct Launch final {
     Role role = Role::tray;
     bool setup = false;
@@ -70,6 +71,9 @@ inline Launch parseLaunch(int argc, wchar_t* const argv[]) {
         }
     }
     if (command == L"--binding-helper" && argc == 4) return {Role::bindingHelper};
+    if (command == L"--auto-unlock-setting" && argc == 3 &&
+        (std::wstring_view(argv[2]) == L"on" || std::wstring_view(argv[2]) == L"off"))
+        return {Role::automaticUnlockSetting};
     throw std::invalid_argument("Unknown or conflicting application arguments");
 }
 

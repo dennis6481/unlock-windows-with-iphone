@@ -60,6 +60,10 @@ Connection, reads, writes and reply acknowledgment use cancellable Overlapped I/
 
 `lastUnlockStatus` returns only optional success time/RSSI to the verified unlocked target user. History is not persisted or used for authentication. Service restart, account/session change, binding replacement/removal and password removal clear it; threshold changes retain it. New requests retire pending results. Reporting failure is diagnostic and never changes the native Windows result.
 
+## Opt-in wake-based automatic verification
+
+Administrator-approved Status control stores a machine-wide registry DWORD under `HKLM\SOFTWARE\UnlockWindowsWithIPhone\AutomaticUnlockOnResume`. Only value 1 opts in; missing/invalid data is off. A service-observed suspend followed by resume allows at most one automatic presence request within 20 seconds. A Win+L-only lock never satisfies that condition. The service checks locked console/account, binding, credential and request identity, consumes the wake attempt before BLE work and never automatically retries failure. The Credential Provider watcher requests auto-verification and reuses the existing one-time offer and CredentialsChanged native submission. PIN/password fallback remains. Real suspend/Modern Standby acceptance is pending.
+
 ## Limits and acceptance
 
 Presence authorization does not require a fresh phone gesture. Pairing-history metadata and protected GATT success do not independently prove current-link LESC mode/key reuse. Advertisement RSSI is unauthenticated and is not secure distance or relay resistance. ANCS availability and long-standby/recovery behavior require hardware acceptance.

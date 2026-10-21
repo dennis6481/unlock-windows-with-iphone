@@ -89,6 +89,14 @@ Do not mix service, Credential Provider and desktop binaries from different buil
 Windows distribution is a single `windows/dist/UnlockWithIPhone_<version>_<architecture>_setup.exe` with the desktop app, service and Credential Provider embedded. The product version uses `major.minor.patch.build`; installer filenames omit build. Existing three-part versions are read with build `0`.
 
 
+## Optional automatic unlock after sleep
+
+The Status page offers **Automatic unlock after waking**, disabled by default and requiring UAC administrator confirmation to change. When enabled, Windows may initiate one fresh iPhone check after a genuine suspend/resume event if the existing locked-session Credential Provider is active. The existing single-use, native Windows authentication path remains unchanged; password and PIN providers remain available.
+
+- Ordinary **Win + L** locking never initiates automatic verification; the service must have seen system suspend and resume.
+- Some Windows lock-screen cover/Modern Standby scenarios may not activate the Credential Provider or emit the expected power event. Zero-click wake cannot be guaranteed until tested on hardware.
+- **Security:** someone can wake an unattended PC when the authorized iPhone is nearby. Keep this option off for shared or security-sensitive machines.
+
 ## Known limitations
 
 - **Windows sessions and accounts:** Currently, Microsoft and local password-backed accounts are supported in code; local-account validation is pending. Account changes or an outdated saved password can cause native authentication to fail.

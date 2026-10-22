@@ -55,14 +55,13 @@ void StatusPage::OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEventA
     });
     const auto removeGlyph = std::wstring(1, static_cast<wchar_t>(Symbol::Delete));
     removalCard_ = settingsCard(L"Remove bound iPhone", remove_, removeGlyph.c_str());
-    statusPanel_.Children().Append(removalCard_);
     automaticUnlockStatus_ = text(L"", 14);
     automaticUnlockStatus_.TextWrapping(TextWrapping::Wrap);
     automaticUnlock_ = Button{};
     automaticUnlock_.Click([weak = get_weak()](const auto&, const auto&) {
         changeAutomaticUnlock(weak);
     });
-    auto automaticUnlockCard = settingsCard(L"Automatic unlock", automaticUnlock_, L"\xE8F2", false);
+    auto automaticUnlockCard = settingsCard(L"Automatically unlock", automaticUnlock_, L"\xE8F2", false);
     auto automaticUnlockLayout = automaticUnlockCard.Child().as<Grid>();
     automaticUnlockLayout.RowDefinitions().GetAt(0).Height(automatic());
     automaticUnlockStatus_.VerticalAlignment(VerticalAlignment::Top);
@@ -72,6 +71,7 @@ void StatusPage::OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEventA
     Grid::SetColumnSpan(automaticUnlockStatus_, 2);
     automaticUnlockLayout.Children().Append(automaticUnlockStatus_);
     statusPanel_.Children().Append(automaticUnlockCard);
+    statusPanel_.Children().Append(removalCard_);
     refreshAutomaticUnlock();
 
     error_ = InfoBar{};
@@ -85,9 +85,8 @@ void StatusPage::OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEventA
 void StatusPage::refreshAutomaticUnlock() {
     if (!automaticUnlock_ || !automaticUnlockStatus_) return;
     const bool enabled = unlock_windows::saved_credential::automaticUnlockEnabled();
-    automaticUnlockStatus_.Text(enabled
-        ? L"On: checks your iPhone when the locked sign-in screen opens.\nThis PC may unlock after Win+L or screen wake if your iPhone is nearby. Anyone near your iPhone could gain access."
-        : L"Off: choose Unlock on the Windows sign-in screen.");
+    automaticUnlockStatus_.Text(L"Automatically unlock this PC when the sign-in screen appears and your paired iPhone is nearby.\n\n"
+        L"This also applies after Win+L or screen wake. Someone else could gain access while your iPhone is nearby.");
     automaticUnlock_.Content(box_value(hstring(enabled ? L"Turn off" : L"Turn on")));
     Automation::AutomationProperties::SetName(automaticUnlock_,
         enabled ? L"Turn off automatic unlock; administrator approval required"

@@ -1,4 +1,5 @@
 // Created by Rui MA on 04 Oct 2026
+// Modified by Liam on 22 Oct 2026
 
 #include "SetupFinalization.h"
 #include "../DesktopApp/DesktopApp.h"
@@ -9,13 +10,15 @@
 #include <Windows.h>
 #include <array>
 #include <map>
+#include <string_view>
 
 namespace unlock::components {
 // Task scheduling and generated scripts share the same transaction/result contract.
 namespace {
 using Microsoft::WRL::ComPtr;
 struct Bstr {
-    BSTR value;
+    BSTR value = nullptr;
+    Bstr() = default;
     explicit Bstr(const std::wstring& s) : value(SysAllocString(s.c_str())) {
         if (!value) throw ComponentError(L"Out of memory allocating task text.");
     }
@@ -255,7 +258,9 @@ std::wstring powerShellArguments(const std::wstring& script, bool headless = fal
         encoded += i + 1 < count ? alphabet[(value >> 6) & 63] : L'=';
         encoded += i + 2 < count ? alphabet[value & 63] : L'=';
     }
-    auto arguments = L"-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -Command \"& ([scriptblock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" + encoded + L"'))))\"";
+    // SYSTEM tasks already run outside the interactive desktop. User observers
+    // use the existing headless console host, so no hidden PowerShell flag is needed.
+    auto arguments = L"-NoLogo -NoProfile -NonInteractive -Command \"& ([scriptblock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" + encoded + L"'))))\"";
     if (headless) {
         const auto executable = system32Directory() / L"WindowsPowerShell" / L"v1.0" / L"powershell.exe";
         arguments = L"--headless \"" + executable.wstring() + L"\" " + arguments;
@@ -328,7 +333,17 @@ try{
             finally{$key.Dispose()}
 }
         if($released -and $record){break}
-        if($watch.Elapsed.TotalSeconds -gt 120){throw 'Setup has not completed. Run setup to inspect the preserved transaction.'}
+        if($watch.Elapsed.TotalSeconds -gt 120){
+            $detail='Setup has not completed. Run setup to inspect the preserved transaction.'
+            try{
+                $task=$folder.GetTask($finalTask)
+                $detail += ' Finalization task state: '+$task.State+'; last exit code: '+$task.LastTaskResult+'.'
+                if($task.State -ne 4 -and $task.LastTaskResult -ne 0){
+                    $detail += ' The finalization process failed to start or exited with an error. Check Windows and security-software logs.'
+}
+            }catch{$detail += ' Could not read finalization task status: '+$_.Exception.Message}
+            throw $detail
+}
         Start-Sleep -Milliseconds 200
 }
     $security=[Security.AccessControl.EventWaitHandleSecurity]::new()
@@ -674,8 +689,34 @@ void SetupFinalization::retryFinalization(const SetupTransactionState& state) co
     const auto current = store_.readTransaction();
     if (!current || current->transactionId != state.transactionId || current->phase != WizardPhase::finalizing)
         throw ComponentError(L"Finalization does not match the registered transaction.");
-    Scheduler scheduler; const auto task = scheduler.get(kFinalizeTask);
+    Scheduler scheduler; auto task = scheduler.get(kFinalizeTask);
     if (!task) { startFinalization(state); return; }
+    // Preserve the sealed script of an existing transaction, including its
+    // original package manifest; update only the redundant launch option.
+    ComPtr<ITaskDefinition> definition;
+    checkHresult(task->get_Definition(&definition), L"Read finalization task definition");
+    ComPtr<IActionCollection> actions;
+    checkHresult(definition->get_Actions(&actions), L"Read finalization task actions");
+    LONG count = 0;
+    checkHresult(actions->get_Count(&count), L"Read finalization action count");
+    if (count != 1) throw ComponentError(L"Unexpected finalization task action count.");
+    ComPtr<IAction> action;
+    checkHresult(actions->get_Item(1, &action), L"Read finalization action");
+    ComPtr<IExecAction> execution;
+    checkHresult(action.As(&execution), L"Read finalization executable action");
+    Bstr executable, arguments;
+    checkHresult(execution->get_Path(&executable.value), L"Read finalization executable");
+    checkHresult(execution->get_Arguments(&arguments.value), L"Read finalization arguments");
+    const auto expected = system32Directory() / L"WindowsPowerShell" / L"v1.0" / L"powershell.exe";
+    if (!executable.value || _wcsicmp(executable.value, expected.c_str()) != 0)
+        throw ComponentError(L"Unexpected finalization task executable.");
+    std::wstring command = arguments.value ? arguments.value : L"";
+    constexpr std::wstring_view previousPrefix = L"-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -Command ";
+    if (command.starts_with(previousPrefix)) {
+        command.replace(0, previousPrefix.size(), L"-NoLogo -NoProfile -NonInteractive -Command ");
+        registerTask(kFinalizeTask, state.targetSid, expected, command, true, false);
+        task = scheduler.get(kFinalizeTask);
+    }
     registerResultTask(state);
     auto record = store_.readCompletion();
     if (!record || record->transactionId != state.transactionId) throw ComponentError(L"Finalization result record is missing or belongs to another transaction.");

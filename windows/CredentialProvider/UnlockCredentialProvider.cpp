@@ -1,5 +1,5 @@
 // Created by Rui MA on 27 Sep 2026
-// Modified by Liam on 21 Oct 2026
+// Modified by Liam on 22 Oct 2026
 
 #include <initguid.h>
 #include "UnlockCredentialProvider.h"
@@ -250,6 +250,9 @@ struct ApprovalWatch final {
                 if (latestStatus &&
                     (latestStatus->stage == AuthenticationStage::idle ||
                      latestStatus->stage == AuthenticationStage::failed ||
+                     // A native sign-in leaves the previous request consumed.
+                     // The service's new lock/wake ticket controls the next attempt.
+                     latestStatus->stage == AuthenticationStage::consumed ||
                      latestStatus->stage == AuthenticationStage::completed) &&
                     now >= nextAutomaticCheck && automaticUnlockEnabled()) {
                     // Keep polling light even when no wake ticket is available.

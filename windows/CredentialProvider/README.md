@@ -1,5 +1,5 @@
 <!-- Created by Rui MA on 27 Sep 2026 -->
-<!-- Modified by Liam on 21 Oct 2026 -->
+<!-- Modified by Liam on 22 Oct 2026 -->
 
 # Credential Provider
 
@@ -24,6 +24,8 @@ The service rechecks 3-second communication/RSSI evidence and consumes authoriza
 After successful serialization, `ReportResult` reports its claim nonce and native status to the service once. A matching native success updates **Last Unlock**; rejection, packing failure and missing reports do not. Reporting uses the existing bounded pipe call, logs failures and leaves Windows authentication unchanged.
 
 Matching identity/session re-enumeration can retain an unsubmitted offer. Identity changes and UnAdvise retire worker state. Missing notifications, serialization failure or native password rejection cannot restore a consumed approval or reissue its offer; another attempt requires a fresh presence request.
+
+An earlier consumed request does not block automatic verification on a new lock/display wake. The service still requires a fresh activation ticket and presence check; consumed credentials are never reused.
 
 ## Presentation and deployment
 

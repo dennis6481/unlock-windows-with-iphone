@@ -1,5 +1,5 @@
 // Created by Rui MA on 09 Oct 2026
-// Modified by Liam on 21 Oct 2026
+// Modified by Liam on 22 Oct 2026
 
 #include "StatusPage.xaml.h"
 #include "StatusPage.g.cpp"
@@ -62,9 +62,16 @@ void StatusPage::OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEventA
     automaticUnlock_.Click([weak = get_weak()](const auto&, const auto&) {
         changeAutomaticUnlock(weak);
     });
-    statusPanel_.Children().Append(settingsCard(L"Automatic unlock on sign-in screen",
-        automaticUnlockStatus_, L"\xE8F2", false));
-    statusPanel_.Children().Append(automaticUnlock_);
+    auto automaticUnlockCard = settingsCard(L"Automatic unlock", automaticUnlock_, L"\xE8F2", false);
+    auto automaticUnlockLayout = automaticUnlockCard.Child().as<Grid>();
+    automaticUnlockLayout.RowDefinitions().GetAt(0).Height(automatic());
+    automaticUnlockStatus_.VerticalAlignment(VerticalAlignment::Top);
+    automaticUnlockStatus_.Margin({0,8,0,0});
+    Grid::SetRow(automaticUnlockStatus_, 1);
+    Grid::SetColumn(automaticUnlockStatus_, 1);
+    Grid::SetColumnSpan(automaticUnlockStatus_, 2);
+    automaticUnlockLayout.Children().Append(automaticUnlockStatus_);
+    statusPanel_.Children().Append(automaticUnlockCard);
     refreshAutomaticUnlock();
 
     error_ = InfoBar{};
@@ -79,9 +86,13 @@ void StatusPage::refreshAutomaticUnlock() {
     if (!automaticUnlock_ || !automaticUnlockStatus_) return;
     const bool enabled = unlock_windows::saved_credential::automaticUnlockEnabled();
     automaticUnlockStatus_.Text(enabled
-        ? L"On: one iPhone check on each locked sign-in activation, including Win+L and display wake. Anyone near the paired iPhone may unlock this PC."
-        : L"Off (default): click Unlock on the Windows sign-in tile.");
-    automaticUnlock_.Content(box_value(hstring(enabled ? L"Disable automatic unlock (UAC)" : L"Enable automatic unlock (UAC)")));
+        ? L"On: checks your iPhone when the locked sign-in screen opens.\nThis PC may unlock after Win+L or screen wake if your iPhone is nearby. Anyone near your iPhone could gain access."
+        : L"Off: choose Unlock on the Windows sign-in screen.");
+    automaticUnlock_.Content(box_value(hstring(enabled ? L"Turn off" : L"Turn on")));
+    Automation::AutomationProperties::SetName(automaticUnlock_,
+        enabled ? L"Turn off automatic unlock; administrator approval required"
+                : L"Turn on automatic unlock; administrator approval required");
+    ToolTipService::SetToolTip(automaticUnlock_, box_value(L"Administrator approval required"));
     automaticUnlock_.IsEnabled(!stopped_ && !changingAutomaticUnlock_);
 }
 

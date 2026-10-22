@@ -1,5 +1,5 @@
 <!-- Created by Rui MA on 26 Sep 2026 -->
-<!-- Modified by Liam on 21 Oct 2026 -->
+<!-- Modified by Liam on 22 Oct 2026 -->
 
 # Security
 
@@ -12,7 +12,7 @@
 
 ## Presence authorization
 
-By default the user explicitly clicks **Unlock** on the PC. An administrator may enable automatic verification when the existing user's locked sign-in UI activates, **without requiring sleep**. A Win+L lock can immediately auto-unlock when the authorized iPhone is nearby; a display-off/on event can re-arm one additional attempt while the same session stays locked. The phone needs no fresh Face ID, Touch ID, tap or app interaction. **An unattended PC can unlock when someone wakes it with the authorized phone nearby.** Keep this mode off on shared or security-sensitive systems.
+By default the user explicitly clicks **Unlock** on the PC. An administrator may enable automatic verification after the screen turns off while the existing user's session is locked and then turns on again, **without requiring sleep**. Locking alone (including Win+L) and power resume alone do not arm an attempt. Each observed display-off/on transition allows one attempt. The phone needs no fresh Face ID, Touch ID, tap or app interaction. **An unattended PC can unlock when someone wakes it with the authorized phone nearby.** Keep this mode off on shared or security-sensitive systems.
 
 For unlock, the service checks the selected system-paired BLE endpoint ID, authenticated Secure Connections pairing records, fresh protected ANCS/CCCD operations and current address/type-associated RSSI. Full account identity, request, binding, connection, session, logon and lock generation remain bound to one short-lived, single-use authorization.
 

@@ -92,10 +92,10 @@ Windows distribution is a single `windows/dist/UnlockWithIPhone_<version>_<archi
 
 ## Optional automatic unlock on the sign-in screen
 
-The Status page offers **Automatically unlock** as its third settings card, disabled by default and requiring administrator UAC approval. Its compact card keeps the action beside the title and wraps the status and warning below. This broader mode uses a **new registry opt-in**; enabling the earlier "after sleep only" mode does not silently enable it. With this option turned on, the existing locked-session Credential Provider can start one fresh iPhone check when Windows enters the sign-in UI, even if the PC has **not** slept. Display-off to display-on transitions may enable one new attempt, without relying on S3 sleep or Modern Standby power resume. Existing one-time native credential submission and Windows password/PIN alternatives are preserved.
+The Status page offers **Automatically unlock** as its third settings card, disabled by default and requiring administrator UAC approval. With this option turned on, the Credential Provider can start one fresh iPhone check after the screen turns off while locked and then turns on again. Sleep is not required; power resume alone cannot enable an attempt. Existing one-time native credential submission and Windows password/PIN alternatives are preserved.
 
-- A manual **Win + L** lock can now be followed by immediate automatic unlock if the trusted iPhone is nearby. This behavior is intentional in the opt-in mode and makes manual locking ineffective while the iPhone is present.
-- Attempts are single-use for the current lock/display wake. Failure does not cause repeated Bluetooth retries on the same activation. A display-off/on transition may allow another attempt.
+- Locking alone, including **Win + L**, does not trigger automatic unlock. After the screen turns off and wakes again, automatic unlock is allowed if the trusted iPhone is nearby. Manual **Unlock** remains available.
+- Attempts are single-use for the current display wake. Failure does not cause repeated Bluetooth retries on the same activation. A new display-off/on transition may allow another attempt.
 - Windows may initially show its lock-screen cover before presenting LogonUI. A screen-wake event is not a guarantee LogonUI is loaded or that the cover automatically dismisses.
 - Initial sign-in after a restart, signed-out sessions and remote sessions remain ineligible. Real Windows hardware and Bluetooth validation are still required.
 - **Security:** anyone who wakes this PC with the authorized iPhone nearby may unlock it. Leave the option off on shared or security-sensitive machines.

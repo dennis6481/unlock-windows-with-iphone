@@ -25,7 +25,7 @@ After successful serialization, `ReportResult` reports its claim nonce and nativ
 
 Matching identity/session re-enumeration can retain an unsubmitted offer. Identity changes and UnAdvise retire worker state. Missing notifications, serialization failure or native password rejection cannot restore a consumed approval or reissue its offer; another attempt requires a fresh presence request.
 
-An earlier consumed request does not block automatic verification on a new lock/display wake. The service still requires a fresh activation ticket and presence check; consumed credentials are never reused.
+An earlier consumed request does not block automatic verification on a new display wake. The service requires a display-off/on transition observed after locking, a fresh activation ticket and a presence check; locking alone never starts automatic verification, and consumed credentials are never reused.
 
 ## Presentation and deployment
 

@@ -1,5 +1,5 @@
 // Created by Rui MA on 27 Sep 2026
-// Modified by Liam on 21 Oct 2026
+// Modified by Liam on 22 Oct 2026
 
 #include "UnlockCredentialProvider.h"
 #include "../SavedCredential/AutomaticUnlock.h"
@@ -237,9 +237,9 @@ void run() {
     require(!automaticUnlockEligible(true, false, false, true, false), "unlocked session must deny");
     require(!automaticUnlockEligible(true, true, true, true, false), "suspended machine must deny");
     require(!automaticUnlockEligible(true, true, false, false, false), "initial logon without lock must deny");
-    require(!automaticUnlockEligible(true, true, false, true, true), "consumed screen attempt must deny");
+    require(!automaticUnlockEligible(true, true, false, true, true), "lock without a wake ticket or consumed wake attempt must deny");
     require(automaticUnlockEligible(true, true, false, true, false),
-        "locked LogonUI must qualify without sleep or power-resume event");
+        "locked LogonUI with an unused display-wake ticket must qualify without sleep");
     require(!automaticDisplayWakeRearms(false, true), "initial display-on cannot rearm");
     require(!automaticDisplayWakeRearms(true, false), "signed-out display-on cannot rearm");
     require(automaticDisplayWakeRearms(true, true), "display off/on must permit a new locked-session attempt");

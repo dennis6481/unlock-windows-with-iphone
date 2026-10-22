@@ -1,5 +1,5 @@
 <!-- Created by Rui MA on 26 Sep 2026 -->
-<!-- Modified by Liam on 21 Oct 2026 -->
+<!-- Modified by Liam on 22 Oct 2026 -->
 
 # Protocol and architecture
 
@@ -62,7 +62,7 @@ Connection, reads, writes and reply acknowledgment use cancellable Overlapped I/
 
 ## Opt-in wake-based automatic verification
 
-Administrator-approved Status control stores a machine-wide registry DWORD under `HKLM\SOFTWARE\UnlockWindowsWithIPhone\AutomaticUnlockAtLockScreen`. Only value 1 opts in; missing/invalid data is off, and the old `AutomaticUnlockOnResume` setting is not promoted automatically. The service must have observed an existing user's session lock (not an initial sign-in). It arms **one** attempt for that lock and re-arms once after a real display-off to display-on transition (registered through `GUID_CONSOLE_DISPLAY_STATE`), regardless of sleep state. A background power resume by itself cannot re-arm the request. An explicit manual Unlock consumes the current activation as well. The service checks locked console/account, binding, credential and request identity, consumes the attempt before BLE work and never automatically retries failures within the same activation. The Credential Provider watcher initiates verification when the sign-in UI is active and reuses the existing one-time offer and `CredentialsChanged` native submission. PIN/password fallback remains. Win+L can immediately auto-unlock if the trusted phone is nearby, so this opt-in mode is inappropriate for secure intentional locking. Real screen-wake/LogonUI acceptance is pending.
+Administrator-approved Status control stores a machine-wide registry DWORD under `HKLM\SOFTWARE\UnlockWindowsWithIPhone\AutomaticUnlockAtLockScreen`. Only value 1 opts in; missing/invalid data is off, and the old `AutomaticUnlockOnResume` setting is not promoted automatically. The service must observe an existing user's session lock (not an initial sign-in), followed by a real display-off to display-on transition through `GUID_CONSOLE_DISPLAY_STATE`. Only that transition arms **one** attempt, regardless of sleep state; locking (including Win+L) and power resume alone cannot arm it. An explicit manual Unlock consumes the current activation as well. The service checks locked console/account, binding, credential and request identity, consumes the attempt before BLE work and never automatically retries failures within the same activation. The Credential Provider watcher initiates verification when the sign-in UI is active and reuses the existing one-time offer and `CredentialsChanged` native submission. PIN/password fallback remains. Someone waking the locked PC with the trusted phone nearby may gain access. Real screen-wake/LogonUI acceptance is pending.
 
 ## Limits and acceptance
 

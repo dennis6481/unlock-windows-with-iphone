@@ -243,15 +243,15 @@ struct ApprovalWatch final {
                 } else {
                     latest = L"Unlock with iPhone is temporarily unavailable. Use your PIN or password.";
                 }
-                // Any newly activated locked-session sign-in screen may initiate
-                // an opt-in attempt. The LocalSystem service allows only one per
-                // lock/display-wake activation, independent of sleep state.
+                // The LocalSystem service permits an opt-in attempt only after
+                // an observed display-off/on transition in the locked session.
+                // Activating the sign-in screen or locking alone cannot arm it.
                 const auto now = GetTickCount64();
                 if (latestStatus &&
                     (latestStatus->stage == AuthenticationStage::idle ||
                      latestStatus->stage == AuthenticationStage::failed ||
                      // A native sign-in leaves the previous request consumed.
-                     // The service's new lock/wake ticket controls the next attempt.
+                     // The service's new display-wake ticket controls the next attempt.
                      latestStatus->stage == AuthenticationStage::consumed ||
                      latestStatus->stage == AuthenticationStage::completed) &&
                     now >= nextAutomaticCheck && automaticUnlockEnabled()) {

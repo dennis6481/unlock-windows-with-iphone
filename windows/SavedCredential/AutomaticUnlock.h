@@ -16,8 +16,8 @@ inline constexpr bool automaticUnlockEligible(bool enabled, bool locked,
     return enabled && locked && !suspended && sessionArmed && !attemptConsumed;
 }
 
-// A real display-off -> display-on transition may re-arm one attempt while
-// the same authenticated Windows session remains locked.
+// A real display-off -> display-on transition observed after locking is the
+// only event that arms an attempt; locking and power resume alone do not.
 inline constexpr bool automaticDisplayWakeRearms(bool previouslyOff, bool sessionArmed) noexcept {
     return previouslyOff && sessionArmed;
 }
@@ -41,4 +41,4 @@ inline LONG setAutomaticUnlockEnabled(bool enabled) noexcept {
     RegCloseKey(key);
     return code;
 }
-} 
+}

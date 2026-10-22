@@ -54,7 +54,7 @@ std::atomic<ULONGLONG> gUnlockHistoryGeneration{0};
 std::atomic<ULONGLONG> gConnectionGeneration{0};
 std::atomic_bool gSuspended{false};
 // Fail closed until a real existing-session lock event is observed.
-// A display-off -> display-on transition may re-arm one attempt. No timers
+// Only a display-off -> display-on transition after that lock arms an attempt. No timers
 // or bluetooth proximity alone can initiate authentication.
 std::atomic_bool gAutoSessionArmed{false};
 std::atomic_bool gAutoAttemptConsumed{true};
@@ -1209,7 +1209,7 @@ DWORD WINAPI serviceControl(const DWORD control, const DWORD eventType, void* ev
                 DWORD state = 0;
                 std::memcpy(&state, setting->Data, sizeof(state));
                 if (state == PowerMonitorOff) {
-                    gAutoDisplayWasOff = true;
+                    gAutoDisplayWasOff = gAutoSessionArmed.load();
                 } else if (state == PowerMonitorOn) {
                     const bool previouslyOff = gAutoDisplayWasOff.exchange(false);
                     if (automaticDisplayWakeRearms(previouslyOff, gAutoSessionArmed.load()))
@@ -1221,13 +1221,12 @@ DWORD WINAPI serviceControl(const DWORD control, const DWORD eventType, void* ev
         ++gConsoleGeneration;
         if (eventType == PBT_APMSUSPEND) {
             gSuspended = true;
-            gAutoDisplayWasOff = true;
             gAutoAttemptConsumed = true;
             ++gConnectionGeneration;
         } else if (eventType == PBT_APMRESUMEAUTOMATIC || eventType == PBT_APMRESUMESUSPEND ||
                    eventType == PBT_APMRESUMECRITICAL) {
             // A background resume alone cannot authorize an unattended unlock.
-            // Display-on or a fresh session-lock event initiates the next attempt.
+            // Only an observed display-off/on transition after locking arms an attempt.
             gSuspended = false;
             ++gConnectionGeneration;
         }
@@ -1243,7 +1242,8 @@ DWORD WINAPI serviceControl(const DWORD control, const DWORD eventType, void* ev
             if (eventType == WTS_SESSION_LOCK) {
                 gAutoSessionArmed = true;
                 gAutoDisplayWasOff = false;
-                gAutoAttemptConsumed = false;
+                // Locking alone (including Win+L) must leave the PC locked.
+                gAutoAttemptConsumed = true;
             } else if (eventType == WTS_SESSION_UNLOCK || eventType == WTS_SESSION_LOGON ||
                        eventType == WTS_SESSION_LOGOFF || eventType == WTS_CONSOLE_DISCONNECT ||
                        eventType == WTS_REMOTE_DISCONNECT) {

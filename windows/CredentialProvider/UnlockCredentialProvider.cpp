@@ -243,8 +243,8 @@ struct ApprovalWatch final {
                 } else {
                     latest = L"Unlock with iPhone is temporarily unavailable. Use your PIN or password.";
                 }
-                // The LocalSystem service permits an opt-in attempt only after
-                // an observed display-off/on transition in the locked session.
+                // The LocalSystem service permits an opt-in attempt after
+                // user sleep-resume or an observed display-off/on transition.
                 // Activating the sign-in screen or locking alone cannot arm it.
                 const auto now = GetTickCount64();
                 if (latestStatus &&

@@ -92,10 +92,10 @@ Windows distribution is a single `windows/dist/UnlockWithIPhone_<version>_<archi
 
 ## Optional automatic unlock on the sign-in screen
 
-The Status page offers **Automatically unlock** as its third settings card, disabled by default and requiring administrator UAC approval. With this option turned on, the Credential Provider can start one fresh iPhone check after the screen turns off while locked and then turns on again. Sleep is not required; power resume alone cannot enable an attempt. Existing one-time native credential submission and Windows password/PIN alternatives are preserved.
+The Status page offers **Automatically unlock** as its third settings card, disabled by default and requiring administrator UAC approval. With this option turned on, the Credential Provider can start one fresh iPhone check when the user wakes the PC from observed sleep, or its screen turns off and on around a session lock. Lock, display and resume notifications need not arrive in a fixed order. Background resume alone cannot enable an attempt. Existing one-time native credential submission and Windows password/PIN alternatives are preserved.
 
 - Locking alone, including **Win + L**, does not trigger automatic unlock. After the screen turns off and wakes again, automatic unlock is allowed if the trusted iPhone is nearby. Manual **Unlock** remains available.
-- Attempts are single-use for the current display wake. Failure does not cause repeated Bluetooth retries on the same activation. A new display-off/on transition may allow another attempt.
+- Attempts are single-use for the current sleep/display wake. Failure does not cause repeated Bluetooth retries on the same activation. Duplicate resume/display-on notifications do not allow another attempt.
 - Windows may initially show its lock-screen cover before presenting LogonUI. A screen-wake event is not a guarantee LogonUI is loaded or that the cover automatically dismisses.
 - Initial sign-in after a restart, signed-out sessions and remote sessions remain ineligible. Real Windows hardware and Bluetooth validation are still required.
 - **Security:** anyone who wakes this PC with the authorized iPhone nearby may unlock it. Leave the option off on shared or security-sensitive machines.

@@ -85,8 +85,8 @@ void StatusPage::OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEventA
 void StatusPage::refreshAutomaticUnlock() {
     if (!automaticUnlock_ || !automaticUnlockStatus_) return;
     const bool enabled = unlock_windows::saved_credential::automaticUnlockEnabled();
-    automaticUnlockStatus_.Text(L"Automatically unlock this PC when the screen wakes after turning off while locked and your paired iPhone is nearby.\n\n"
-        L"Locking with Win+L alone will not trigger automatic unlock. Someone else could gain access when waking this PC while your iPhone is nearby.");
+    automaticUnlockStatus_.Text(L"Automatically unlock this PC when you wake it from sleep or wake its screen while locked and your paired iPhone is nearby.\n\n"
+        L"Someone else could gain access when waking this PC while your iPhone is nearby.");
     automaticUnlock_.Content(box_value(hstring(enabled ? L"Turn off" : L"Turn on")));
     Automation::AutomationProperties::SetName(automaticUnlock_,
         enabled ? L"Turn off automatic unlock; administrator approval required"

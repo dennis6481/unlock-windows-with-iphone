@@ -12,7 +12,7 @@
 
 ## Presence authorization
 
-By default the user explicitly clicks **Unlock** on the PC. An administrator may enable automatic verification after the screen turns off while the existing user's session is locked and then turns on again, **without requiring sleep**. Locking alone (including Win+L) and power resume alone do not arm an attempt. Each observed display-off/on transition allows one attempt. The phone needs no fresh Face ID, Touch ID, tap or app interaction. **An unattended PC can unlock when someone wakes it with the authorized phone nearby.** Keep this mode off on shared or security-sensitive systems.
+By default the user explicitly clicks **Unlock** on the PC. An administrator may enable automatic verification when the user wakes the PC from observed sleep, or its screen turns off and on around an existing user's session lock. Locking alone (including Win+L) and background resume alone do not arm an attempt. Each sleep/display wake allows one attempt; delayed lock notifications retain the wake ticket, while session unlock, logon, logoff or disconnect clears it. The phone needs no fresh Face ID, Touch ID, tap or app interaction. **An unattended PC can unlock when someone wakes it with the authorized phone nearby.** Keep this mode off on shared or security-sensitive systems.
 
 For unlock, the service checks the selected system-paired BLE endpoint ID, authenticated Secure Connections pairing records, fresh protected ANCS/CCCD operations and current address/type-associated RSSI. Full account identity, request, binding, connection, session, logon and lock generation remain bound to one short-lived, single-use authorization.
 

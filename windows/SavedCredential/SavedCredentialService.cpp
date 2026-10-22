@@ -53,12 +53,8 @@ std::atomic<ULONGLONG> gIdentityGeneration{0};
 std::atomic<ULONGLONG> gUnlockHistoryGeneration{0};
 std::atomic<ULONGLONG> gConnectionGeneration{0};
 std::atomic_bool gSuspended{false};
-// Fail closed until a real existing-session lock event is observed.
-// Only a display-off -> display-on transition after that lock arms an attempt. No timers
-// or bluetooth proximity alone can initiate authentication.
-std::atomic_bool gAutoSessionArmed{false};
-std::atomic_bool gAutoAttemptConsumed{true};
-std::atomic_bool gAutoDisplayWasOff{false};
+// Locking alone never arms an attempt; wake tickets survive delayed lock events.
+AutomaticUnlockState gAutomaticUnlock;
 std::atomic<DWORD> gObservedConsoleSession{0xffffffff};
 std::atomic_bool gPipeFailed{false};
 SERVICE_STATUS_HANDLE gStatusHandle = nullptr;
@@ -539,8 +535,7 @@ public:
                 request.operation == Operation::beginAutomaticVerification) {
                 if (!client.logonUi || !console.locked) return response;
                 const bool automatic = request.operation == Operation::beginAutomaticVerification;
-                if (automatic && !automaticUnlockEligible(automaticUnlockEnabled(), console.locked,
-                        gSuspended.load(), gAutoSessionArmed.load(), gAutoAttemptConsumed.load()))
+                if (automatic && !gAutomaticUnlock.eligible(automaticUnlockEnabled(), console.locked))
                     return response;
                 Identity identity;
                 if (!decodeIdentity(request.payload.value.data(), request.payload.value.size(), identity) ||
@@ -556,8 +551,7 @@ public:
                 // Consume before BLE starts; failure never loops or extends the deadline.
                 // Manual verification also consumes this screen activation to avoid
                 // an automatic retry after an explicit Unlock attempt.
-                if (automatic && gAutoAttemptConsumed.exchange(true)) return response;
-                if (!automatic) gAutoAttemptConsumed = true;
+                if (!gAutomaticUnlock.consume(automatic, automaticUnlockEnabled(), console.locked)) return response;
                 queueTask(identity, console, {original, original.record}, false);
                 if (!encodeAuthenticationStatus(authenticationStatus_, response.payload)) fail("authentication status encoding failed");
                 response.result = Result::success;
@@ -1209,26 +1203,31 @@ DWORD WINAPI serviceControl(const DWORD control, const DWORD eventType, void* ev
                 DWORD state = 0;
                 std::memcpy(&state, setting->Data, sizeof(state));
                 if (state == PowerMonitorOff) {
-                    gAutoDisplayWasOff = gAutoSessionArmed.load();
+                    gAutomaticUnlock.observe(AutomaticUnlockEvent::displayOff);
                 } else if (state == PowerMonitorOn) {
-                    const bool previouslyOff = gAutoDisplayWasOff.exchange(false);
-                    if (automaticDisplayWakeRearms(previouslyOff, gAutoSessionArmed.load()))
-                        gAutoAttemptConsumed = false;
+                    gAutomaticUnlock.observe(AutomaticUnlockEvent::displayOn);
                 }
             }
             return NO_ERROR;
         }
-        ++gConsoleGeneration;
         if (eventType == PBT_APMSUSPEND) {
+            ++gConsoleGeneration;
             gSuspended = true;
-            gAutoAttemptConsumed = true;
+            gAutomaticUnlock.observe(AutomaticUnlockEvent::suspend);
             ++gConnectionGeneration;
         } else if (eventType == PBT_APMRESUMEAUTOMATIC || eventType == PBT_APMRESUMESUSPEND ||
                    eventType == PBT_APMRESUMECRITICAL) {
-            // A background resume alone cannot authorize an unattended unlock.
-            // Only an observed display-off/on transition after locking arms an attempt.
-            gSuspended = false;
-            ++gConnectionGeneration;
+            // Background resume alone cannot arm an attempt. User resume after
+            // observed sleep also works when display/lock notifications arrive late.
+            // Windows may report background resume, display-on and then user
+            // resume. The latter must not cancel verification already started
+            // by display-on or invalidate the Bluetooth connection again.
+            if (gSuspended.exchange(false)) {
+                ++gConsoleGeneration;
+                ++gConnectionGeneration;
+            }
+            gAutomaticUnlock.observe(eventType == PBT_APMRESUMESUSPEND
+                ? AutomaticUnlockEvent::userResume : AutomaticUnlockEvent::backgroundResume);
         }
         return NO_ERROR;
     }
@@ -1240,16 +1239,11 @@ DWORD WINAPI serviceControl(const DWORD control, const DWORD eventType, void* ev
             eventType == WTS_CONSOLE_DISCONNECT || eventType == WTS_REMOTE_DISCONNECT)) {
             ++gConsoleGeneration;
             if (eventType == WTS_SESSION_LOCK) {
-                gAutoSessionArmed = true;
-                gAutoDisplayWasOff = false;
-                // Locking alone (including Win+L) must leave the PC locked.
-                gAutoAttemptConsumed = true;
+                gAutomaticUnlock.observe(AutomaticUnlockEvent::lock);
             } else if (eventType == WTS_SESSION_UNLOCK || eventType == WTS_SESSION_LOGON ||
                        eventType == WTS_SESSION_LOGOFF || eventType == WTS_CONSOLE_DISCONNECT ||
                        eventType == WTS_REMOTE_DISCONNECT) {
-                gAutoSessionArmed = false;
-                gAutoDisplayWasOff = false;
-                gAutoAttemptConsumed = true;
+                gAutomaticUnlock.observe(AutomaticUnlockEvent::reset);
             }
             if (eventType != WTS_SESSION_UNLOCK) ++gIdentityGeneration;
             if (eventType != WTS_SESSION_LOCK && eventType != WTS_SESSION_UNLOCK) {

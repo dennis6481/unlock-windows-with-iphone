@@ -1,9 +1,10 @@
 <!-- Created by Rui MA on 26 Sep 2026 -->
-<!-- Modified by Liam on 21 Oct 2026 -->
+<!-- Modified by Liam on 22 Oct 2026 -->
 > [!WARNING]
 > **Developer technical preview**
 >
 > - **Supports password-backed Microsoft and local Windows accounts (local account support is experimental and not yet Windows-tested).** The account must have a password. A Windows account password is required; PIN-only accounts are not supported.
+> - Local-account identity lookup uses the local Windows user database; it does not require a connected Identity Store entry. End-to-end local-account unlock remains unverified.
 
 
 

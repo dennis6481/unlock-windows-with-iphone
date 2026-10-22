@@ -1,4 +1,5 @@
 // Created by Rui MA on 11 Oct 2026
+// Modified by Liam on 22 Oct 2026
 
 #include "DesktopController.h"
 #include "DesktopApp.h"
@@ -47,6 +48,8 @@ struct ControllerState final {
             } else if (response.result != Result::success) {
                 if (response.result == Result::rejected && lockedDuringQuery()) return;
                 serviceMessage = L"Service diagnostics query rejected (result " + std::to_wstring(static_cast<unsigned>(response.result)) + L").";
+                if (response.result == Result::internalError && !response.payload.value.empty())
+                    serviceMessage += L" " + std::wstring(winrt::to_hstring(std::string(response.payload.value.begin(), response.payload.value.end())));
             } else if (!response.payload.value.empty()) {
                 serviceMessage = winrt::to_hstring(std::string(response.payload.value.begin(), response.payload.value.end()));
             }

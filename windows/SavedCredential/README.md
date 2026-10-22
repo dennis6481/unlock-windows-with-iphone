@@ -1,5 +1,5 @@
 <!-- Created by Rui MA on 01 Oct 2026 -->
-<!-- Modified by Liam on 21 Oct 2026 -->
+<!-- Modified by Liam on 22 Oct 2026 -->
 
 # Saved credential service
 
@@ -56,4 +56,4 @@ Installer `clearForRemoval` must receive service confirmation that the password,
 
 Keep identity checks, consume-before-decrypt ordering, caller separation and impersonation boundaries intact during maintenance. Logs must not include passwords, nonce bytes, credential plaintext or device identifiers in public reports. Verify caller, identity, replay and restart scenarios.
 
-Local accounts additionally verify the level 23 local-user SID and identity-store provider and qualified name against the physical console token.
+Local accounts verify the level 23 local-user SID against the physical console token and use the Windows local-user provider with the SAM-qualified account name. They do not require an Identity Store entry. Authorized password/status queries include service exception details when identity verification fails.

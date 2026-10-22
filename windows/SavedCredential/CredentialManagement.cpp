@@ -1,5 +1,5 @@
 // Created by Rui MA on 30 Sep 2026
-// Modified by Liam on 21 Oct 2026
+// Modified by Liam on 22 Oct 2026
 
 #include "SavedCredentialIpc.h"
 #include "../DesktopApp/DesktopApp.h"
@@ -38,6 +38,8 @@ StatusPayload readStatus() {
             " (Win32 " + std::to_string(diagnostics.win32Error) + ").");
     if (response.result == Result::rejected)
         throw std::runtime_error("The service could not verify the installed target's Windows account. Retry account verification.");
+    if (response.result == Result::internalError && !response.payload.value.empty())
+        throw std::runtime_error(std::string(response.payload.value.begin(), response.payload.value.end()));
     StatusPayload status;
     if (response.result != Result::success || !decodeStatus(response.payload.value.data(), response.payload.value.size(), status))
         throw std::runtime_error("The service returned an error or malformed Windows identity status.");

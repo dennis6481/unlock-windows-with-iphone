@@ -1,4 +1,5 @@
 <!-- Created by Rui MA on 27 Sep 2026 -->
+<!-- Modified by Liam on 22 Oct 2026 -->
 
 # Credential Provider
 
@@ -24,6 +25,8 @@ After successful serialization, `ReportResult` reports its claim nonce and nativ
 
 Matching identity/session re-enumeration can retain an unsubmitted offer. Identity changes and UnAdvise retire worker state. Missing notifications, serialization failure or native password rejection cannot restore a consumed approval or reissue its offer; another attempt requires a fresh presence request.
 
+An earlier consumed request does not block automatic verification on a new sleep/display wake. The service requires user resume after observed sleep or a display-off/on transition around a session lock, a fresh activation ticket and a presence check. Delayed lock notifications retain the ticket; duplicate resume/display-on notifications do not re-arm it. Locking alone never starts automatic verification, and consumed credentials are never reused.
+
 ## Presentation and deployment
 
 Status text distinguishes presence verification, signal failure, disconnection, timeout, verification failure, service failure and genuine session changes. Approval is shown as an unlock attempt, not completed success.
@@ -37,3 +40,5 @@ Install/update through the [installer](../Setup/README.md) and honor its restart
 - [Microsoft V2 Credential Provider sample](https://github.com/microsoft/Windows-classic-samples/blob/main/Samples/CredentialProvider/cpp/CSampleCredential.cpp)
 - [CredentialsChanged](https://learn.microsoft.com/en-us/windows/win32/api/credentialprovider/nf-credentialprovider-icredentialproviderevents-credentialschanged)
 - [GetCredentialCount and automatic submission](https://learn.microsoft.com/en-us/windows/win32/api/credentialprovider/nf-credentialprovider-icredentialprovider-getcredentialcount)
+
+Local Windows accounts use native Kerberos interactive logon serialization (experimental; Windows validation pending).

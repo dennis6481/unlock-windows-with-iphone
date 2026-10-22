@@ -1,7 +1,9 @@
 // Created by Rui MA on 30 Sep 2026
+// Modified by Liam on 22 Oct 2026
 
 #include <initguid.h>
 #include "SavedCredentialIpc.h"
+#include "AutomaticUnlock.h"
 #include "SavedCredentialVault.h"
 #include "LastUnlock.h"
 #include "EnrollmentStore.h"
@@ -15,6 +17,8 @@
 #include <bcrypt.h>
 #include <sddl.h>
 #include <identitystore.h>
+#include <credentialprovider.h>
+#include <ShlGuid.h>
 #include <propsys.h>
 #include <propkey.h>
 
@@ -49,6 +53,8 @@ std::atomic<ULONGLONG> gIdentityGeneration{0};
 std::atomic<ULONGLONG> gUnlockHistoryGeneration{0};
 std::atomic<ULONGLONG> gConnectionGeneration{0};
 std::atomic_bool gSuspended{false};
+// Locking alone never arms an attempt; wake tickets survive delayed lock events.
+AutomaticUnlockState gAutomaticUnlock;
 std::atomic<DWORD> gObservedConsoleSession{0xffffffff};
 std::atomic_bool gPipeFailed{false};
 SERVICE_STATUS_HANDLE gStatusHandle = nullptr;
@@ -244,14 +250,35 @@ Identity consoleIdentity(const Console& console) {
         throw std::runtime_error("Windows online identity query failed (Win32 " + std::to_string(status) + ").");
     if (!userInfo.value) fail("Windows online identity query returned no account information");
     const auto* online = reinterpret_cast<const USER_INFO_24*>(userInfo.value);
-    if (!online->usri24_internet_identity)
-        fail("Windows console account is not connected to an online identity");
-    if (!online->usri24_user_sid || sidText(online->usri24_user_sid) != console.sid ||
-        !online->usri24_internet_provider_name || !*online->usri24_internet_provider_name ||
-        !online->usri24_internet_principal_name || !*online->usri24_internet_principal_name)
-        fail("Windows online identity is incomplete or does not match the console token");
-    const std::wstring qualifiedName = std::wstring(online->usri24_internet_provider_name) +
-        L"\\" + online->usri24_internet_principal_name;
+    const bool internetIdentity = online->usri24_internet_identity != FALSE;
+    std::wstring qualifiedName;
+    if (internetIdentity) {
+        if (!online->usri24_user_sid || sidText(online->usri24_user_sid) != console.sid ||
+            !online->usri24_internet_provider_name || !*online->usri24_internet_provider_name ||
+            !online->usri24_internet_principal_name || !*online->usri24_internet_principal_name)
+            fail("Windows online identity is incomplete or does not match the console token");
+        qualifiedName = std::wstring(online->usri24_internet_provider_name) +
+            L"\\" + online->usri24_internet_principal_name;
+    } else {
+        if (use != SidTypeUser || domainChars == 0)
+            fail("Windows console account is not a local user");
+        struct LocalInfo final {
+            LPBYTE value = nullptr;
+            ~LocalInfo() { if (value) NetApiBufferFree(value); }
+        } local;
+        const auto localStatus = NetUserGetInfo(nullptr, accountName.data(), 23, &local.value);
+        if (localStatus != NERR_Success || !local.value)
+            fail("Windows local user lookup failed");
+        const auto* user = reinterpret_cast<const USER_INFO_23*>(local.value);
+        if (!user->usri23_user_sid || sidText(user->usri23_user_sid) != console.sid)
+            fail("Windows local user SID does not match the physical console token");
+        qualifiedName = std::wstring(domainName.data()) + L"\\" + accountName.data();
+        // Local SAM users need not have an entry in the connected identity store.
+        Identity identity{console.sid, std::move(qualifiedName), Identity_LocalUserProvider};
+        SensitiveBytes encoded;
+        if (!encodeIdentity(identity, encoded)) fail("Windows local identity properties are invalid");
+        return identity;
+    }
 
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
     struct Apartment final { ~Apartment() { winrt::uninit_apartment(); } } apartment;
@@ -347,6 +374,7 @@ public:
         Packet response;
         response.operation = request.operation;
         response.result = Result::rejected;
+        bool reportAccountFailure = false;
         try {
             auto client = inspectClient(pipe);
             if (requiresLogonUi(request.operation) && !client.logonUi) {
@@ -372,6 +400,10 @@ public:
                 return response;
             }
             const auto console = currentConsole();
+            reportAccountFailure = !console.locked && client.session == console.session &&
+                ((client.userSid == console.sid &&
+                    (request.operation == Operation::credentialSummary || request.operation == Operation::serviceDiagnostics)) ||
+                 (client.admin && request.operation == Operation::status));
             if (provisioning_ && (provisioning_->session != console.session ||
                 provisioning_->generation != gIdentityGeneration.load() || provisioning_->identity.sid != console.sid ||
                 (provisioning_->logonId && (provisioning_->logonId->LowPart != console.logonId.LowPart ||
@@ -499,8 +531,12 @@ public:
                 response.result = Result::success;
                 return response;
             }
-            if (request.operation == Operation::beginVerification) {
+            if (request.operation == Operation::beginVerification ||
+                request.operation == Operation::beginAutomaticVerification) {
                 if (!client.logonUi || !console.locked) return response;
+                const bool automatic = request.operation == Operation::beginAutomaticVerification;
+                if (automatic && !gAutomaticUnlock.eligible(automaticUnlockEnabled(), console.locked))
+                    return response;
                 Identity identity;
                 if (!decodeIdentity(request.payload.value.data(), request.payload.value.size(), identity) ||
                     identity.sid != console.sid) return response;
@@ -512,6 +548,10 @@ public:
                 const auto stored = vault_.storedIdentity();
                 if (!stored || !sameIdentity(*stored, identity)) return response;
                 if (task_) { response.result = Result::busy; setText(response.payload, "Bluetooth verification is still finishing. Try again."); return response; }
+                // Consume before BLE starts; failure never loops or extends the deadline.
+                // Manual verification also consumes this screen activation to avoid
+                // an automatic retry after an explicit Unlock attempt.
+                if (!gAutomaticUnlock.consume(automatic, automaticUnlockEnabled(), console.locked)) return response;
                 queueTask(identity, console, {original, original.record}, false);
                 if (!encodeAuthenticationStatus(authenticationStatus_, response.payload)) fail("authentication status encoding failed");
                 response.result = Result::success;
@@ -683,7 +723,7 @@ public:
             OutputDebugStringW(message.c_str());
             response.result = Result::internalError;
             response.payload.clear();
-            if (request.operation == Operation::beginBinding || request.operation == Operation::saveThreshold ||
+            if (reportAccountFailure || request.operation == Operation::beginBinding || request.operation == Operation::saveThreshold ||
                 request.operation == Operation::removeBinding || request.operation == Operation::bindingStatus ||
                 request.operation == Operation::bindingTaskStatus) setText(response.payload, winrt::to_string(message));
         }
@@ -1155,11 +1195,39 @@ DWORD WINAPI serviceControl(const DWORD control, const DWORD eventType, void* ev
         return NO_ERROR;
     }
     if (control == SERVICE_CONTROL_POWEREVENT) {
-        ++gConsoleGeneration;
-        if (eventType == PBT_APMSUSPEND) { gSuspended = true; ++gConnectionGeneration; }
-        else if (eventType == PBT_APMRESUMEAUTOMATIC || eventType == PBT_APMRESUMESUSPEND || eventType == PBT_APMRESUMECRITICAL) {
-            gSuspended = false;
+        if (eventType == PBT_POWERSETTINGCHANGE) {
+            const auto* setting = static_cast<const POWERBROADCAST_SETTING*>(eventData);
+            if (setting != nullptr &&
+                IsEqualGUID(setting->PowerSetting, GUID_CONSOLE_DISPLAY_STATE) &&
+                setting->DataLength == sizeof(DWORD)) {
+                DWORD state = 0;
+                std::memcpy(&state, setting->Data, sizeof(state));
+                if (state == PowerMonitorOff) {
+                    gAutomaticUnlock.observe(AutomaticUnlockEvent::displayOff);
+                } else if (state == PowerMonitorOn) {
+                    gAutomaticUnlock.observe(AutomaticUnlockEvent::displayOn);
+                }
+            }
+            return NO_ERROR;
+        }
+        if (eventType == PBT_APMSUSPEND) {
+            ++gConsoleGeneration;
+            gSuspended = true;
+            gAutomaticUnlock.observe(AutomaticUnlockEvent::suspend);
             ++gConnectionGeneration;
+        } else if (eventType == PBT_APMRESUMEAUTOMATIC || eventType == PBT_APMRESUMESUSPEND ||
+                   eventType == PBT_APMRESUMECRITICAL) {
+            // Background resume alone cannot arm an attempt. User resume after
+            // observed sleep also works when display/lock notifications arrive late.
+            // Windows may report background resume, display-on and then user
+            // resume. The latter must not cancel verification already started
+            // by display-on or invalidate the Bluetooth connection again.
+            if (gSuspended.exchange(false)) {
+                ++gConsoleGeneration;
+                ++gConnectionGeneration;
+            }
+            gAutomaticUnlock.observe(eventType == PBT_APMRESUMESUSPEND
+                ? AutomaticUnlockEvent::userResume : AutomaticUnlockEvent::backgroundResume);
         }
         return NO_ERROR;
     }
@@ -1170,6 +1238,13 @@ DWORD WINAPI serviceControl(const DWORD control, const DWORD eventType, void* ev
             eventType == WTS_CONSOLE_CONNECT ||
             eventType == WTS_CONSOLE_DISCONNECT || eventType == WTS_REMOTE_DISCONNECT)) {
             ++gConsoleGeneration;
+            if (eventType == WTS_SESSION_LOCK) {
+                gAutomaticUnlock.observe(AutomaticUnlockEvent::lock);
+            } else if (eventType == WTS_SESSION_UNLOCK || eventType == WTS_SESSION_LOGON ||
+                       eventType == WTS_SESSION_LOGOFF || eventType == WTS_CONSOLE_DISCONNECT ||
+                       eventType == WTS_REMOTE_DISCONNECT) {
+                gAutomaticUnlock.observe(AutomaticUnlockEvent::reset);
+            }
             if (eventType != WTS_SESSION_UNLOCK) ++gIdentityGeneration;
             if (eventType != WTS_SESSION_LOCK && eventType != WTS_SESSION_UNLOCK) {
                 ++gConnectionGeneration;
@@ -1231,6 +1306,12 @@ void WINAPI serviceMain(DWORD, LPWSTR*) {
     reportServiceState(SERVICE_START_PENDING);
     try {
         {
+            // Services receive console monitor power events even when the user
+            // session is locked. Normal screen wake does not require S3 sleep.
+            const HPOWERNOTIFY displayNotification = RegisterPowerSettingNotification(
+                gStatusHandle, &GUID_CONSOLE_DISPLAY_STATE, DEVICE_NOTIFY_SERVICE_HANDLE);
+            if (!displayNotification)
+                OutputDebugStringW(L"[SavedCredential] console display notification unavailable; session-lock trigger remains available\n");
             Handler handler;
             PSECURITY_DESCRIPTOR descriptor = nullptr;
             if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
@@ -1249,6 +1330,8 @@ void WINAPI serviceMain(DWORD, LPWSTR*) {
             reportServiceState(SERVICE_RUNNING);
             servePipe(pipe.value, handler);
             gStopping = true;
+            if (displayNotification && !UnregisterPowerSettingNotification(displayNotification))
+                OutputDebugStringW(L"[SavedCredential] console display notification unregister failed\n");
         }
         reportServiceState(SERVICE_STOPPED,
             gPipeFailed.load() ? ERROR_SERVICE_SPECIFIC_ERROR : NO_ERROR);

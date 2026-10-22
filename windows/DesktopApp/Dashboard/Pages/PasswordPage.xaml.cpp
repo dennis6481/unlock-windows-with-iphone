@@ -1,4 +1,5 @@
 // Created by Rui MA on 09 Oct 2026
+// Modified by Liam on 22 Oct 2026
 
 #include "PasswordPage.xaml.h"
 #include "PasswordPage.g.cpp"
@@ -19,7 +20,7 @@ void PasswordPage::OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEven
     passwordPanel_.Spacing(16);
     account_ = text(L"Windows account: loading...", 20);
     passwordPanel_.Children().Append(account_);
-    passwordPanel_.Children().Append(text(L"Manage the encrypted password copy saved on this PC. This does not change your Microsoft Account password. Administrator approval is required."));
+    passwordPanel_.Children().Append(text(L"Manage the encrypted password copy saved on this PC. This does not change your Windows account password. Administrator approval is required."));
     status_ = text(L"Loading saved password status...");
     passwordPanel_.Children().Append(status_);
     notice_ = InfoBar{};
@@ -80,8 +81,8 @@ void PasswordPage::applyState() {
     const auto& name = summary_->identity.qualifiedUserName;
     const auto separator = name.find_last_of(L'\\');
     account_.Text(L"Windows account: " + name.substr(separator == std::wstring::npos ? 0 : separator + 1));
-    status_.Text(!summary_->credentialPresent ? L"No password copy is saved. Save your Microsoft Account password to enable iPhone unlock."
-        : summary_->credentialMatches ? L"An encrypted password copy is saved. Update it when your Microsoft Account password changes."
+    status_.Text(!summary_->credentialPresent ? L"No password copy is saved. Save your Windows account password to enable iPhone unlock."
+        : summary_->credentialMatches ? L"An encrypted password copy is saved. Update it when your Windows account password changes."
         : L"The saved copy does not match this verified Windows identity. Update it before using iPhone unlock.");
 }
 
@@ -140,9 +141,11 @@ Windows::Foundation::IAsyncAction PasswordPage::query(weak_ref<PasswordPage> wea
         if (!call(Operation::credentialSummary, SensitiveBytes{}, response, kPipeTransferLifetimeMs, &diagnostics))
             failure = L"Saved password service is unavailable: " + std::wstring(callStageName(diagnostics.stage)) +
                 L" (Win32 " + std::to_wstring(diagnostics.win32Error) + L"). Choose Retry to check again.";
-        else if (response.result != Result::success)
+        else if (response.result != Result::success) {
             failure = L"The service could not verify this signed-in Windows account. Choose Retry to check again.";
-        else {
+            if (response.result == Result::internalError && !response.payload.value.empty())
+                failure += L"\n" + std::wstring(to_hstring(std::string(response.payload.value.begin(), response.payload.value.end())));
+        } else {
             CredentialSummary value;
             if (!decodeCredentialSummary(response.payload.value.data(), response.payload.value.size(), value))
                 failure = L"The service returned malformed password status.";

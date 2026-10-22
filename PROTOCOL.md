@@ -1,4 +1,5 @@
 <!-- Created by Rui MA on 26 Sep 2026 -->
+<!-- Modified by Liam on 22 Oct 2026 -->
 
 # Protocol and architecture
 
@@ -59,8 +60,12 @@ Connection, reads, writes and reply acknowledgment use cancellable Overlapped I/
 
 `lastUnlockStatus` returns only optional success time/RSSI to the verified unlocked target user. History is not persisted or used for authentication. Service restart, account/session change, binding replacement/removal and password removal clear it; threshold changes retain it. New requests retire pending results. Reporting failure is diagnostic and never changes the native Windows result.
 
+## Opt-in wake-based automatic verification
+
+Administrator-approved Status control stores a machine-wide registry DWORD under `HKLM\SOFTWARE\UnlockWindowsWithIPhone\AutomaticUnlockAtLockScreen`. Only value 1 opts in; missing/invalid data is off, and the old `AutomaticUnlockOnResume` setting is not promoted automatically. The service requires an existing user's session lock (not initial sign-in) and either user resume (`PBT_APMRESUMESUSPEND`) after observed suspend, or a display-off/on transition through `GUID_CONSOLE_DISPLAY_STATE`. Sleep wake tickets survive delayed lock notifications; display-off observed before lock is retained until display-on. Locking alone (including Win+L), initial display-on and background resume alone cannot arm a ticket. Session unlock, logon, logoff or disconnect clears it. An explicit manual Unlock consumes the current activation, including its pending resume/display notifications. The service checks locked console/account, binding, credential and request identity, atomically consumes the ticket before BLE work and never automatically retries failures within the same activation. Duplicate user-resume/display-on notifications do not create another ticket. The Credential Provider watcher initiates verification when the sign-in UI is active and reuses the existing one-time offer and `CredentialsChanged` native submission. PIN/password fallback remains. Someone waking the locked PC with the trusted phone nearby may gain access. Real sleep/display-wake acceptance is pending.
+
 ## Limits and acceptance
 
 Presence authorization does not require a fresh phone gesture. Pairing-history metadata and protected GATT success do not independently prove current-link LESC mode/key reuse. Advertisement RSSI is unauthenticated and is not secure distance or relay resistance. ANCS availability and long-standby/recovery behavior require hardware acceptance.
 
-Existing MSA, single-user and local physical-console support is retained. Local accounts and remote sessions remain unsupported. A service **approved** status is not proof of Windows unlocking; acceptance requires the actual session to resume with no iPhone app, desktop app exited and both devices locked. See [Security](SECURITY.md).
+Existing MSA, single-user and local physical-console support is retained. Local accounts are experimental and require Windows validation; remote sessions remain unsupported. A service **approved** status is not proof of Windows unlocking; acceptance requires the actual session to resume with no iPhone app, desktop app exited and both devices locked. See [Security](SECURITY.md).

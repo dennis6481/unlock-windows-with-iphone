@@ -1,4 +1,5 @@
 <!-- Created by Rui MA on 01 Oct 2026 -->
+<!-- Modified by Liam on 22 Oct 2026 -->
 
 # Saved credential service
 
@@ -43,7 +44,7 @@ Tray Quit signals the current setup's random cancellation event. Its target user
 
 Before a console user token exists, `captureProvisioningIdentity` accepts only a real physical-console LogonUI caller and the installer-recorded target SID. It records system-provided identity metadata in memory and returns no password, snapshot nonce or phone grant.
 
-After sign-in, queries use `NetUserGetInfo` level 24 for the online provider/name and local SID, and match unfiltered identity-store entries by PrimarySid for ProviderID. The qualified name uses Windows `provider\principal` format; the store's QualifiedUserName property is not required. Target, console and logon checks remain required. Service restart does not require another lock/unlock cycle.
+For online identities, queries use `NetUserGetInfo` level 24 for the online provider/name and local SID, and match unfiltered identity-store entries by PrimarySid for ProviderID. The qualified name uses Windows `provider\principal` format; the store's QualifiedUserName property is not required. Target, console and logon checks remain required. Service restart does not require another lock/unlock cycle.
 
 The snapshot lasts five minutes. A new management query can renew it without another sign-in. Candidates are invalidated by logoff, console disconnection, another console account or service restart. Unavailable or ambiguous Windows identity properties are explicit verification failures. The target is the console user, not an alternate administrator entered at UAC. Identity must not be reconstructed from diagnostics or the saved credential.
 
@@ -54,3 +55,5 @@ The main Password page refreshes on entry, activation and operation-window exit.
 Installer `clearForRemoval` must receive service confirmation that the password, grant, snapshot and BLE request were cleared before removal continues. There is no success path that skips a failed credential-clear operation.
 
 Keep identity checks, consume-before-decrypt ordering, caller separation and impersonation boundaries intact during maintenance. Logs must not include passwords, nonce bytes, credential plaintext or device identifiers in public reports. Verify caller, identity, replay and restart scenarios.
+
+Local accounts verify the level 23 local-user SID against the physical console token and use the Windows local-user provider with the SAM-qualified account name. They do not require an Identity Store entry. Authorized password/status queries include service exception details when identity verification fails.

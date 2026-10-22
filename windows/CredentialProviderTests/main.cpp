@@ -1,6 +1,8 @@
 // Created by Rui MA on 27 Sep 2026
+// Modified by Liam on 22 Oct 2026
 
 #include "UnlockCredentialProvider.h"
+#include "../SavedCredential/AutomaticUnlock.h"
 #include "../ComponentFiles.h"
 #include "../Resources/resource.h"
 
@@ -16,6 +18,7 @@
 #include <cwchar>
 #include <stdexcept>
 #include <string>
+#include <initializer_list>
 
 namespace {
 
@@ -228,7 +231,59 @@ std::wstring moduleDirectory() {
     return path;
 }
 
+void testAutomaticUnlockEvents() {
+    using unlock_windows::saved_credential::AutomaticUnlockState;
+    using Event = unlock_windows::saved_credential::AutomaticUnlockEvent;
+    const auto check = [](std::initializer_list<Event> events, bool expected, const char* message) {
+        AutomaticUnlockState state;
+        for (auto event : events) state.observe(event);
+        require(state.eligible(true, true) == expected, message);
+        if (expected) {
+            require(!state.eligible(false, true), "default-off policy must deny");
+            require(!state.eligible(true, false), "unlocked physical console must deny");
+            require(state.consume(true, true, true), "eligible wake must be consumable");
+            require(!state.consume(true, true, true), "same wake must not be consumed twice");
+            state.observe(Event::userResume);
+            state.observe(Event::displayOn);
+            state.observe(Event::lock);
+            require(!state.eligible(true, true), "duplicate wake/lock notifications must not retry");
+        }
+    };
+    check({}, false, "initial sign-in must deny");
+    check({Event::lock}, false, "Win+L alone must not arm an attempt");
+    check({Event::lock, Event::displayOn}, false, "initial display-on without off must deny");
+    check({Event::userResume, Event::lock}, false, "resume without observed sleep must deny");
+    check({Event::lock, Event::suspend, Event::backgroundResume}, false,
+        "unattended background resume must not arm an attempt");
+    check({Event::displayOff, Event::displayOn, Event::lock}, false,
+        "unlocked display wake must not arm a later Win+L");
+    check({Event::lock, Event::displayOff, Event::displayOn}, true, "locked display wake must qualify");
+    check({Event::displayOff, Event::lock, Event::displayOn}, true,
+        "lock after display-off must preserve the off state");
+    check({Event::lock, Event::suspend, Event::userResume}, true,
+        "user sleep/resume must work without separate display notifications");
+    check({Event::suspend, Event::userResume, Event::lock}, true,
+        "lock delivered after user resume must preserve the wake ticket");
+    check({Event::displayOff, Event::suspend, Event::backgroundResume, Event::displayOn, Event::lock}, true,
+        "display wake before delayed lock must preserve the sleep wake ticket");
+    check({Event::suspend, Event::lock, Event::displayOff, Event::displayOn}, false,
+        "suspended machine cannot authorize until resume");
+    check({Event::suspend, Event::lock, Event::displayOff, Event::displayOn, Event::backgroundResume}, true,
+        "resume delivered after display-on must preserve the visible wake ticket");
+    check({Event::lock, Event::suspend, Event::userResume, Event::reset, Event::lock}, false,
+        "session reset must discard the previous wake ticket");
+    AutomaticUnlockState manual;
+    manual.observe(Event::lock);
+    manual.observe(Event::suspend);
+    manual.observe(Event::backgroundResume);
+    require(manual.consume(false, true, true), "manual Unlock remains available before automatic wake");
+    manual.observe(Event::userResume);
+    manual.observe(Event::displayOn);
+    require(!manual.eligible(true, true), "manual Unlock must consume delayed wake notifications too");
+}
+
 void run() {
+    testAutomaticUnlockEvents();
     const auto comResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     require(SUCCEEDED(comResult), "CoInitializeEx failed");
 

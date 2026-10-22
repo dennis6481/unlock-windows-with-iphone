@@ -1,17 +1,18 @@
 <!-- Created by Rui MA on 26 Sep 2026 -->
+<!-- Modified by Liam on 22 Oct 2026 -->
 
 # Security
 
 ## Credential protection
 
-- The saved Microsoft account password remains on the PC, protected by **LocalSystem user-scope DPAPI** and SYSTEM-only vault ACLs. The storage format remains unchanged.
+- The saved Windows account password remains on the PC, protected by **LocalSystem user-scope DPAPI** and SYSTEM-only vault ACLs. The storage format remains unchanged.
 - Product binding uses separate machine-bound DPAPI storage, with SYSTEM/administrator-only write permissions and atomic commit. Ordinary desktop clients read only non-sensitive service summaries.
 - Neither the phone nor the desktop app receives the password. Only a verified LogonUI process can claim it after a fresh presence check. The service consumes the authorization before decrypting the password; the Credential Provider submits it through native Negotiate.
 - SYSTEM, administrator or kernel compromise is outside this protection boundary. Plaintext under the application's control is cleared where practical; removing the saved copy does not guarantee erasure from backups or SSD history.
 
 ## Presence authorization
 
-The user explicitly clicks **Unlock** on the PC. The phone needs no fresh Face ID, Touch ID, tap or app interaction. Locking the PC alone does not initiate unlock.
+By default the user explicitly clicks **Unlock** on the PC. An administrator may enable automatic verification when the user wakes the PC from observed sleep, or its screen turns off and on around an existing user's session lock. Locking alone (including Win+L) and background resume alone do not arm an attempt. Each sleep/display wake allows one attempt; delayed lock notifications retain the wake ticket, while session unlock, logon, logoff or disconnect clears it. The phone needs no fresh Face ID, Touch ID, tap or app interaction. **An unattended PC can unlock when someone wakes it with the authorized phone nearby.** Keep this mode off on shared or security-sensitive systems.
 
 For unlock, the service checks the selected system-paired BLE endpoint ID, authenticated Secure Connections pairing records, fresh protected ANCS/CCCD operations and current address/type-associated RSSI. Full account identity, request, binding, connection, session, logon and lock generation remain bound to one short-lived, single-use authorization.
 
@@ -25,7 +26,7 @@ Connections and Windows-cached service structure may persist across unlocks. The
 
 ## Windows boundaries
 
-Original password/PIN providers remain available. Initial sign-in after boot or sign-out still requires a native method. Support is limited to one password-backed Microsoft account (MSA) with an existing physical-console session. Local accounts, multiple users and remote sessions are not supported.
+Original password/PIN providers remain available. Initial sign-in after boot or sign-out still requires a native method. Support is limited to one password-backed Microsoft or local Windows account with an existing physical-console session. Local-account support is experimental; multiple users and remote sessions are not supported.
 
 IPC version 3 removes all signature/phone transport operations. Ordinary processes cannot begin unlock verification, approve it, obtain auto-submit offers or claim passwords. UAC is required for password and binding changes; the service verifies the complete identity of the configured installation target rather than using the administrator account that granted elevation.
 

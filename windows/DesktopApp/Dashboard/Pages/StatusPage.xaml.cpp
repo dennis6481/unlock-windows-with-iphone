@@ -1,10 +1,12 @@
 // Created by Rui MA on 09 Oct 2026
+// Modified by Liam on 22 Oct 2026
 
 #include "StatusPage.xaml.h"
 #include "StatusPage.g.cpp"
 #include "PageControls.h"
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
 #include "../../../Enrollment/BindingClient.h"
+#include "../../../SavedCredential/AutomaticUnlock.h"
 
 namespace winrt::UnlockDesktop::implementation {
 using namespace unlock_windows::desktop_app::dashboard_ui;
@@ -53,7 +55,24 @@ void StatusPage::OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEventA
     });
     const auto removeGlyph = std::wstring(1, static_cast<wchar_t>(Symbol::Delete));
     removalCard_ = settingsCard(L"Remove bound iPhone", remove_, removeGlyph.c_str());
+    automaticUnlockStatus_ = text(L"", 14);
+    automaticUnlockStatus_.TextWrapping(TextWrapping::Wrap);
+    automaticUnlock_ = Button{};
+    automaticUnlock_.Click([weak = get_weak()](const auto&, const auto&) {
+        changeAutomaticUnlock(weak);
+    });
+    auto automaticUnlockCard = settingsCard(L"Automatically unlock", automaticUnlock_, L"\xE8F2", false);
+    auto automaticUnlockLayout = automaticUnlockCard.Child().as<Grid>();
+    automaticUnlockLayout.RowDefinitions().GetAt(0).Height(automatic());
+    automaticUnlockStatus_.VerticalAlignment(VerticalAlignment::Top);
+    automaticUnlockStatus_.Margin({0,8,0,0});
+    Grid::SetRow(automaticUnlockStatus_, 1);
+    Grid::SetColumn(automaticUnlockStatus_, 1);
+    Grid::SetColumnSpan(automaticUnlockStatus_, 2);
+    automaticUnlockLayout.Children().Append(automaticUnlockStatus_);
+    statusPanel_.Children().Append(automaticUnlockCard);
     statusPanel_.Children().Append(removalCard_);
+    refreshAutomaticUnlock();
 
     error_ = InfoBar{};
     error_.Severity(InfoBarSeverity::Error);
@@ -63,8 +82,53 @@ void StatusPage::OnNavigatedTo(Microsoft::UI::Xaml::Navigation::NavigationEventA
     BodyHost().Content(statusPanel_);
 }
 
+void StatusPage::refreshAutomaticUnlock() {
+    if (!automaticUnlock_ || !automaticUnlockStatus_) return;
+    const bool enabled = unlock_windows::saved_credential::automaticUnlockEnabled();
+    automaticUnlockStatus_.Text(L"Automatically unlock this PC when you wake it from sleep or wake its screen while locked and your paired iPhone is nearby.\n\n"
+        L"Someone else could gain access when waking this PC while your iPhone is nearby.");
+    automaticUnlock_.Content(box_value(hstring(enabled ? L"Turn off" : L"Turn on")));
+    Automation::AutomationProperties::SetName(automaticUnlock_,
+        enabled ? L"Turn off automatic unlock; administrator approval required"
+                : L"Turn on automatic unlock; administrator approval required");
+    ToolTipService::SetToolTip(automaticUnlock_, box_value(L"Administrator approval required"));
+    automaticUnlock_.IsEnabled(!stopped_ && !changingAutomaticUnlock_);
+}
+
+fire_and_forget StatusPage::changeAutomaticUnlock(weak_ref<StatusPage> weak) {
+    auto page = weak.get();
+    if (!page || page->stopped_ || page->changingAutomaticUnlock_) co_return;
+    const bool enable = !unlock_windows::saved_credential::automaticUnlockEnabled();
+    page->changingAutomaticUnlock_ = true;
+    page->automaticUnlock_.IsEnabled(false);
+    apartment_context foreground;
+    page = nullptr;
+    std::wstring failure;
+    co_await resume_background();
+    try {
+        const DWORD code = unlock_windows::enrollment::launchHelper(
+            enable ? L"--auto-unlock-setting on" : L"--auto-unlock-setting off");
+        if (code != ERROR_SUCCESS) failure = L"Administrator approval or registry update failed (" +
+            std::to_wstring(code) + L").";
+    } catch (...) { failure = currentException(); }
+    co_await foreground;
+    if (page = weak.get(); page && !page->stopped_) {
+        page->changingAutomaticUnlock_ = false;
+        page->refreshAutomaticUnlock();
+        if (!failure.empty()) {
+            page->saveError_ = failure;
+            page->error_.Message(failure);
+            page->error_.IsOpen(true);
+        } else {
+            page->saveError_.clear();
+            page->error_.IsOpen(false);
+        }
+    }
+}
+
 void StatusPage::Update(unlock_windows::desktop_app::DashboardSnapshot const& snapshot) {
     hostBusy_ = snapshot.busy;
+    refreshAutomaticUnlock();
     const bool known = snapshot.binding.has_value();
     const bool bound = snapshot.binding && snapshot.binding->state == unlock_windows::system_ble::BindingState::bound;
     lastUnlockCard_.Visibility(bound ? Visibility::Visible : Visibility::Collapsed);
@@ -210,6 +274,7 @@ void StatusPage::Remove() {
 }
 void StatusPage::Stop() {
     stopped_ = true;
+    if (automaticUnlock_) automaticUnlock_.IsEnabled(false);
     if (bindingView_) bindingView_->stop();
     if (cancellation_ && !SetEvent(cancellation_.get())) OutputDebugStringW(L"Binding management cancellation failed\n");
 }

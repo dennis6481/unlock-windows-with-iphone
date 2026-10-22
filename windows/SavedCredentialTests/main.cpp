@@ -1,5 +1,7 @@
 // Created by Rui MA on 30 Sep 2026
+// Modified by Liam on 21 Oct 2026
 
+#include <initguid.h>
 #include "../SavedCredential/SavedCredentialIpc.h"
 #include "../DesktopApp/DesktopApp.h"
 #include "../Bluetooth/PresenceAuthorization.h"
@@ -8,6 +10,8 @@
 #include "../ConsoleSession.h"
 #include <winrt/Windows.Foundation.Collections.h>
 #include <sddl.h>
+#include <credentialprovider.h>
+#include <ShlGuid.h>
 
 #include <cstdlib>
 #include <algorithm>
@@ -122,6 +126,11 @@ void testIdentityRoundTrip() {
         IsEqualGUID(decoded.providerId, identity.providerId), "identity round trip changed data");
     bytes.value.push_back(0);
     require(!decodeIdentity(bytes.value.data(), bytes.value.size(), decoded), "trailing data must be rejected");
+
+    Identity local{L"S-1-5-21-100-200-300-1001", L"DESKTOP\\local-user", Identity_LocalUserProvider};
+    require(encodeIdentity(local, bytes) && decodeIdentity(bytes.value.data(), bytes.value.size(), decoded) &&
+        sameIdentity(local, decoded), "local account identity round trip changed data");
+    require(!sameIdentity(identity, local), "online and local identity must not match");
 }
 
 void testStatusRoundTrip() {
@@ -192,7 +201,7 @@ void testAuthenticationOperationPackets() {
         Packet inbound;
         const bool accepted = readPacket(pipe.server.get(), inbound, context);
         const DWORD error = GetLastError();
-        const bool known = operation == 9 || operation == 12 || operation == 15 || operation == 16 || (operation >= 18 && operation <= 28);
+        const bool known = operation == 9 || operation == 12 || operation == 15 || operation == 16 || (operation >= 18 && operation <= 29);
         require(isKnownOperation(operation) == known, "operation whitelist rejected new operation or accepted unknown operation");
         require(accepted == known, "packet parser must accept authentication operations and reject unknown operations");
         if (accepted) {
@@ -205,6 +214,8 @@ void testAuthenticationOperationPackets() {
 }
 
 void testLastUnlockCodec() {
+    require(requiresLogonUi(Operation::beginAutomaticVerification),
+        "automatic verification must only be callable by verified LogonUI");
     require(requiresLogonUi(Operation::reportUnlockResult) && !requiresLogonUi(Operation::lastUnlockStatus),
         "unlock result writes must require LogonUI; history reads must not");
     SensitiveBytes bytes;

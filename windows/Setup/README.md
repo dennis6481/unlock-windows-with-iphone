@@ -1,10 +1,13 @@
 <!-- Created by Rui MA on 28 Sep 2026 -->
+<!-- Modified by Liam on 22 Oct 2026 -->
 
 # Installer and maintenance
 
 The native Setup installs, updates, reinstalls and removes the four Windows product components. It handles restart continuation and finalization. Authentication and BLE contracts remain outside the installer.
 
 Progress logs append in chronological order and scroll to the latest entry. Unchanged result polling preserves the scroll position. Installer C++ sources compile as UTF-8.
+
+Finalization runs in the SYSTEM task's non-interactive session without a redundant PowerShell `-WindowStyle Hidden` option. Retrying an existing transaction removes that launch option while preserving its sealed script and package manifest. Result timeouts report the finalization task state and exit code so startup failures can be investigated in Windows or security-software logs.
 
 ## Code responsibilities
 

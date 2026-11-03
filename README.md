@@ -1,5 +1,19 @@
 <!-- Created by Rui MA on 26 Sep 2026 -->
 > [!WARNING]
+> **Read before downloading**
+>
+> Unlock with iPhone does not provide the same user verification as Windows Hello.
+>
+> - Unlocking does not require Face ID, Touch ID, or confirmation on your iPhone.
+> - Someone with physical access to your PC may be able to unlock it while your paired iPhone is nearby, even when the phone is locked.
+> - Bluetooth signal strength is not a secure measure of distance and does not provide protection against relay attacks.
+>
+> Unlock with iPhone is a convenience feature, not a security upgrade. Only continue if you accept the trade-off.
+> 
+> See [SECURITY.md](SECURITY.md) for details.
+
+
+> [!NOTE]
 > **Developer technical preview**
 >
 > - **Currently supports only Windows users who sign in with a Microsoft account (MSA).** The account must have a password. Local Windows accounts are not supported. See Microsoft's guide to [switching from a local account to a Microsoft account](https://support.microsoft.com/en-us/accounts-billing/manage/change-from-a-local-account-to-a-microsoft-account-in-windows).
@@ -14,6 +28,9 @@
 <p align="center">
   <a href="https://github.com/dennis6481/unlock-windows-with-iphone/releases">
     <img src="https://img.shields.io/github/v/release/dennis6481/unlock-windows-with-iphone?include_prereleases&amp;sort=date&amp;logo=github" alt="GitHub Release (including pre-releases)">
+  </a>
+  <a href="https://hub.xerj.org/contributors/dennis6481">
+    <img src="https://hub.xerj.org/contributors/dennis6481/badge.svg" alt="XERJ Corpus Hub contributor" height="20">
   </a>
   <a href="https://sonarcloud.io/project/overview?id=dennis6481_unlock-windows-with-iphone">
     <img src="https://sonarcloud.io/images/project_badges/sonarcloud-light.svg" alt="sonarqube" height="20">

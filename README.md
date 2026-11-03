@@ -62,7 +62,7 @@ Your PC must have Bluetooth enabled, with an adapter and driver that support **B
 - Manage system pairing, the product binding and saved password from the Windows tray app. The LocalSystem service verifies presence independently when the desktop app exits.
 - Install, update or remove the Windows app using its installer.
 
-After restarting your PC or signing out, sign in once with your usual Windows password or PIN before using iPhone unlock again.
+Phone unlock requires an existing, locked Windows session. Windows Automatic Restart Sign-On (ARSO) may create one during startup, making phone unlock available immediately after boot. Without an existing session, including after sign-out, sign in with your usual Windows password or PIN first. See [Windows session behavior](SECURITY.md#windows-boundaries).
 
 
 ### Installation
@@ -70,7 +70,7 @@ After restarting your PC or signing out, sign in once with your usual Windows pa
 > [!WARNING]
 > If a version earlier than **1.0.0** is installed, uninstall it in Windows **Settings → Apps** first, then run this installer. 
 
-1. Get the native x64 or ARM64 [Windows installer](https://github.com/dennis6481/unlock-windows-with-iphone/releases) and follow its steps. After restarting, sign in once with your usual Windows password or PIN, then choose **Start setup**.
+1. Get the native x64 or ARM64 [Windows installer](https://github.com/dennis6481/unlock-windows-with-iphone/releases) and follow its steps. After restarting, sign in to Windows and choose **Start setup**.
 2. Save your **Microsoft account password**, not your PIN. The encrypted copy stays on this PC and is never sent to the phone.
 3. On **Status**, use **Open Bluetooth settings** to pair your iPhone. Compare the Bluetooth numbers on both devices and accept only a match. Skip this step if Windows already shows the phone as paired.
 4. Return to **Status**, select your iPhone from the updated paired BLE list and click **Bind selected device**. Each BLE endpoint has its own entry; names do not select identity. Devices are never bound automatically.

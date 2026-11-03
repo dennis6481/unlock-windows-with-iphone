@@ -2,7 +2,9 @@
 
 # Credential Provider
 
-The **Unlock with iPhone®** tile is offered only for an existing, explicitly locked physical-console session. Initial sign-in, signed-out users, other accounts and remote sessions are ineligible. Windows can use `CPUS_LOGON` for unlocking; the scenario enum alone does not establish eligibility. Native Windows password/PIN providers remain available.
+The **Unlock with iPhone®** tile is offered only for an existing, explicitly locked physical-console session. Sign-in without an existing session, signed-out users, other accounts and remote sessions are ineligible. Windows can use `CPUS_LOGON` for unlocking; the scenario enum alone does not establish eligibility. Native Windows password/PIN providers remain available.
+
+A session signed in and locked by Windows ARSO during startup is eligible under the same checks; see [Windows session behavior](../../SECURITY.md#windows-boundaries).
 
 ## Enumeration and requests
 

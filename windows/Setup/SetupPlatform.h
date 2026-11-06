@@ -9,7 +9,6 @@
 #include <Windows.h>
 #include <shlobj.h>
 #include <sddl.h>
-#include <array>
 #include <cstddef>
 #include <optional>
 #include <cstring>

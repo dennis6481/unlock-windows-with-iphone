@@ -5,7 +5,6 @@
 #include "SystemBleContract.h"
 #include "../SavedCredential/SavedCredentialIpc.h"
 #include <winrt/Windows.Devices.Bluetooth.h>
-#include <winrt/Windows.Devices.Bluetooth.GenericAttributeProfile.h>
 #include <winrt/Windows.Devices.Enumeration.h>
 #include <functional>
 #include <memory>

@@ -30,7 +30,6 @@
 #include <mutex>
 #include <condition_variable>
 #include <optional>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>

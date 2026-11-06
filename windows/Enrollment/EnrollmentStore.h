@@ -2,11 +2,9 @@
 
 #pragma once
 
-#include <cstdint>
 #include <functional>
 #include <optional>
 #include <string>
-#include <vector>
 #include "../Bluetooth/SystemBleContract.h"
 
 namespace unlock_windows::system_ble {

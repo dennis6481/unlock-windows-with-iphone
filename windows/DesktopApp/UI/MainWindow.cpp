@@ -25,6 +25,7 @@
 #include <winrt/Microsoft.UI.Xaml.Media.h>
 #include <winrt/Microsoft.UI.Xaml.Media.Animation.h>
 #include <winrt/UnlockDesktop.h>
+#include <cstdint>
 #include <utility>
 #include <array>
 #include <map>

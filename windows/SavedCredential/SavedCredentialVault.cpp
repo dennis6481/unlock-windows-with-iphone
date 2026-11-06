@@ -7,7 +7,6 @@
 #include <sddl.h>
 #include <Aclapi.h>
 
-#include <algorithm>
 #include <array>
 #include <cstring>
 #include <stdexcept>

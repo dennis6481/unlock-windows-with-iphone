@@ -5,20 +5,13 @@
 #include <wtsapi32.h>
 #include "../Bluetooth/SystemBleSession.h"
 #include "../Bluetooth/PresenceAuthorization.h"
-#include <winrt/Windows.Devices.Bluetooth.h>
-#include <winrt/Windows.Devices.Bluetooth.Advertisement.h>
-#include <winrt/Windows.Devices.Bluetooth.GenericAttributeProfile.h>
-#include <winrt/Windows.Devices.Enumeration.h>
 #include <winrt/Windows.Foundation.Collections.h>
-#include <winrt/Windows.Storage.Streams.h>
 #include <atomic>
-#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
 #include <mutex>
-#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -27,10 +20,6 @@
 
 namespace {
 using namespace winrt;
-using namespace Windows::Devices::Bluetooth;
-using namespace Windows::Devices::Bluetooth::Advertisement;
-using namespace Windows::Devices::Bluetooth::GenericAttributeProfile;
-using namespace Windows::Devices::Enumeration;
 using namespace Windows::Foundation;
 using namespace unlock_windows::system_ble;
 

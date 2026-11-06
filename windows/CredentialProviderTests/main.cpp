@@ -17,7 +17,6 @@
 #include <atomic>
 #include <cstdio>
 #include <cstring>
-#include <cstdint>
 #include <cwchar>
 #include <stdexcept>
 #include <string>

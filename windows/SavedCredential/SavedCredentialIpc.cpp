@@ -14,7 +14,6 @@
 #include <cwchar>
 #include <limits>
 #include <utility>
-#include <string_view>
 #include <stdexcept>
 
 namespace unlock_windows::saved_credential {

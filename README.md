@@ -13,14 +13,6 @@
 > See [SECURITY.md](SECURITY.md) for details.
 
 
-> [!NOTE]
-> **Developer technical preview**
->
-> - **Currently supports only Windows users who sign in with a Microsoft account (MSA).** The account must have a password. Local Windows accounts are not supported. See Microsoft's guide to [switching from a local account to a Microsoft account](https://support.microsoft.com/en-us/accounts-billing/manage/change-from-a-local-account-to-a-microsoft-account-in-windows).
-
-
-
-
 <p align="center">
   <img src="docs/logo.PNG" alt="Unlock with iPhone logo" width="120">
 </p>
@@ -53,12 +45,14 @@ Unlock your Windows session with your nearby iPhone.
 
 Your PC must have Bluetooth enabled, with an adapter and driver that support **BLE Central, protected GATT access and advertisement scanning**.
 
+A Windows account with a nonempty password is required.
+
 ## What it does
 
 - Unlock your locked Windows session using your paired iPhone over Bluetooth. Select the phone unlock tile on the Windows lock screen; click **Unlock** to request a fresh presence check. The phone needs no action for each attempt; locking the PC alone does not request unlock.
 - Adjust **Unlock range** on **Status**: **Near**, **Medium** or **Far**. Changes request UAC; signal strength does not indicate an exact distance.
 - **Last Unlock** shows the last successful phone unlock and its signal, for example `2 min ago / -58 dBm`. It resets when the service or PC restarts.
-- Keep an encrypted copy of your Microsoft account password on your PC. Your password is never sent to your iPhone.
+- Keep an encrypted copy of your Windows account password on your PC. Your password is never sent to your iPhone.
 - Manage system pairing, the product binding and saved password from the Windows tray app. The LocalSystem service verifies presence independently when the desktop app exits.
 - Install, update or remove the Windows app using its installer.
 
@@ -71,7 +65,7 @@ Phone unlock requires an existing, locked Windows session. Windows Automatic Res
 > If a version earlier than **1.0.0** is installed, uninstall it in Windows **Settings → Apps** first, then run this installer. 
 
 1. Get the native x64 or ARM64 [Windows installer](https://github.com/dennis6481/unlock-windows-with-iphone/releases) and follow its steps. After restarting, sign in to Windows and choose **Start setup**.
-2. Save your **Microsoft account password**, not your PIN. The encrypted copy stays on this PC and is never sent to the phone.
+2. Save your **Windows account password** (Microsoft account or local account), not your PIN. The encrypted copy stays on this PC and is never sent to the phone.
 3. On **Status**, use **Open Bluetooth settings** to pair your iPhone. Compare the Bluetooth numbers on both devices and accept only a match. Skip this step if Windows already shows the phone as paired.
 4. Return to **Status**, select your iPhone from the updated paired BLE list and click **Bind selected device**. Each BLE endpoint has its own entry; names do not select identity. Devices are never bound automatically.
 5. Approve UAC to let the service verify pairing and protected BLE communication before saving the binding. The unlock threshold starts at **−60 dBm** and can be adjusted on **Status** after binding.
@@ -80,7 +74,7 @@ Phone unlock requires an existing, locked Windows session. Windows Automatic Res
 
 Open Windows **Settings → Apps**, find *Unlock with iPhone* and select **Uninstall**. Follow the uninstaller's instructions, including restarting if prompted.
 
-Uninstalling removes the Windows components, the Start Menu shortcut, the saved password copy and the product binding stored on your PC. It does not change your Microsoft account password. If you reinstall, you will need to set up the app again.
+Uninstalling removes the Windows components, the Start Menu shortcut, the saved password copy and the product binding stored on your PC. It does not change your Windows account password. If you reinstall, you will need to set up the app again.
 
 Windows system Bluetooth pairing is kept. Remove it separately in Windows Bluetooth settings if desired.
 
@@ -107,13 +101,12 @@ Windows distribution is a single `windows/dist/UnlockWithIPhone_<version>_<archi
 
 ## Known limitations
 
-- **Windows sessions and accounts:** Currently, only Microsoft Account (MSA) accounts are supported; local Windows accounts are not supported. Account changes or an outdated saved password can cause native authentication to fail.
-- **Multiple users:** The Windows app can currently be configured for only one Microsoft account (MSA) user on the PC.
+- **Multiple users:** The Windows app can currently be configured for only one Windows user on the PC. Updates and reinstalls keep the configured user. To change users, uninstall first, then sign in as the new user and install again.
 
 ## To Do
 
 - [x] ~~Modernize the Windows UI and setup guidance. [#21](https://github.com/dennis6481/unlock-windows-with-iphone/issues/21).~~
-- [ ] Support local Windows accounts. [#18](https://github.com/dennis6481/unlock-windows-with-iphone/issues/18).
+- [x] ~~Support local Windows accounts. [#18](https://github.com/dennis6481/unlock-windows-with-iphone/issues/18).~~
 - [ ] Support multiple Windows users. [#24](https://github.com/dennis6481/unlock-windows-with-iphone/issues/24).
 - [ ] Add support for Apple Watch. [#23](https://github.com/dennis6481/unlock-windows-with-iphone/issues/23).
 - [ ] Investigate LSA-based Windows authentication to replace the current implementation that stores a local Windows password copy. [#22](https://github.com/dennis6481/unlock-windows-with-iphone/issues/22).

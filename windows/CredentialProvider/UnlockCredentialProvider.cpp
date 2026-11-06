@@ -2,6 +2,7 @@
 
 #include <initguid.h>
 #include "UnlockCredentialProvider.h"
+#include "CredentialSerialization.h"
 #include "SavedCredentialIpc.h"
 #include "../Setup/SetupIdentity.h"
 #include "../Resources/resource.h"
@@ -27,7 +28,6 @@
 #include <WtsApi32.h>
 #include <ntsecapi.h>
 #include <sddl.h>
-#include <wincred.h>
 
 namespace {
 
@@ -897,27 +897,14 @@ public:
             return E_OUTOFMEMORY;
         }
 
-        constexpr DWORD flags = CRED_PACK_PROTECTED_CREDENTIALS | CRED_PACK_ID_PROVIDER_CREDENTIALS;
         DWORD size = 0;
-        const auto sized = CredPackAuthenticationBufferW(
-            flags, const_cast<LPWSTR>(qualifiedUserName_.c_str()), savedPassword.value.data(), nullptr, &size
+        BYTE* packed = nullptr;
+        const HRESULT packedResult = unlock_windows::credential_provider::serializePassword(
+            qualifiedUserName_, providerId_, savedPassword.value.data(), usageScenario_, &packed, &size
         );
-        if (sized || GetLastError() != ERROR_INSUFFICIENT_BUFFER || size == 0) {
-            return showFailure(
-                L"Windows couldn't prepare phone unlock. Use your PIN or password.");
-        }
-
-        const DWORD allocatedSize = size;
-        auto* packed = static_cast<BYTE*>(CoTaskMemAlloc(allocatedSize));
-        if (packed == nullptr) {
-            return E_OUTOFMEMORY;
-        }
-        const auto packedResult = CredPackAuthenticationBufferW(
-            flags, const_cast<LPWSTR>(qualifiedUserName_.c_str()), savedPassword.value.data(), packed, &size
-        );
-        if (!packedResult) {
-            SecureZeroMemory(packed, allocatedSize);
-            CoTaskMemFree(packed);
+        if (FAILED(packedResult)) {
+            logAutoSubmitError(L"credential serialization", packedResult);
+            if (packedResult == E_OUTOFMEMORY) return packedResult;
             return showFailure(L"Windows couldn't prepare phone unlock. Use your PIN or password.");
         }
 
@@ -980,6 +967,7 @@ public:
         const std::wstring& primarySid,
         const std::wstring& qualifiedName,
         const GUID& providerId,
+        CREDENTIAL_PROVIDER_USAGE_SCENARIO usageScenario,
         DWORD consoleSessionId
     ) noexcept {
         if (sid.empty() || primarySid.empty() || qualifiedName.empty()) {
@@ -994,6 +982,7 @@ public:
             primarySid_ = primarySid;
             qualifiedUserName_ = qualifiedName;
             providerId_ = providerId;
+            usageScenario_ = usageScenario;
             consoleSessionId_ = consoleSessionId;
         } catch (const std::bad_alloc&) {
             return E_OUTOFMEMORY;
@@ -1030,6 +1019,7 @@ private:
     std::wstring primarySid_;
     std::wstring qualifiedUserName_;
     GUID providerId_{};
+    CREDENTIAL_PROVIDER_USAGE_SCENARIO usageScenario_ = CPUS_INVALID;
     DWORD consoleSessionId_ = 0xffffffff;
     std::optional<std::array<std::uint8_t,
         unlock_windows::saved_credential::kNonceSize>> automaticApproval_;
@@ -1109,7 +1099,7 @@ public:
         if (scenario != CPUS_LOGON && scenario != CPUS_UNLOCK_WORKSTATION) {
             return E_NOTIMPL;
         }
-        usageScenarioSet_ = true;
+        usageScenario_ = scenario;
         return S_OK;
     }
 
@@ -1341,7 +1331,7 @@ public:
             return E_UNEXPECTED;
         }
         result = credential_->setUserIdentity(
-            sidValue, primarySid, qualifiedName, providerId, consoleSessionId
+            sidValue, primarySid, qualifiedName, providerId, usageScenario_, consoleSessionId
         );
         if (SUCCEEDED(result)) {
             const bool sameUser = previousSession == consoleSessionId &&
@@ -1370,7 +1360,7 @@ public:
         if (count == nullptr) {
             return E_POINTER;
         }
-        if (!usageScenarioSet_) {
+        if (usageScenario_ == CPUS_INVALID) {
             return E_UNEXPECTED;
         }
         *count = kFieldCount;
@@ -1402,7 +1392,7 @@ public:
         *count = 0;
         *defaultIndex = CREDENTIAL_PROVIDER_NO_DEFAULT;
         *autoLogonWithDefault = FALSE;
-        if (!usageScenarioSet_ || !ready()) {
+        if (usageScenario_ == CPUS_INVALID || !ready()) {
             return E_UNEXPECTED;
         }
         if (!hasUserSid_) return S_OK;
@@ -1436,7 +1426,7 @@ public:
             return E_POINTER;
         }
         *credential = nullptr;
-        if (index != 0 || !usageScenarioSet_ || !ready() || !hasUserSid_) {
+        if (index != 0 || usageScenario_ == CPUS_INVALID || !ready() || !hasUserSid_) {
             return E_INVALIDARG;
         }
         *credential = credential_;
@@ -1562,7 +1552,7 @@ private:
     UnlockCredential* credential_ = nullptr;
     ICredentialProviderEvents* events_ = nullptr;
     UINT_PTR adviseContext_ = 0;
-    bool usageScenarioSet_ = false;
+    CREDENTIAL_PROVIDER_USAGE_SCENARIO usageScenario_ = CPUS_INVALID;
     bool hasUserSid_ = false;
     unlock_windows::saved_credential::Identity identity_;
     DWORD consoleSessionId_ = 0xffffffff;

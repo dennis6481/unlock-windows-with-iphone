@@ -235,17 +235,25 @@ Identity consoleIdentity(const Console& console) {
     std::vector<wchar_t> accountName(nameChars), domainName(domainChars);
     winrt::check_bool(LookupAccountSidW(nullptr, rawSid, accountName.data(), &nameChars,
         domainName.data(), &domainChars, &use));
+    if (use != SidTypeUser || domainChars == 0) fail("Windows console account is not a named user");
     struct UserInfo final {
         LPBYTE value = nullptr;
         ~UserInfo() { if (value) NetApiBufferFree(value); }
-    } userInfo;
+    } localInfo, userInfo;
+    const auto localStatus = NetUserGetInfo(nullptr, accountName.data(), 23, &localInfo.value);
+    if (localStatus != NERR_Success)
+        throw std::runtime_error("Windows local account query failed (Win32 " + std::to_string(localStatus) + ").");
+    if (!localInfo.value) fail("Windows local account query returned no account information");
+    const auto* local = reinterpret_cast<const USER_INFO_23*>(localInfo.value);
+    if (!local->usri23_user_sid || sidText(local->usri23_user_sid) != console.sid)
+        fail("Windows local account does not match the console token");
     const auto status = NetUserGetInfo(nullptr, accountName.data(), 24, &userInfo.value);
     if (status != NERR_Success)
         throw std::runtime_error("Windows online identity query failed (Win32 " + std::to_string(status) + ").");
     if (!userInfo.value) fail("Windows online identity query returned no account information");
     const auto* online = reinterpret_cast<const USER_INFO_24*>(userInfo.value);
     if (!online->usri24_internet_identity)
-        fail("Windows console account is not connected to an online identity");
+        return localAccountIdentity(console.sid, sidText(local->usri23_user_sid), domainName.data(), accountName.data());
     if (!online->usri24_user_sid || sidText(online->usri24_user_sid) != console.sid ||
         !online->usri24_internet_provider_name || !*online->usri24_internet_provider_name ||
         !online->usri24_internet_principal_name || !*online->usri24_internet_principal_name)

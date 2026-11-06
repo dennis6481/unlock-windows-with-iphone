@@ -4,7 +4,7 @@
 
 ## Credential protection
 
-- The saved Microsoft account password remains on the PC, protected by **LocalSystem user-scope DPAPI** and SYSTEM-only vault ACLs. The storage format remains unchanged.
+- The saved Windows account password remains on the PC, protected by **LocalSystem user-scope DPAPI** and SYSTEM-only vault ACLs. The storage format remains unchanged.
 - Product binding uses separate machine-bound DPAPI storage, with SYSTEM/administrator-only write permissions and atomic commit. Ordinary desktop clients read only non-sensitive service summaries.
 - Neither the phone nor the desktop app receives the password. Only a verified LogonUI process can claim it after a fresh presence check. The service consumes the authorization before decrypting the password; the Credential Provider submits it through native Negotiate.
 - SYSTEM, administrator or kernel compromise is outside this protection boundary. Plaintext under the application's control is cleared where practical; removing the saved copy does not guarantee erasure from backups or SSD history.
@@ -25,7 +25,7 @@ Connections and Windows-cached service structure may persist across unlocks. The
 
 ## Windows boundaries
 
-Original password/PIN providers remain available. Phone unlock requires an existing, explicitly locked physical-console session. Without an existing session, including after sign-out, sign in with a native method first. Support is limited to one password-backed Microsoft account (MSA). Local accounts, multiple users and remote sessions are not supported.
+Original password/PIN providers remain available. Phone unlock requires an existing, explicitly locked physical-console session. Without an existing session, including after sign-out, sign in with a native method first. One Microsoft account (MSA) or local account with a nonempty password is supported; domain accounts, multiple users and remote sessions are unsupported.
 
 Windows [Automatic Restart Sign-On (ARSO)](https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/manage/component-updates/winlogon-automatic-restart-sign-on--arso-) may create a signed-in, locked session during startup, allowing phone unlock immediately after boot.
 

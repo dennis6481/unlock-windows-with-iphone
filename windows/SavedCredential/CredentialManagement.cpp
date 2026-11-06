@@ -103,7 +103,7 @@ public:
         notice_ = InfoBar{};
         root_.Children().Append(notice_);
         password_ = PasswordBox{};
-        password_.Header(box_value(L"Microsoft Account password"));
+        password_.Header(box_value(L"Windows account password"));
         password_.PlaceholderText(L"Password, not PIN");
         password_.MaxLength(static_cast<std::int32_t>(kMaxPasswordChars));
         password_.PasswordChanged([weak](const auto&, const auto&) {
@@ -248,7 +248,7 @@ private:
         const bool updating = requested_ == Operation::updateCredential ||
             (requested_ == Operation::status && snapshot_ && snapshot_->credentialPresent);
         description_.Text(std::wstring(updating ? L"Update" : L"Save") +
-            L" an encrypted copy on this PC without changing your Microsoft account password.");
+            L" an encrypted copy on this PC without changing your Windows account password.");
         title_.Text(requested_ == Operation::status && !snapshot_ ? L"Saved Windows password"
             : updating ? L"Update saved password" : L"Save password");
         const bool ready = snapshot_.has_value() && !busy_ && !stopped_ && !closing_;

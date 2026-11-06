@@ -1,18 +1,20 @@
 // Created by Rui MA on 30 Sep 2026
 
+#include <initguid.h>
 #include "../Resources/resource.h"
 #include "SavedCredentialIpc.h"
 #include "../ComponentFiles.h"
 
 #include <sddl.h>
 #include <winsvc.h>
+#include <credentialprovider.h>
 
 #include <algorithm>
 #include <cstring>
 #include <cwchar>
 #include <limits>
 #include <utility>
-#include <string_view>
+#include <stdexcept>
 
 namespace unlock_windows::saved_credential {
 namespace {
@@ -226,9 +228,7 @@ void SensitiveBytes::clear() noexcept {
 
 bool encodeIdentity(const Identity& identity, SensitiveBytes& output) {
     if (identity.sid.empty() || identity.qualifiedUserName.empty() ||
-        identity.sid.size() > 256 || identity.qualifiedUserName.size() > 1024 ||
-        identity.sid.size() > std::numeric_limits<std::uint16_t>::max() ||
-        identity.qualifiedUserName.size() > std::numeric_limits<std::uint16_t>::max()) return false;
+        identity.sid.size() > 256 || identity.qualifiedUserName.size() > kMaxQualifiedUserNameChars) return false;
     const auto sidLength = static_cast<std::uint16_t>(identity.sid.size());
     const auto nameLength = static_cast<std::uint16_t>(identity.qualifiedUserName.size());
     output.clear();
@@ -250,7 +250,7 @@ bool decodeIdentity(const std::uint8_t* data, const std::size_t size, Identity& 
     if (!take(cursor, left, &sidLength, sizeof(sidLength)) ||
         !take(cursor, left, &nameLength, sizeof(nameLength)) ||
         !take(cursor, left, &provider, sizeof(provider)) ||
-        sidLength == 0 || nameLength == 0 || sidLength > 256 || nameLength > 1024 ||
+        sidLength == 0 || nameLength == 0 || sidLength > 256 || nameLength > kMaxQualifiedUserNameChars ||
         left != (static_cast<std::size_t>(sidLength) + nameLength) * sizeof(wchar_t)) return false;
     std::wstring sid(sidLength, L'\0');
     std::memcpy(sid.data(), cursor, sidLength * sizeof(wchar_t));
@@ -448,6 +448,23 @@ bool callOnPipe(const wchar_t* const pipeName, const Operation operation,
 bool sameIdentity(const Identity& left, const Identity& right) noexcept {
     return left.sid == right.sid && left.qualifiedUserName == right.qualifiedUserName &&
         IsEqualGUID(left.providerId, right.providerId);
+}
+
+bool isLocalAccountProvider(const GUID& providerId) noexcept {
+    return IsEqualGUID(providerId, Identity_LocalUserProvider);
+}
+
+Identity localAccountIdentity(const std::wstring& consoleSid,
+    const std::wstring& domain, const std::wstring& accountName) {
+    if (consoleSid.empty() || domain.empty() || accountName.empty() ||
+        domain.find_first_of(L"\\\0", 0, 2) != std::wstring::npos ||
+        accountName.find_first_of(L"\\\0", 0, 2) != std::wstring::npos) {
+        throw std::invalid_argument("Windows local account identity is incomplete");
+    }
+    Identity identity{consoleSid, domain + L"\\" + accountName, Identity_LocalUserProvider};
+    SensitiveBytes encoded;
+    if (!encodeIdentity(identity, encoded)) throw std::invalid_argument("Windows local identity properties are invalid");
+    return identity;
 }
 
 bool encodeUnlockResult(const UnlockResult& result, SensitiveBytes& output) {

@@ -49,7 +49,7 @@ For installation and setup, see the [main guide](../README.md#installation).
 
 Open **Unlock with iPhone** from the Start Menu to show the main window. Install/update creates the all-users shortcut; uninstall removes it.
 
-- Save your Microsoft account password, not your PIN. Update the saved copy whenever the account password changes; see [password management](SavedCredential/README.md#password-management).
+- Save your Windows account password (MSA or local), not your PIN. Empty passwords are unsupported. Update the saved copy whenever the password or complete account identity changes; see [password management](SavedCredential/README.md#password-management).
 - Remove the paired iPhone on **Status**, or delete the saved password on **Password**; these are separate actions.
 
 ## Update and uninstall
@@ -97,7 +97,7 @@ Module guides: [SavedCredential](SavedCredential/README.md), [CredentialProvider
 
 The main WinUI window and tray retain the desktop STA. A desktop worker handles helpers/status; the LocalSystem service's single MTA worker owns BLE validation. Closing the main window hides it; Quit cancels the current password setup, waits for its submitted operation and window to finish, then exits without disabling lock-screen verification. A window launched after a pending UAC prompt closes through cancellation. Independent password windows retain their own lifecycle. Role arguments do not grant service permission.
 
-Navigation remains **Status**, **Password**, **Diagnostics**, with **About** at the bottom. Pages share an outer scroller with retained positions and native navigation transitions. **About** uses shared card styling with full-width links; Diagnostics retains text selection and **Copy logs** for all session logs; the copy icon precedes the label. Successful copying shows a separate checkmark to the left and disables the button for two seconds. **Password** groups Save/Update and removal under **Manage saved password**; the account appears above it. Its elevated, centered 480 × 320 effective-pixel form shares the main theme and retains resizing, scrolling and **Password, not PIN** guidance. Confirmed changes close it; errors remain in its InfoBar. Removal confirms in a Flyout, then uses UAC without another window. No saved password expands the group and hides removal. Success appears on the page and is cleared or suppressed on exit, without replay. See [password management](SavedCredential/README.md#password-management).
+Navigation remains **Status**, **Password**, **Diagnostics**, with **About** at the bottom. Pages share an outer scroller with retained positions and native navigation transitions. **About** uses shared card styling with full-width links; Diagnostics retains text selection and **Copy logs** for all session logs; the copy icon precedes the label. Successful copying shows a separate checkmark to the left and disables the button for two seconds. **Password** groups Save/Update and removal under **Manage saved password**; the account appears above it. Its elevated, centered 480 × 480 effective-pixel form shares the main theme and retains resizing, scrollable content, fixed bottom-right actions and **Password, not PIN** guidance. Confirmed changes close it; errors remain in its InfoBar. Removal confirms in a Flyout, then uses UAC without another window. No saved password expands the group and hides removal. Success appears on the page and is cleared or suppressed on exit, without replay. See [password management](SavedCredential/README.md#password-management).
 
 Diagnostics uses a leading tab followed by `local time [level] [source] tickMs=... message` on every line. Sources distinguish pages, binding, setup, tray, service IPC and Last Unlock. Imported messages use `[RAW] [Service]`, retaining original text and event ticks without inferring severity. Unchanged query errors are logged once until they change or recover.
 
@@ -111,6 +111,20 @@ The main window uses Mica and system theme colors; Windows 10 uses the framework
 Pushing `v1.0.0` publishes a Release; `v1.0.0-rc` or numbered RC tags such as `v1.0.0-rc1` publish a Pre-release without marking it Latest. The numeric tag must match the first three parts in [ProductVersion.h](ProductVersion.h); installer versions retain all four committed parts, while Release download filenames use three parts. About checks public updates using the first three parts only. The RC suffix is GitHub release metadata only, so RC and final installers with the same four-part version use Reinstall.
 
 CI uses `WindowsBuild.ps1` without GNU Make. [PR builds](../.github/workflows/pr.yml) compile the Release solution for x64 and ARM64 when targeting `dev` or `main`, without running tests or publishing a release. Each uploads an installer with a three-part version filename in an artifact named `UnlockWithIPhone_<version>_<architecture>_setup-SNAPSHOT(<build>)`, using the product version's fourth part in parentheses; require **Build x64** and **Build arm64** in the target branch ruleset to block failed builds from merging. [Release CI](../.github/workflows/release.yml) runs all four native test programs on both architectures before building and verifying installers; any failure blocks publication.
+
+## Local-account validation
+
+Local-account lock-screen/hardware acceptance is pending. Native tests cover identity construction and mismatch rejection, IPC round trips, local credential packing for both Windows usage scenarios, password protection and MSA serialization. These tests do not authenticate an account or unlock Windows.
+
+On a test PC, install matching service, CP and desktop binaries through the installer, honoring its restart boundary:
+
+1. Sign in natively as the configured local standard user with a nonempty password. Save, update and remove the saved copy; save again and bind the paired iPhone. When UAC uses another administrator, verify the displayed account remains the configured console user.
+2. Lock the existing console session and unlock with the phone. Repeat, cancel an attempt, and verify Last Unlock changes only after Windows succeeds. Repeat with the desktop app exited and both devices locked.
+3. Save an incorrect or outdated password. Verify native rejection, availability of native PIN/password recovery, and that another phone attempt requires fresh verification.
+4. Restart the service in the test environment and repeat. Rename the local account or convert between local and MSA sign-in, sign in natively, and verify the old saved identity is rejected until the current password is saved again.
+5. Repeat the setup/unlock flow for MSA. Verify signed-out, other-user and remote sessions receive no phone unlock tile.
+
+Record OS/build, architecture, matching binary versions, native result status and observed session recovery. Keep static checks, compilation, native tests and hardware results separate; do not log passwords or nonce bytes.
 
 ## References
 

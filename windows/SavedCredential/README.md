@@ -2,7 +2,7 @@
 
 # Saved credential service
 
-The LocalSystem service is the Windows authority for bindings, presence verification and password release. Saved identity consists of SID, the Windows-qualified account name and ProviderID; a matching SID alone is insufficient when the online identity has changed.
+The LocalSystem service is the Windows authority for bindings, presence verification and password release. Saved identity consists of SID, the Windows-qualified account name and ProviderID; a matching SID alone is insufficient when the account identity changes.
 
 ## Password protection
 
@@ -43,11 +43,13 @@ Tray Quit signals the current setup's random cancellation event. Its target user
 
 Before a console user token exists, `captureProvisioningIdentity` accepts only a real physical-console LogonUI caller and the installer-recorded target SID. It records system-provided identity metadata in memory and returns no password, snapshot nonce or phone grant.
 
-After sign-in, queries use `NetUserGetInfo` level 24 for the online provider/name and local SID, and match unfiltered identity-store entries by PrimarySid for ProviderID. The qualified name uses Windows `provider\principal` format; the store's QualifiedUserName property is not required. Target, console and logon checks remain required. Service restart does not require another lock/unlock cycle.
+After sign-in, queries resolve the console token SID with `LookupAccountSidW` and require a matching SID from the local SAM using `NetUserGetInfo` level 23. Level 24 distinguishes online from local accounts: online identities retain `provider\principal` and a PrimarySid-matched identity-store ProviderID; local identities use the Windows-provided `computer\user` name and `Identity_LocalUserProvider`, without an online identity-store entry. Query errors never fall back to local identity. Target, console and logon checks remain required. Service restart does not require another lock/unlock cycle.
+
+Only nonempty passwords are accepted. Saving confirms encrypted storage, not password correctness; Windows validates the password during native authentication. Account renaming or conversion between local and MSA sign-in changes the complete identity, so the saved password must be updated rather than automatically migrated. IPC v3 and the vault format are unchanged.
 
 The snapshot lasts five minutes. A new management query can renew it without another sign-in. Candidates are invalidated by logoff, console disconnection, another console account or service restart. Unavailable or ambiguous Windows identity properties are explicit verification failures. The target is the console user, not an alternate administrator entered at UAC. Identity must not be reconstructed from diagnostics or the saved credential.
 
-The Password page refreshes on entry, activation and operation completion; failed queries offer Retry in an error InfoBar. **Manage saved password** groups Save/Update and removal; no saved copy expands it and hides removal. Unknown state disables changes; identity mismatch shows a warning. The elevated PasswordBox form offers Cancel, Retry and **Password, not PIN** guidance. Confirmed changes close it; acknowledgment/readback failures show an error InfoBar. First setup continues only after confirmation. Removal confirms in a Flyout, then runs `--saved-password --remove` through UAC without UI, verifying identity/state and deletion readback. Page success feedback clears or is suppressed on exit, without replay. Removal clears only the local copy; closing the form leaves the tray running.
+The Password page refreshes on entry, activation and operation completion; failed queries offer Retry in an error InfoBar. **Manage saved password** groups Save/Update and removal; no saved copy expands it and hides removal. Unknown state disables changes; identity mismatch shows a warning. The elevated PasswordBox form offers Cancel, Retry and a non-dismissible informational InfoBar explaining Microsoft/local account passwords, excluding PINs and linking to Microsoft account guidance. Confirmed changes close it; acknowledgment/readback failures show an error InfoBar. First setup continues only after confirmation. Removal confirms in a Flyout, then runs `--saved-password --remove` through UAC without UI, verifying identity/state and deletion readback. Page success feedback clears or is suppressed on exit, without replay. Removal clears only the local copy; closing the form leaves the tray running.
 
 ## Removal and maintenance
 

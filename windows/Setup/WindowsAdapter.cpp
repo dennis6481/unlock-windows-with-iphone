@@ -1,8 +1,6 @@
 // Created by Rui MA on 28 Sep 2026
 // Native Windows mechanisms; package/state/task ownership belongs to their dedicated modules.
 
-#define SECURITY_WIN32
-
 #include "../Resources/resource.h"
 #include "WindowsAdapter.h"
 #include "../ProtectedStorage.h"
@@ -10,23 +8,16 @@
 #include "SavedCredentialIpc.h"
 
 #include "../CredentialProvider/UnlockCredentialProvider.h"
-#include "../Protocol/UnlockCrypto.h"
 
 #include <Windows.h>
 #include "PackageManifest.h"
-#include <aclapi.h>
-#include <shlobj.h>
 #include <winver.h>
-#include <security.h>
 #include <shellapi.h>
 #include <sddl.h>
 
 #include <array>
 #include <cstring>
 #include <cwchar>
-#include <fstream>
-#include <span>
-#include <set>
 #include <utility>
 
 #pragma comment(lib, "advapi32.lib")

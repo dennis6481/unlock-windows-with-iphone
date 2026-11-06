@@ -19,6 +19,7 @@ inline constexpr wchar_t kPipeName[] = L"\\\\.\\pipe\\unlock-windows-saved-crede
 inline constexpr wchar_t kServiceName[] = L"UnlockWindowsSavedCredentialService";
 inline constexpr std::size_t kMaxPacket = 16 * 1024;
 inline constexpr std::size_t kMaxPasswordChars = 1024;
+inline constexpr std::size_t kMaxQualifiedUserNameChars = 1024;
 inline constexpr std::size_t kNonceSize = 16;
 inline constexpr std::uint16_t kProtocolVersion = 3;
 inline constexpr DWORD kPipeTransferLifetimeMs = 2000;
@@ -113,6 +114,13 @@ struct Identity final {
 };
 
 [[nodiscard]] bool sameIdentity(const Identity& left, const Identity& right) noexcept;
+
+/// Select the native account serialization format; this does not establish local SAM membership.
+[[nodiscard]] bool isLocalAccountProvider(const GUID& providerId) noexcept;
+
+/// Build a local identity from a console SID already verified against the local SAM.
+[[nodiscard]] Identity localAccountIdentity(const std::wstring& consoleSid,
+    const std::wstring& domain, const std::wstring& accountName);
 
 struct CredentialSummary {
     Identity identity;

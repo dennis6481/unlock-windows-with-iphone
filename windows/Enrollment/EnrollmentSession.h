@@ -9,7 +9,6 @@
 #include <wtsapi32.h>
 
 #include <stdexcept>
-#include <optional>
 #include <string>
 #include <vector>
 

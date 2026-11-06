@@ -4,7 +4,6 @@
 #include "WindowsAdapter.h"
 #include "../DesktopApp/DesktopApp.h"
 #include "SetupPlatform.h"
-#include "../Enrollment/EnrollmentStore.h"
 #include <Windows.h>
 #include <tlhelp32.h>
 #include <shellapi.h>
@@ -17,7 +16,6 @@
 #include <cstring>
 #include <memory>
 #include <vector>
-#include <set>
 
 namespace unlock::components {
 namespace {

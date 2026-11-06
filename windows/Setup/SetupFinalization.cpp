@@ -7,7 +7,6 @@
 #include <wrl/client.h>
 #include "../SavedCredential/SavedCredentialVault.h"
 #include <Windows.h>
-#include <array>
 #include <map>
 
 namespace unlock::components {

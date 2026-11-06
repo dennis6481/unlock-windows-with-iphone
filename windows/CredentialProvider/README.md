@@ -20,7 +20,7 @@ Manual initiation waits without blocking on BLE. Verification and automatic subm
 
 The waiting worker polls `takeAutoSubmitOffer` before verification status. Its message window calls `CredentialsChanged` on the Advise thread; the next eligible enumeration exposes automatic submission once. `GetSerialization` validates the current captured identity/nonce and offer before claiming the password.
 
-The service rechecks 3-second communication/RSSI evidence and consumes authorization before decrypting the password. CP packs credentials in LogonUI using protected/ID-provider flags and submits to native Negotiate. It does not construct a token or call `LsaLogonUser`. Only native authentication confirms actual unlock.
+The service rechecks 3-second communication/RSSI evidence and consumes authorization before decrypting the password. CP packs credentials in LogonUI and submits to native Negotiate. MSA uses protected/ID-provider flags; local accounts use `CredProtectW` and a packed `KERB_INTERACTIVE_UNLOCK_LOGON`, with message type selected from the actual `CPUS_LOGON` or `CPUS_UNLOCK_WORKSTATION` scenario and LogonId left for Winlogon. ProviderID selects serialization; the service independently verifies local SAM membership and the console SID. CP does not construct a token or call `LsaLogonUser`. Only native authentication confirms actual unlock.
 
 After successful serialization, `ReportResult` reports its claim nonce and native status to the service once. A matching native success updates **Last Unlock**; rejection, packing failure and missing reports do not. Reporting uses the existing bounded pipe call, logs failures and leaves Windows authentication unchanged.
 

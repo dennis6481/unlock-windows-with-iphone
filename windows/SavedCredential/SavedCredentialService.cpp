@@ -30,7 +30,6 @@
 #include <mutex>
 #include <condition_variable>
 #include <optional>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -235,17 +234,25 @@ Identity consoleIdentity(const Console& console) {
     std::vector<wchar_t> accountName(nameChars), domainName(domainChars);
     winrt::check_bool(LookupAccountSidW(nullptr, rawSid, accountName.data(), &nameChars,
         domainName.data(), &domainChars, &use));
+    if (use != SidTypeUser || domainChars == 0) fail("Windows console account is not a named user");
     struct UserInfo final {
         LPBYTE value = nullptr;
         ~UserInfo() { if (value) NetApiBufferFree(value); }
-    } userInfo;
+    } localInfo, userInfo;
+    const auto localStatus = NetUserGetInfo(nullptr, accountName.data(), 23, &localInfo.value);
+    if (localStatus != NERR_Success)
+        throw std::runtime_error("Windows local account query failed (Win32 " + std::to_string(localStatus) + ").");
+    if (!localInfo.value) fail("Windows local account query returned no account information");
+    const auto* local = reinterpret_cast<const USER_INFO_23*>(localInfo.value);
+    if (!local->usri23_user_sid || sidText(local->usri23_user_sid) != console.sid)
+        fail("Windows local account does not match the console token");
     const auto status = NetUserGetInfo(nullptr, accountName.data(), 24, &userInfo.value);
     if (status != NERR_Success)
         throw std::runtime_error("Windows online identity query failed (Win32 " + std::to_string(status) + ").");
     if (!userInfo.value) fail("Windows online identity query returned no account information");
     const auto* online = reinterpret_cast<const USER_INFO_24*>(userInfo.value);
     if (!online->usri24_internet_identity)
-        fail("Windows console account is not connected to an online identity");
+        return localAccountIdentity(console.sid, domainName.data(), accountName.data());
     if (!online->usri24_user_sid || sidText(online->usri24_user_sid) != console.sid ||
         !online->usri24_internet_provider_name || !*online->usri24_internet_provider_name ||
         !online->usri24_internet_principal_name || !*online->usri24_internet_principal_name)
@@ -506,11 +513,27 @@ public:
                     identity.sid != console.sid) return response;
                 std::wstring targetSid;
                 const auto original = bindingSummary();
-                if (FAILED(unlock::components::readSetupTargetSid(targetSid)) || identity.sid != targetSid ||
-                    original.state != unlock_windows::system_ble::BindingState::bound ||
-                    original.record.accountSid != identity.sid) return response;
+                if (FAILED(unlock::components::readSetupTargetSid(targetSid))) return response;
                 const auto stored = vault_.storedIdentity();
-                if (!stored || !sameIdentity(*stored, identity)) return response;
+                if (identity.sid != targetSid ||
+                    (original.state == unlock_windows::system_ble::BindingState::bound &&
+                        original.record.accountSid != identity.sid) ||
+                    (stored && !sameIdentity(*stored, identity))) {
+                    setText(response.payload, "Configured for another account. Sign in with your PIN or password.");
+                    return response;
+                }
+                if (!stored && original.state != unlock_windows::system_ble::BindingState::bound) {
+                    setText(response.payload, "Setup incomplete. Sign in with your PIN or password, then complete setup in the app.");
+                    return response;
+                }
+                if (!stored) {
+                    setText(response.payload, "No saved password. Sign in with your PIN or password, then save your password in the app.");
+                    return response;
+                }
+                if (original.state != unlock_windows::system_ble::BindingState::bound) {
+                    setText(response.payload, "No iPhone bound. Sign in with your PIN or password, then bind your iPhone in the app.");
+                    return response;
+                }
                 if (task_) { response.result = Result::busy; setText(response.payload, "Bluetooth verification is still finishing. Try again."); return response; }
                 queueTask(identity, console, {original, original.record}, false);
                 if (!encodeAuthenticationStatus(authenticationStatus_, response.payload)) fail("authentication status encoding failed");

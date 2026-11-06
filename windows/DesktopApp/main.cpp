@@ -6,9 +6,6 @@
 #include "../Enrollment/BindingClient.h"
 #include "../Resources/resource.h"
 #include <shellapi.h>
-#include <cstdio>
-#include <iostream>
-#include <string>
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     using namespace unlock_windows::desktop_app;

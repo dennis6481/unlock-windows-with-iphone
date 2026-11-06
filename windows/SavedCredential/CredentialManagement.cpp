@@ -80,7 +80,7 @@ public:
             GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &monitor),
             "GetMonitorInfoW(password window size)");
         const auto width = MulDiv(480, dpi, 96);
-        const auto height = MulDiv(320, dpi, 96);
+        const auto height = MulDiv(480, dpi, 96);
         appWindow.Resize({width < monitor.rcWork.right - monitor.rcWork.left
             ? width : monitor.rcWork.right - monitor.rcWork.left,
             height < monitor.rcWork.bottom - monitor.rcWork.top
@@ -102,8 +102,20 @@ public:
         root_.Children().Append(status_);
         notice_ = InfoBar{};
         root_.Children().Append(notice_);
+        InfoBar passwordGuidance;
+        passwordGuidance.Severity(InfoBarSeverity::Informational);
+        passwordGuidance.IsOpen(true);
+        passwordGuidance.IsClosable(false);
+        passwordGuidance.Message(L"For a Microsoft account, enter your Microsoft account password. "
+            L"For a local account, enter your local Windows account password. Do not use your PIN.");
+        HyperlinkButton accountHelp;
+        accountHelp.Content(box_value(L"Not sure which account you use?"));
+        accountHelp.NavigateUri(Windows::Foundation::Uri{
+            L"https://support.microsoft.com/en-us/accounts-billing/manage/change-from-a-local-account-to-a-microsoft-account-in-windows"});
+        passwordGuidance.ActionButton(accountHelp);
+        root_.Children().Append(passwordGuidance);
         password_ = PasswordBox{};
-        password_.Header(box_value(L"Microsoft Account password"));
+        password_.Header(box_value(L"Windows account password"));
         password_.PlaceholderText(L"Password, not PIN");
         password_.MaxLength(static_cast<std::int32_t>(kMaxPasswordChars));
         password_.PasswordChanged([weak](const auto&, const auto&) {
@@ -124,26 +136,30 @@ public:
         actions.Orientation(Orientation::Horizontal);
         actions.Spacing(12);
         actions.HorizontalAlignment(HorizontalAlignment::Right);
+        actions.Margin({24, 24, 24, 24});
         actions.Children().Append(submit_);
         Button cancel;
         cancel.Content(box_value(L"Cancel"));
         cancel.Click([weak](const auto&, const auto&) { if (const auto self = weak.lock()) self->close(); });
         actions.Children().Append(cancel);
-        root_.Children().Append(actions);
         ScrollViewer scroll;
         scroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Disabled);
         scroll.Content(root_);
         Grid windowLayout;
-        RowDefinition titleBarRow, contentRow;
+        RowDefinition titleBarRow, contentRow, actionsRow;
         titleBarRow.Height(automatic());
         contentRow.Height(star());
+        actionsRow.Height(automatic());
         windowLayout.RowDefinitions().Append(titleBarRow);
         windowLayout.RowDefinitions().Append(contentRow);
+        windowLayout.RowDefinitions().Append(actionsRow);
         TitleBar titleBar;
         titleBar.Title(UNLOCK_PRODUCT_DISPLAY_NAME);
         windowLayout.Children().Append(titleBar);
         Grid::SetRow(scroll, 1);
         windowLayout.Children().Append(scroll);
+        Grid::SetRow(actions, 2);
+        windowLayout.Children().Append(actions);
         window_.Content(windowLayout);
         window_.ExtendsContentIntoTitleBar(true);
         window_.SetTitleBar(titleBar);
@@ -248,7 +264,7 @@ private:
         const bool updating = requested_ == Operation::updateCredential ||
             (requested_ == Operation::status && snapshot_ && snapshot_->credentialPresent);
         description_.Text(std::wstring(updating ? L"Update" : L"Save") +
-            L" an encrypted copy on this PC without changing your Microsoft account password.");
+            L" an encrypted copy on this PC without changing your Windows account password.");
         title_.Text(requested_ == Operation::status && !snapshot_ ? L"Saved Windows password"
             : updating ? L"Update saved password" : L"Save password");
         const bool ready = snapshot_.has_value() && !busy_ && !stopped_ && !closing_;

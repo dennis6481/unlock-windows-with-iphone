@@ -513,11 +513,27 @@ public:
                     identity.sid != console.sid) return response;
                 std::wstring targetSid;
                 const auto original = bindingSummary();
-                if (FAILED(unlock::components::readSetupTargetSid(targetSid)) || identity.sid != targetSid ||
-                    original.state != unlock_windows::system_ble::BindingState::bound ||
-                    original.record.accountSid != identity.sid) return response;
+                if (FAILED(unlock::components::readSetupTargetSid(targetSid))) return response;
                 const auto stored = vault_.storedIdentity();
-                if (!stored || !sameIdentity(*stored, identity)) return response;
+                if (identity.sid != targetSid ||
+                    (original.state == unlock_windows::system_ble::BindingState::bound &&
+                        original.record.accountSid != identity.sid) ||
+                    (stored && !sameIdentity(*stored, identity))) {
+                    setText(response.payload, "Configured for another account. Sign in with your PIN or password.");
+                    return response;
+                }
+                if (!stored && original.state != unlock_windows::system_ble::BindingState::bound) {
+                    setText(response.payload, "Setup incomplete. Sign in with your PIN or password, then complete setup in the app.");
+                    return response;
+                }
+                if (!stored) {
+                    setText(response.payload, "No saved password. Sign in with your PIN or password, then save your password in the app.");
+                    return response;
+                }
+                if (original.state != unlock_windows::system_ble::BindingState::bound) {
+                    setText(response.payload, "No iPhone bound. Sign in with your PIN or password, then bind your iPhone in the app.");
+                    return response;
+                }
                 if (task_) { response.result = Result::busy; setText(response.payload, "Bluetooth verification is still finishing. Try again."); return response; }
                 queueTask(identity, console, {original, original.record}, false);
                 if (!encodeAuthenticationStatus(authenticationStatus_, response.payload)) fail("authentication status encoding failed");

@@ -80,7 +80,7 @@ Your iPhone can stay locked. The Windows app does not need to remain open.
 ## Troubleshooting
 
 - **iPhone not listed:** Check that Bluetooth is enabled on both devices and pair the phone in Windows Bluetooth settings, then return to **Status**.
-- **Unlock fails:** Read the error on the Windows sign-in screen and use your usual PIN or password to sign in. For a signal-strength failure, bring the phone closer or adjust **Unlock range**. If Windows rejects an incorrect or outdated password, update the saved copy on **Password**.
+- **Unlock fails:** Read the error on the Windows sign-in screen and use your usual PIN or password to sign in. For missing setup, save your password on **Password** and pair/bind your iPhone on **Status**, as indicated. For a signal-strength failure, bring the phone closer or adjust **Unlock range**. If Windows rejects an incorrect or outdated password, update the saved copy on **Password**.
 - **Phone unlock option missing:** Complete any restart requested by the installer, sign in as the configured Windows user and lock the existing session again.
 - **Report a problem:** Open **Diagnostics** and click **Copy logs**. Remove personal and device identifiers before sharing the logs and displayed error in your issue report.
 

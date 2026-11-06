@@ -1,5 +1,19 @@
 <!-- Created by Rui MA on 26 Sep 2026 -->
 > [!WARNING]
+> **Read before downloading**
+>
+> Unlock with iPhone does not provide the same user verification as Windows Hello.
+>
+> - Unlocking does not require Face ID, Touch ID, or confirmation on your iPhone.
+> - Someone with physical access to your PC may be able to unlock it while your paired iPhone is nearby, even when the phone is locked.
+> - Bluetooth signal strength is not a secure measure of distance and does not provide protection against relay attacks.
+>
+> Unlock with iPhone is a convenience feature, not a security upgrade. Only continue if you accept the trade-off.
+> 
+> See [SECURITY.md](SECURITY.md) for details.
+
+
+> [!NOTE]
 > **Developer technical preview**
 >
 > - **Currently supports only Windows users who sign in with a Microsoft account (MSA).** The account must have a password. Local Windows accounts are not supported. See Microsoft's guide to [switching from a local account to a Microsoft account](https://support.microsoft.com/en-us/accounts-billing/manage/change-from-a-local-account-to-a-microsoft-account-in-windows).
@@ -14,6 +28,9 @@
 <p align="center">
   <a href="https://github.com/dennis6481/unlock-windows-with-iphone/releases">
     <img src="https://img.shields.io/github/v/release/dennis6481/unlock-windows-with-iphone?include_prereleases&amp;sort=date&amp;logo=github" alt="GitHub Release (including pre-releases)">
+  </a>
+  <a href="https://hub.xerj.org/contributors/dennis6481">
+    <img src="https://hub.xerj.org/contributors/dennis6481/badge.svg" alt="XERJ Corpus Hub contributor" height="20">
   </a>
   <a href="https://sonarcloud.io/project/overview?id=dennis6481_unlock-windows-with-iphone">
     <img src="https://sonarcloud.io/images/project_badges/sonarcloud-light.svg" alt="sonarqube" height="20">
@@ -45,7 +62,7 @@ Your PC must have Bluetooth enabled, with an adapter and driver that support **B
 - Manage system pairing, the product binding and saved password from the Windows tray app. The LocalSystem service verifies presence independently when the desktop app exits.
 - Install, update or remove the Windows app using its installer.
 
-After restarting your PC or signing out, sign in once with your usual Windows password or PIN before using iPhone unlock again.
+Phone unlock requires an existing, locked Windows session. Windows Automatic Restart Sign-On (ARSO) may create one during startup, making phone unlock available immediately after boot. Without an existing session, including after sign-out, sign in with your usual Windows password or PIN first. See [Windows session behavior](SECURITY.md#windows-boundaries).
 
 
 ### Installation
@@ -53,7 +70,7 @@ After restarting your PC or signing out, sign in once with your usual Windows pa
 > [!WARNING]
 > If a version earlier than **1.0.0** is installed, uninstall it in Windows **Settings → Apps** first, then run this installer. 
 
-1. Get the native x64 or ARM64 [Windows installer](https://github.com/dennis6481/unlock-windows-with-iphone/releases) and follow its steps. After restarting, sign in once with your usual Windows password or PIN, then choose **Start setup**.
+1. Get the native x64 or ARM64 [Windows installer](https://github.com/dennis6481/unlock-windows-with-iphone/releases) and follow its steps. After restarting, sign in to Windows and choose **Start setup**.
 2. Save your **Microsoft account password**, not your PIN. The encrypted copy stays on this PC and is never sent to the phone.
 3. On **Status**, use **Open Bluetooth settings** to pair your iPhone. Compare the Bluetooth numbers on both devices and accept only a match. Skip this step if Windows already shows the phone as paired.
 4. Return to **Status**, select your iPhone from the updated paired BLE list and click **Bind selected device**. Each BLE endpoint has its own entry; names do not select identity. Devices are never bound automatically.
@@ -110,7 +127,7 @@ Please refer to [SECURITY.md](SECURITY.md) for details about its security model 
 
 ## Contributions
 
-Contributions are welcome. Feel free to open an issue if you would like to continue where I've left off, report a bug or suggest an improvement.
+Contributions are welcome. Feel free to open an issue if you would like to continue where I've left off, report a bug or suggest an improvement. See [CONTRIBUTING.md](CONTRIBUTING.md) for project guidelines.
 
 ## License
 

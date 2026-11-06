@@ -25,7 +25,9 @@ Connections and Windows-cached service structure may persist across unlocks. The
 
 ## Windows boundaries
 
-Original password/PIN providers remain available. Initial sign-in after boot or sign-out still requires a native method. Support is limited to one password-backed Microsoft account (MSA) with an existing physical-console session. Local accounts, multiple users and remote sessions are not supported.
+Original password/PIN providers remain available. Phone unlock requires an existing, explicitly locked physical-console session. Without an existing session, including after sign-out, sign in with a native method first. Support is limited to one password-backed Microsoft account (MSA). Local accounts, multiple users and remote sessions are not supported.
+
+Windows [Automatic Restart Sign-On (ARSO)](https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/manage/component-updates/winlogon-automatic-restart-sign-on--arso-) may create a signed-in, locked session during startup, allowing phone unlock immediately after boot.
 
 IPC version 3 removes all signature/phone transport operations. Ordinary processes cannot begin unlock verification, approve it, obtain auto-submit offers or claim passwords. UAC is required for password and binding changes; the service verifies the complete identity of the configured installation target rather than using the administrator account that granted elevation.
 

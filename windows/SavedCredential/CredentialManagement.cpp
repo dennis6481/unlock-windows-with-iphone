@@ -80,7 +80,7 @@ public:
             GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &monitor),
             "GetMonitorInfoW(password window size)");
         const auto width = MulDiv(480, dpi, 96);
-        const auto height = MulDiv(320, dpi, 96);
+        const auto height = MulDiv(480, dpi, 96);
         appWindow.Resize({width < monitor.rcWork.right - monitor.rcWork.left
             ? width : monitor.rcWork.right - monitor.rcWork.left,
             height < monitor.rcWork.bottom - monitor.rcWork.top
@@ -102,6 +102,18 @@ public:
         root_.Children().Append(status_);
         notice_ = InfoBar{};
         root_.Children().Append(notice_);
+        InfoBar passwordGuidance;
+        passwordGuidance.Severity(InfoBarSeverity::Informational);
+        passwordGuidance.IsOpen(true);
+        passwordGuidance.IsClosable(false);
+        passwordGuidance.Message(L"For a Microsoft account, enter your Microsoft account password. "
+            L"For a local account, enter your local Windows account password. Do not use your PIN.");
+        HyperlinkButton accountHelp;
+        accountHelp.Content(box_value(L"Not sure which account you use?"));
+        accountHelp.NavigateUri(Windows::Foundation::Uri{
+            L"https://support.microsoft.com/en-us/accounts-billing/manage/change-from-a-local-account-to-a-microsoft-account-in-windows"});
+        passwordGuidance.ActionButton(accountHelp);
+        root_.Children().Append(passwordGuidance);
         password_ = PasswordBox{};
         password_.Header(box_value(L"Windows account password"));
         password_.PlaceholderText(L"Password, not PIN");

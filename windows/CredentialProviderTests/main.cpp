@@ -301,10 +301,18 @@ void testPasswordSerialization() {
     Serialization invalid;
     require(serializePassword(identity.qualifiedUserName, identity.providerId, empty, CPUS_LOGON,
         &invalid.value, &invalid.bytes) == E_INVALIDARG, "empty passwords are unsupported");
-    require(serializePassword(identity.qualifiedUserName, identity.providerId, nullptr, CPUS_LOGON,
+    require(serializePassword(identity.qualifiedUserName, identity.providerId, {}, CPUS_LOGON,
         &invalid.value, &invalid.bytes) == E_INVALIDARG, "missing passwords must reject");
+    wchar_t unterminated[]{L'x', L'y'};
+    require(serializePassword(identity.qualifiedUserName, identity.providerId, unterminated, CPUS_LOGON,
+        &invalid.value, &invalid.bytes) == E_INVALIDARG && !invalid.value && invalid.bytes == 0,
+        "unterminated password buffers must reject without scanning past their bounds");
+    wchar_t embeddedNul[]{L'x', L'\0', L'y', L'\0'};
+    require(serializePassword(identity.qualifiedUserName, identity.providerId, embeddedNul, CPUS_LOGON,
+        &invalid.value, &invalid.bytes) == E_INVALIDARG, "embedded NUL must not truncate a password");
     std::wstring tooLong(unlock_windows::saved_credential::kMaxPasswordChars + 1, L'x');
-    require(serializePassword(identity.qualifiedUserName, identity.providerId, tooLong.data(), CPUS_LOGON,
+    require(serializePassword(identity.qualifiedUserName, identity.providerId,
+        std::span<wchar_t>{tooLong.data(), tooLong.size() + 1}, CPUS_LOGON,
         &invalid.value, &invalid.bytes) == E_INVALIDARG, "passwords must respect the vault limit");
     require(serializePassword(identity.qualifiedUserName, identity.providerId, password, CPUS_LOGON,
         nullptr, &invalid.bytes) == E_POINTER, "missing output pointers must reject");

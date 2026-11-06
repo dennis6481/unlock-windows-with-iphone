@@ -5,8 +5,8 @@
 #include "CredentialSerialization.h"
 #include "../SavedCredential/SavedCredentialIpc.h"
 #include <wincred.h>
+#include <algorithm>
 #include <cstring>
-#include <cwchar>
 #include <limits>
 #include <new>
 #include <string_view>
@@ -16,7 +16,7 @@ namespace {
 
 // Adapted from Microsoft's V2 Credential Provider sample, helpers.cpp:
 // https://github.com/microsoft/Windows-classic-samples/tree/main/Samples/CredentialProvider/cpp
-HRESULT packLocalPassword(const std::wstring& qualifiedName, PWSTR password,
+HRESULT packLocalPassword(const std::wstring& qualifiedName, std::span<wchar_t> password,
     CREDENTIAL_PROVIDER_USAGE_SCENARIO scenario, BYTE** buffer, DWORD* bytes) {
     const auto separator = qualifiedName.find(L'\\');
     if (separator == std::wstring::npos || separator == 0 || separator + 1 == qualifiedName.size() ||
@@ -25,14 +25,14 @@ HRESULT packLocalPassword(const std::wstring& qualifiedName, PWSTR password,
     const std::wstring_view user(qualifiedName.data() + separator + 1, qualifiedName.size() - separator - 1);
 
     DWORD protectedChars = 0;
-    if (CredProtectW(FALSE, password, static_cast<DWORD>(std::wcslen(password) + 1),
+    if (CredProtectW(FALSE, password.data(), static_cast<DWORD>(password.size()),
             nullptr, &protectedChars, nullptr)) return E_UNEXPECTED;
     const DWORD error = GetLastError();
     if (error != ERROR_INSUFFICIENT_BUFFER) return HRESULT_FROM_WIN32(error);
     if (protectedChars == 0) return E_UNEXPECTED;
     PasswordBuffer protectedPassword;
     protectedPassword.value.resize(protectedChars);
-    if (!CredProtectW(FALSE, password, static_cast<DWORD>(std::wcslen(password) + 1),
+    if (!CredProtectW(FALSE, password.data(), static_cast<DWORD>(password.size()),
             protectedPassword.value.data(), &protectedChars, nullptr)) return HRESULT_FROM_WIN32(GetLastError());
 
     const std::wstring_view secret(protectedPassword.value.data());
@@ -64,20 +64,21 @@ HRESULT packLocalPassword(const std::wstring& qualifiedName, PWSTR password,
 } // namespace
 
 HRESULT serializePassword(const std::wstring& qualifiedName, const GUID& providerId,
-    PWSTR password, CREDENTIAL_PROVIDER_USAGE_SCENARIO scenario, BYTE** buffer, DWORD* bytes) noexcept {
+    std::span<wchar_t> password, CREDENTIAL_PROVIDER_USAGE_SCENARIO scenario, BYTE** buffer, DWORD* bytes) noexcept {
     if (!buffer || !bytes) return E_POINTER;
     *buffer = nullptr;
     *bytes = 0;
     if ((scenario != CPUS_LOGON && scenario != CPUS_UNLOCK_WORKSTATION) || qualifiedName.empty() ||
         qualifiedName.size() > saved_credential::kMaxQualifiedUserNameChars || qualifiedName.find(L'\0') != std::wstring::npos ||
-        !password || !*password || std::wcslen(password) > saved_credential::kMaxPasswordChars) return E_INVALIDARG;
+        password.size() < 2 || password.size() - 1 > saved_credential::kMaxPasswordChars || password.back() != L'\0' ||
+        std::find(password.begin(), password.end() - 1, L'\0') != password.end() - 1) return E_INVALIDARG;
     try {
         if (saved_credential::isLocalAccountProvider(providerId))
             return packLocalPassword(qualifiedName, password, scenario, buffer, bytes);
 
         constexpr DWORD flags = CRED_PACK_PROTECTED_CREDENTIALS | CRED_PACK_ID_PROVIDER_CREDENTIALS;
         DWORD size = 0;
-        if (CredPackAuthenticationBufferW(flags, const_cast<PWSTR>(qualifiedName.c_str()), password, nullptr, &size))
+        if (CredPackAuthenticationBufferW(flags, const_cast<PWSTR>(qualifiedName.c_str()), password.data(), nullptr, &size))
             return E_UNEXPECTED;
         const DWORD error = GetLastError();
         if (error != ERROR_INSUFFICIENT_BUFFER) return HRESULT_FROM_WIN32(error);
@@ -85,7 +86,7 @@ HRESULT serializePassword(const std::wstring& qualifiedName, const GUID& provide
         const DWORD allocated = size;
         auto* packed = static_cast<BYTE*>(CoTaskMemAlloc(allocated));
         if (!packed) return E_OUTOFMEMORY;
-        if (!CredPackAuthenticationBufferW(flags, const_cast<PWSTR>(qualifiedName.c_str()), password, packed, &size)) {
+        if (!CredPackAuthenticationBufferW(flags, const_cast<PWSTR>(qualifiedName.c_str()), password.data(), packed, &size)) {
             const HRESULT result = HRESULT_FROM_WIN32(GetLastError());
             SecureZeroMemory(packed, allocated);
             CoTaskMemFree(packed);

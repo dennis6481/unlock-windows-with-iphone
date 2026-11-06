@@ -4,6 +4,7 @@
 
 #include <Windows.h>
 #include <credentialprovider.h>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -17,8 +18,9 @@ struct PasswordBuffer final {
     }
 };
 
-/// Pack a saved plaintext password in LogonUI. On success the caller transfers the CoTaskMem buffer to Windows.
+/// Pack a saved plaintext password buffer including its NUL terminator in LogonUI.
+/// On success the caller transfers the CoTaskMem buffer to Windows.
 [[nodiscard]] HRESULT serializePassword(const std::wstring& qualifiedName, const GUID& providerId,
-    PWSTR password, CREDENTIAL_PROVIDER_USAGE_SCENARIO scenario, BYTE** buffer, DWORD* bytes) noexcept;
+    std::span<wchar_t> password, CREDENTIAL_PROVIDER_USAGE_SCENARIO scenario, BYTE** buffer, DWORD* bytes) noexcept;
 
 } // namespace unlock_windows::credential_provider

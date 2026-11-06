@@ -893,7 +893,7 @@ public:
         DWORD size = 0;
         BYTE* packed = nullptr;
         const HRESULT packedResult = unlock_windows::credential_provider::serializePassword(
-            qualifiedUserName_, providerId_, savedPassword.value.data(), usageScenario_, &packed, &size
+            qualifiedUserName_, providerId_, savedPassword.value, usageScenario_, &packed, &size
         );
         if (FAILED(packedResult)) {
             logAutoSubmitError(L"credential serialization", packedResult);

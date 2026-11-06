@@ -144,7 +144,7 @@ jobs:
           Build: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID
 
 
-          CI requires all four native Release test programs to pass on both x64 and ARM64 and checks Windows package versions and PE architectures. Installation, BLE and native unlock are not exercised by this workflow. The presence-unlock hardware acceptance matrix remains pending.
+          CI requires all four native Release test programs to pass on both x64 and ARM64 and checks Windows package versions and PE architectures. Installation, BLE and native unlock are not exercised by this workflow.
           "@ | Set-Content -LiteralPath release-notes.md -Encoding utf8
           $releaseOptions = @()
           if ($env:RELEASE_PRERELEASE -ceq 'true') {

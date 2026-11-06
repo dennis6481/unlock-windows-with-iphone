@@ -7,7 +7,7 @@ The Windows side contains four installed components: the desktop app, LocalSyste
 ## Compatibility
 
 - **Windows:** Windows 10 version 2004, build 19041, or later, including Windows 11. 
-- **Architecture:** Native x64 or ARM64; all components must match the OS architecture. ARM64 has not been tested on physical hardware. 32-bit x86 and ARM32 are not supported.
+- **Architecture:** Native x64 or ARM64; all components must match the OS architecture. 32-bit x86 and ARM32 are not supported.
 - **Bluetooth:** The adapter and driver must support BLE Central, protected GATT and advertisement scanning.
 
 ## Build prerequisites
@@ -41,7 +41,7 @@ make -C windows build-release TARGET_ARCH=arm64 BUILD_DIR=build/arm64-release
 
 The installer is generated at `windows/dist/UnlockWithIPhone_<version>_<architecture>_setup.exe`, with `x64` or `arm64` matching the compiler target and the first three version parts read from [ProductVersion.h](ProductVersion.h). Distribute only the **Release** setup EXE; it embeds the desktop app and its runtime files, service and Credential Provider. Static libraries are isolated under `lib/<architecture>/<configuration>` to prevent Debug/Release runtime mixing. Use separate build directories per architecture/configuration; the active desktop EXE remains at the build root for existing make commands.
 
-The desktop build follows make → MSBuild Solution/.vcxproj. Native libraries, the service, Credential Provider, desktop WinUI app and installer are separate projects with explicit dependencies and outputs. Pinned Windows App SDK packages and Hybrid CRT remain in use; local NuGet caches and Visual Studio user settings are ignored by Git. XAML generation and `DesktopApp.files` preserve the pages' relative directories. `DesktopApp.files` comes from the WinUI project; packaging embeds one dependency manifest for paths, sizes, SHA-256 and PE machine types. Third-party files retain their versions. The presence replacement built successfully for x64 Release on 11 Oct 2026 with tests disabled (0 errors, 0 warnings). Local resource limits required one MSBuild node and one compiler process. Tests, runtime, clean-machine deployment and ARM64 acceptance remain pending.
+The desktop build follows make → MSBuild Solution/.vcxproj. Native libraries, the service, Credential Provider, desktop WinUI app and installer are separate projects with explicit dependencies and outputs. Pinned Windows App SDK packages and Hybrid CRT remain in use; local NuGet caches and Visual Studio user settings are ignored by Git. XAML generation and `DesktopApp.files` preserve the pages' relative directories. `DesktopApp.files` comes from the WinUI project; packaging embeds one dependency manifest for paths, sizes, SHA-256 and PE machine types. Third-party files retain their versions.
 
 ## Install and configure
 
@@ -103,9 +103,9 @@ Diagnostics uses a leading tab followed by `local time [level] [source] tickMs=.
 
 **Status** shows pairing guidance and a paired BLE list when unbound. Pair in Windows settings, return, select an endpoint and click **Bind selected device**. The disabled button shows **Binding…** and progress during UAC and verification; errors restore it. Success scrolls to the top and suggests trying **Unlock**. Leaving Status, closing the window or removing the binding clears the success InfoBar without replay. A bound phone offers removal only; its right-aligned Flyout confirms before UAC, and outside clicks or Esc dismiss it. Removal keeps Windows pairing and the saved password. Endpoint IDs select identity; there is no separate binding window.
 
-The main window uses Mica and system theme colors; Windows 10 uses the framework's solid backdrop. Minimum width is 800 effective pixels; pages fill a centered 800-pixel container with no outer panel. The sidebar uses native Auto layout. **Status** has cards for **Last Unlock**, **Unlock range** and **Remove bound iPhone**, with automatic device updates. The slider offers Near/Medium/Far (−30/−60/−90 dBm). A changed selection requests UAC once; refusal/failure restores the saved setting. Other thresholds snap only for display until changed. Signal strength does not indicate exact distance. Initial binding skips RSSI and saves −60 dBm for unlock. App-shutdown cancellation remains; hardware acceptance is pending.
+The main window uses Mica and system theme colors; Windows 10 uses the framework's solid backdrop. Minimum width is 800 effective pixels; pages fill a centered 800-pixel container with no outer panel. The sidebar uses native Auto layout. **Status** has cards for **Last Unlock**, **Unlock range** and **Remove bound iPhone**, with automatic device updates. The slider offers Near/Medium/Far (−30/−60/−90 dBm). A changed selection requests UAC once; refusal/failure restores the saved setting. Other thresholds snap only for display until changed. Signal strength does not indicate exact distance. Initial binding skips RSSI and saves −60 dBm for unlock. App-shutdown cancellation remains.
 
-**Last Unlock** stays right-aligned, for example `2 min ago / -58 dBm`, and updates after native Windows authentication succeeds. RSSI comes from the consumed claim, not a later scan. No history displays `—`; unbound phones hide the card and query failures remain explicit errors. Records survive desktop reopening but reset on service/PC restart, account change, binding replacement/removal or password removal. Threshold changes retain history. Compiled for x64 Release on 11 Oct 2026; runtime/hardware acceptance remains pending.
+**Last Unlock** stays right-aligned, for example `2 min ago / -58 dBm`, and updates after native Windows authentication succeeds. RSSI comes from the consumed claim, not a later scan. No history displays `—`; unbound phones hide the card and query failures remain explicit errors. Records survive desktop reopening but reset on service/PC restart, account change, binding replacement/removal or password removal. Threshold changes retain history.
 ## Tag builds
 
 Pushing `v1.0.0` publishes a Release; `v1.0.0-rc` or numbered RC tags such as `v1.0.0-rc1` publish a Pre-release without marking it Latest. The numeric tag must match the first three parts in [ProductVersion.h](ProductVersion.h); installer versions retain all four committed parts, while Release download filenames use three parts. About checks public updates using the first three parts only. The RC suffix is GitHub release metadata only, so RC and final installers with the same four-part version use Reinstall.
@@ -114,7 +114,7 @@ CI uses `WindowsBuild.ps1` without GNU Make. [PR builds](../.github/workflows/pr
 
 ## Local-account validation
 
-Local-account lock-screen/hardware acceptance is pending. Native tests cover identity construction and mismatch rejection, IPC round trips, local credential packing for both Windows usage scenarios, password protection and MSA serialization. These tests do not authenticate an account or unlock Windows.
+Native tests cover identity construction and mismatch rejection, IPC round trips, local credential packing for both Windows usage scenarios, password protection and MSA serialization. These tests do not authenticate an account or unlock Windows.
 
 On a test PC, install matching service, CP and desktop binaries through the installer, honoring its restart boundary:
 

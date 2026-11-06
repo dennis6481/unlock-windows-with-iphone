@@ -33,7 +33,7 @@ Unlock your Windows session with your nearby iPhone.
 
 ### System requirements
 
-*Unlock with iPhone* requires Windows 10 version **2004, build 19041**, or later, including Windows 11. Both x64 and ARM64 architectures are supported, although the app has not yet been tested on a physical ARM64 machine.
+*Unlock with iPhone* requires Windows 10 version **2004, build 19041**, or later, including Windows 11. Both x64 and ARM64 architectures are supported.
 
 Your PC must have Bluetooth enabled, with an adapter and driver that support **BLE Central, protected GATT access and advertisement scanning**.
 

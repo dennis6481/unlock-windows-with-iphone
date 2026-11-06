@@ -67,7 +67,7 @@ Phone unlock requires an existing, locked Windows session. Windows Automatic Res
 
 ### Installation
 
-> [!WARNING]
+> [!IMPORTANT]
 > If a version earlier than **1.0.0** is installed, uninstall it in Windows **Settings → Apps** first, then run this installer. 
 
 1. Get the native x64 or ARM64 [Windows installer](https://github.com/dennis6481/unlock-windows-with-iphone/releases) and follow its steps. After restarting, sign in to Windows and choose **Start setup**.
@@ -112,7 +112,7 @@ Windows distribution is a single `windows/dist/UnlockWithIPhone_<version>_<archi
 
 ## To Do
 
-- [x] Modernize the Windows UI and setup guidance. [#21](https://github.com/dennis6481/unlock-windows-with-iphone/issues/21).
+- [x] ~~Modernize the Windows UI and setup guidance. [#21](https://github.com/dennis6481/unlock-windows-with-iphone/issues/21).~~
 - [ ] Support local Windows accounts. [#18](https://github.com/dennis6481/unlock-windows-with-iphone/issues/18).
 - [ ] Support multiple Windows users. [#24](https://github.com/dennis6481/unlock-windows-with-iphone/issues/24).
 - [ ] Add support for Apple Watch. [#23](https://github.com/dennis6481/unlock-windows-with-iphone/issues/23).
@@ -142,4 +142,3 @@ The project uses the [MIT License](LICENSE.md).
 - [Microsoft: MSBuild for Visual C++](https://learn.microsoft.com/en-us/cpp/build/msbuild-visual-cpp)
 - [Microsoft: /MD and /MT runtime linkage](https://learn.microsoft.com/en-us/cpp/build/reference/md-mt-ld-use-run-time-library)
 - [Microsoft: Finding and loading resources](https://learn.microsoft.com/en-us/windows/win32/menurc/finding-and-loading-resources)
-- [Privacy Policy](https://dennis6481.github.io/unlock-windows-with-iphone/)

@@ -55,13 +55,6 @@ const FieldDefinition kFields[] = {
     {kOkField, CPFT_COMMAND_LINK, L"OK", CPFG_STYLE_LINK_AS_BUTTON},
 };
 
-struct TemporaryPassword final {
-    std::vector<wchar_t> value;
-    ~TemporaryPassword() {
-        if (!value.empty()) SecureZeroMemory(value.data(), value.size() * sizeof(wchar_t));
-    }
-};
-
 void logAutoSubmitError(const wchar_t* operation, const HRESULT status) noexcept {
     wchar_t message[256]{};
     std::swprintf(message, 256, L"[UnlockCP] %ls failed: 0x%08lx\n",
@@ -772,7 +765,7 @@ public:
 
         const auto automaticApproval = std::exchange(automaticApproval_, std::nullopt);
 
-        if (qualifiedUserName_.empty() || userSid_.empty() || primarySid_ != userSid_ ||
+        if (qualifiedUserName_.empty() || userSid_.empty() ||
             consoleSessionId_ == 0xffffffff) {
             return showFailure(L"This Windows account couldn't be verified. Use your PIN or password.");
         }
@@ -850,7 +843,7 @@ public:
                 L"The Windows Negotiate authentication package is unavailable.");
         }
 
-        TemporaryPassword savedPassword;
+        unlock_windows::credential_provider::PasswordBuffer savedPassword;
         try {
             unlock_windows::saved_credential::Identity identity{
                 userSid_, qualifiedUserName_, providerId_
@@ -964,22 +957,19 @@ public:
 
     HRESULT setUserIdentity(
         const std::wstring& sid,
-        const std::wstring& primarySid,
         const std::wstring& qualifiedName,
         const GUID& providerId,
         CREDENTIAL_PROVIDER_USAGE_SCENARIO usageScenario,
         DWORD consoleSessionId
     ) noexcept {
-        if (sid.empty() || primarySid.empty() || qualifiedName.empty()) {
+        if (sid.empty() || qualifiedName.empty()) {
             userSid_.clear();
-            primarySid_.clear();
             qualifiedUserName_.clear();
             consoleSessionId_ = 0xffffffff;
             return E_INVALIDARG;
         }
         try {
             userSid_ = sid;
-            primarySid_ = primarySid;
             qualifiedUserName_ = qualifiedName;
             providerId_ = providerId;
             usageScenario_ = usageScenario;
@@ -992,7 +982,6 @@ public:
 
     void clearIdentity() noexcept {
         userSid_.clear();
-        primarySid_.clear();
         qualifiedUserName_.clear();
         providerId_ = GUID{};
         consoleSessionId_ = 0xffffffff;
@@ -1016,7 +1005,6 @@ private:
     ULONGLONG authenticationStartedAt_ = 0;
     ICredentialProviderCredentialEvents* events_ = nullptr;
     std::wstring userSid_;
-    std::wstring primarySid_;
     std::wstring qualifiedUserName_;
     GUID providerId_{};
     CREDENTIAL_PROVIDER_USAGE_SCENARIO usageScenario_ = CPUS_INVALID;
@@ -1331,7 +1319,7 @@ public:
             return E_UNEXPECTED;
         }
         result = credential_->setUserIdentity(
-            sidValue, primarySid, qualifiedName, providerId, usageScenario_, consoleSessionId
+            sidValue, qualifiedName, providerId, usageScenario_, consoleSessionId
         );
         if (SUCCEEDED(result)) {
             const bool sameUser = previousSession == consoleSessionId &&

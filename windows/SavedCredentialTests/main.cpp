@@ -126,7 +126,7 @@ void testIdentityRoundTrip() {
 
 void testLocalIdentity() {
     const std::wstring sid = L"S-1-5-21-100-200-300-1001";
-    const auto local = localAccountIdentity(sid, sid, L"TEST-PC", L"local user");
+    const auto local = localAccountIdentity(sid, L"TEST-PC", L"local user");
     require(local.sid == sid && local.qualifiedUserName == L"TEST-PC\\local user" &&
         isLocalAccountProvider(local.providerId), "local SAM identity must retain the qualified name and provider");
     SensitiveBytes bytes;
@@ -141,22 +141,20 @@ void testLocalIdentity() {
     auto renamed = local;
     renamed.qualifiedUserName = L"TEST-PC\\renamed";
     require(!sameIdentity(local, renamed), "a renamed account must not reuse the saved identity");
-    for (const auto& candidate : {std::wstring{}, sid + L"1"}) {
-        bool rejected = false;
-        try { (void)localAccountIdentity(sid, candidate, L"TEST-PC", L"local user"); }
-        catch (const std::invalid_argument&) { rejected = true; }
-        require(rejected, "a missing or different local SAM SID must reject even for the same name");
-    }
     for (const auto& name : {std::wstring{}, std::wstring(L"DOMAIN\\user"), std::wstring(L"user\0suffix", 11)}) {
         bool rejected = false;
-        try { (void)localAccountIdentity(sid, sid, L"TEST-PC", name); }
+        try { (void)localAccountIdentity(sid, L"TEST-PC", name); }
         catch (const std::invalid_argument&) { rejected = true; }
         require(rejected, "missing or malformed local account names must reject");
     }
     bool rejected = false;
-    try { (void)localAccountIdentity(sid, sid, L"", L"local user"); }
+    try { (void)localAccountIdentity(sid, L"", L"local user"); }
     catch (const std::invalid_argument&) { rejected = true; }
     require(rejected, "local identity requires the Windows-provided domain name");
+    rejected = false;
+    try { (void)localAccountIdentity(L"", L"TEST-PC", L"local user"); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    require(rejected, "local identity requires a console SID");
 }
 
 void testStatusRoundTrip() {

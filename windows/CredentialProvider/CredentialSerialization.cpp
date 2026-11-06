@@ -10,17 +10,9 @@
 #include <limits>
 #include <new>
 #include <string_view>
-#include <vector>
 
 namespace unlock_windows::credential_provider {
 namespace {
-
-struct ProtectedPassword final {
-    std::vector<wchar_t> value;
-    ~ProtectedPassword() {
-        if (!value.empty()) SecureZeroMemory(value.data(), value.size() * sizeof(wchar_t));
-    }
-};
 
 // Adapted from Microsoft's V2 Credential Provider sample, helpers.cpp:
 // https://github.com/microsoft/Windows-classic-samples/tree/main/Samples/CredentialProvider/cpp
@@ -38,7 +30,7 @@ HRESULT packLocalPassword(const std::wstring& qualifiedName, PWSTR password,
     const DWORD error = GetLastError();
     if (error != ERROR_INSUFFICIENT_BUFFER) return HRESULT_FROM_WIN32(error);
     if (protectedChars == 0) return E_UNEXPECTED;
-    ProtectedPassword protectedPassword;
+    PasswordBuffer protectedPassword;
     protectedPassword.value.resize(protectedChars);
     if (!CredProtectW(FALSE, password, static_cast<DWORD>(std::wcslen(password) + 1),
             protectedPassword.value.data(), &protectedChars, nullptr)) return HRESULT_FROM_WIN32(GetLastError());

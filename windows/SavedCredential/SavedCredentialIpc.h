@@ -118,8 +118,8 @@ struct Identity final {
 /// Select the native account serialization format; this does not establish local SAM membership.
 [[nodiscard]] bool isLocalAccountProvider(const GUID& providerId) noexcept;
 
-/// Build a local identity only after the console SID matches the account returned by the local SAM.
-[[nodiscard]] Identity localAccountIdentity(const std::wstring& consoleSid, const std::wstring& accountSid,
+/// Build a local identity from a console SID already verified against the local SAM.
+[[nodiscard]] Identity localAccountIdentity(const std::wstring& consoleSid,
     const std::wstring& domain, const std::wstring& accountName);
 
 struct CredentialSummary {

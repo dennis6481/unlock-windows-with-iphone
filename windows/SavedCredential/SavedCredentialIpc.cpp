@@ -229,9 +229,7 @@ void SensitiveBytes::clear() noexcept {
 
 bool encodeIdentity(const Identity& identity, SensitiveBytes& output) {
     if (identity.sid.empty() || identity.qualifiedUserName.empty() ||
-        identity.sid.size() > 256 || identity.qualifiedUserName.size() > kMaxQualifiedUserNameChars ||
-        identity.sid.size() > std::numeric_limits<std::uint16_t>::max() ||
-        identity.qualifiedUserName.size() > std::numeric_limits<std::uint16_t>::max()) return false;
+        identity.sid.size() > 256 || identity.qualifiedUserName.size() > kMaxQualifiedUserNameChars) return false;
     const auto sidLength = static_cast<std::uint16_t>(identity.sid.size());
     const auto nameLength = static_cast<std::uint16_t>(identity.qualifiedUserName.size());
     output.clear();
@@ -457,12 +455,12 @@ bool isLocalAccountProvider(const GUID& providerId) noexcept {
     return IsEqualGUID(providerId, Identity_LocalUserProvider);
 }
 
-Identity localAccountIdentity(const std::wstring& consoleSid, const std::wstring& accountSid,
+Identity localAccountIdentity(const std::wstring& consoleSid,
     const std::wstring& domain, const std::wstring& accountName) {
-    if (consoleSid.empty() || consoleSid != accountSid || domain.empty() || accountName.empty() ||
+    if (consoleSid.empty() || domain.empty() || accountName.empty() ||
         domain.find_first_of(L"\\\0", 0, 2) != std::wstring::npos ||
         accountName.find_first_of(L"\\\0", 0, 2) != std::wstring::npos) {
-        throw std::invalid_argument("Windows local account identity is incomplete or does not match the console token");
+        throw std::invalid_argument("Windows local account identity is incomplete");
     }
     Identity identity{consoleSid, domain + L"\\" + accountName, Identity_LocalUserProvider};
     SensitiveBytes encoded;

@@ -253,7 +253,7 @@ Identity consoleIdentity(const Console& console) {
     if (!userInfo.value) fail("Windows online identity query returned no account information");
     const auto* online = reinterpret_cast<const USER_INFO_24*>(userInfo.value);
     if (!online->usri24_internet_identity)
-        return localAccountIdentity(console.sid, sidText(local->usri23_user_sid), domainName.data(), accountName.data());
+        return localAccountIdentity(console.sid, domainName.data(), accountName.data());
     if (!online->usri24_user_sid || sidText(online->usri24_user_sid) != console.sid ||
         !online->usri24_internet_provider_name || !*online->usri24_internet_provider_name ||
         !online->usri24_internet_principal_name || !*online->usri24_internet_principal_name)

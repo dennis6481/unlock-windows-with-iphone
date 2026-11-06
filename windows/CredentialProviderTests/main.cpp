@@ -257,7 +257,7 @@ std::wstring packedString(const Serialization& serialized, const UNICODE_STRING&
 void testPasswordSerialization() {
     using unlock_windows::credential_provider::serializePassword;
     using unlock_windows::saved_credential::localAccountIdentity;
-    const auto identity = localAccountIdentity(L"S-1-5-21-1-2-3-1001", L"S-1-5-21-1-2-3-1001", L"TEST-PC", L"élise 用户");
+    const auto identity = localAccountIdentity(L"S-1-5-21-1-2-3-1001", L"TEST-PC", L"élise 用户");
     wchar_t password[] = L"Test-only password! 123";
     for (const auto scenario : {CPUS_LOGON, CPUS_UNLOCK_WORKSTATION}) {
         Serialization serialized;

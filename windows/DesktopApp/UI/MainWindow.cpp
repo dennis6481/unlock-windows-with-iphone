@@ -1,6 +1,6 @@
 // Created by Rui MA on 08 Oct 2026
 
-#include "Dashboard.h"
+#include "MainWindow.h"
 #include "../../Resources/resource.h"
 #include "Pages/PageControls.h"
 
@@ -9,6 +9,7 @@
 #include <commctrl.h>
 #include <microsoft.ui.xaml.window.h>
 #include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/Windows.ApplicationModel.DataTransfer.h>
 #include "Pages/StatusPage.xaml.h"
 #include "Pages/PasswordPage.xaml.h"
 #include "Pages/DiagnosticsPage.xaml.h"
@@ -18,6 +19,8 @@
 #include "Pages/AboutPage.xaml.h"
 #include <winrt/Microsoft.UI.Xaml.Controls.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
+#include <winrt/Microsoft.UI.Xaml.Automation.h>
+#include <winrt/Microsoft.UI.Dispatching.h>
 #include <winrt/Microsoft.UI.Xaml.Markup.h>
 #include <winrt/Microsoft.UI.Xaml.Media.h>
 #include <winrt/Microsoft.UI.Xaml.Media.Animation.h>
@@ -25,6 +28,7 @@
 #include <utility>
 #include <array>
 #include <map>
+#include <chrono>
 
 namespace unlock_windows::desktop_app {
 using namespace winrt;
@@ -33,22 +37,27 @@ using namespace winrt::Microsoft::UI::Xaml;
 using namespace winrt::Microsoft::UI::Xaml::Controls;
 using namespace winrt::Microsoft::UI::Xaml::Markup;
 
-using namespace dashboard_ui;
+using namespace ui;
 
-struct Dashboard::State final {
+struct MainWindow::State final {
     struct View;
     std::unique_ptr<View> view;
-    DashboardSnapshot snapshot;
+    DesktopSnapshot snapshot;
     RefreshAction refresh;
     ReportError reportError;
     ReportError passwordReport;
+    ReportError bindingReport;
+    ReportError aboutReport;
     std::wstring failure;
     bool stopping = false;
 
+    /// Report a local UI failure after the caller has handled propagation.
     void fail(const hresult_error& error);
 };
 namespace {
-NavigationViewItem navigationItem(DashboardPage page, const wchar_t* label, const wchar_t* glyph) {
+constexpr wchar_t kCopyLogsText[] = L"Copy logs";
+
+NavigationViewItem navigationItem(MainWindowPage page, const wchar_t* label, const wchar_t* glyph) {
     NavigationViewItem item;
     item.Content(box_value(hstring(label)));
     item.Tag(box_value(static_cast<std::int32_t>(page)));
@@ -58,7 +67,7 @@ NavigationViewItem navigationItem(DashboardPage page, const wchar_t* label, cons
 
 }
 
-struct Dashboard::State::View final {
+struct MainWindow::State::View final {
     explicit View(State* state) : state_(state) {}
     void refresh() {
         if (exiting_ || state_->stopping) return;
@@ -66,10 +75,13 @@ struct Dashboard::State::View final {
             if (!window_) buildWindow();
             if (!state_->failure.empty()) return;
             applySnapshot();
-        } catch (const hresult_error& error) { state_->fail(error); }
+        } catch (const hresult_error& error) {
+            if (isNonlocalUiError(error)) throw;
+            state_->fail(error);
+        }
     }
 
-    void show(std::optional<DashboardPage> page) {
+    void show(std::optional<MainWindowPage> page) {
         refresh();
         if (exiting_ || state_->stopping || !window_) return;
         try {
@@ -79,10 +91,24 @@ struct Dashboard::State::View final {
             SetForegroundWindow(hwnd_);
             if (passwordPage_ && nav_.SelectedItem() == pages_[1])
                 get_self<winrt::UnlockDesktop::implementation::PasswordPage>(passwordPage_)->Refresh();
-        } catch (const hresult_error& error) { state_->fail(error); }
+        } catch (const hresult_error& error) {
+            if (isNonlocalUiError(error)) throw;
+            state_->fail(error);
+        }
     }
 
 private:
+    void setCopyFeedback(bool copied) {
+        if (!VisualStateManager::GoToState(copyFeedback_, copied ? L"Copied" : L"Ready", true))
+            throw hresult_error(E_UNEXPECTED, L"The copy feedback visual state was not found.");
+        copy_.IsEnabled(!copied && !state_->snapshot.diagnostics.empty());
+    }
+
+    void resetCopyFeedback() {
+        copyFeedbackTimer_.Stop();
+        setCopyFeedback(false);
+    }
+
     static LRESULT CALLBACK sizing(HWND window, UINT message, WPARAM wparam, LPARAM lparam,
                                    UINT_PTR, DWORD_PTR) {
         if (message == WM_GETMINMAXINFO) {
@@ -119,8 +145,22 @@ private:
         closingToken_ = appWindow_.Closing([this](const auto&, const Windowing::AppWindowClosingEventArgs& args) {
             try {
                 args.Cancel(true);
+                if (statusPage_) {
+                    auto* page = get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_);
+                    page->ResetThresholdPreview();
+                    page->DismissBindingSuccess();
+                }
+                if (passwordPage_) {
+                    auto* page = get_self<winrt::UnlockDesktop::implementation::PasswordPage>(passwordPage_);
+                    page->DismissRemoval();
+                    page->DismissPasswordSuccess();
+                }
+                resetCopyFeedback();
                 appWindow_.Hide();
-            } catch (const hresult_error& error) { state_->fail(error); }
+            } catch (const hresult_error& error) {
+                if (isNonlocalUiError(error)) throw;
+                state_->fail(error);
+            }
         });
 
         nav_ = XamlReader::Load(LR"(<NavigationView
@@ -140,10 +180,10 @@ private:
         nav_.IsSettingsVisible(false);
         nav_.HorizontalContentAlignment(HorizontalAlignment::Stretch);
         nav_.VerticalContentAlignment(VerticalAlignment::Stretch);
-        pages_ = {navigationItem(DashboardPage::status, L"Status", L"\xE8EA"),
-            navigationItem(DashboardPage::password, L"Password", L"\xE72E"),
-            navigationItem(DashboardPage::diagnostics, L"Diagnostics", L"\xE9D9"),
-            navigationItem(DashboardPage::about, L"About", L"\xE946")};
+        pages_ = {navigationItem(MainWindowPage::status, L"Status", L"\xE8EA"),
+            navigationItem(MainWindowPage::password, L"Password", L"\xE72E"),
+            navigationItem(MainWindowPage::diagnostics, L"Diagnostics", L"\xE9D9"),
+            navigationItem(MainWindowPage::about, L"About", L"\xE946")};
         for (std::size_t index = 0; index < 3; ++index) nav_.MenuItems().Append(pages_[index]);
         nav_.FooterMenuItems().Append(pages_[3]);
 
@@ -163,9 +203,97 @@ private:
         bodyRow.Height(automatic());
         root_.RowDefinitions().Append(bodyRow);
 
+        Grid header;
+        ColumnDefinition titleColumn, actionColumn;
+        titleColumn.Width(star());
+        actionColumn.Width(automatic());
+        header.ColumnDefinitions().Append(titleColumn);
+        header.ColumnDefinitions().Append(actionColumn);
         title_ = text(L"Status", 28);
         title_.VerticalAlignment(VerticalAlignment::Center);
-        root_.Children().Append(title_);
+        header.Children().Append(title_);
+        copy_ = Button{};
+        copyFeedback_ = XamlReader::Load(LR"(<ContentControl
+            xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+            xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+            IsTabStop="False" IsHitTestVisible="False" AutomationProperties.AccessibilityView="Raw">
+            <ContentControl.Template>
+                <ControlTemplate TargetType="ContentControl">
+                    <Grid>
+                        <VisualStateManager.VisualStateGroups>
+                            <VisualStateGroup x:Name="CopyStates">
+                                <VisualStateGroup.Transitions>
+                                    <VisualTransition GeneratedDuration="0:0:0.15"/>
+                                </VisualStateGroup.Transitions>
+                                <VisualState x:Name="Ready">
+                                    <VisualState.Setters>
+                                        <Setter Target="CopiedIcon.Opacity" Value="0"/>
+                                    </VisualState.Setters>
+                                </VisualState>
+                                <VisualState x:Name="Copied">
+                                    <VisualState.Setters>
+                                        <Setter Target="CopiedIcon.Opacity" Value="1"/>
+                                    </VisualState.Setters>
+                                </VisualState>
+                            </VisualStateGroup>
+                        </VisualStateManager.VisualStateGroups>
+                        <SymbolIcon x:Name="CopiedIcon" Symbol="Accept" Opacity="0"
+                            Foreground="{TemplateBinding Foreground}"/>
+                    </Grid>
+                </ControlTemplate>
+            </ContentControl.Template>
+        </ContentControl>)").as<ContentControl>();
+        copyFeedback_.VerticalAlignment(VerticalAlignment::Center);
+        copyFeedback_.Margin({0, 0, 12, 0});
+        StackPanel copyContent;
+        copyContent.Orientation(Orientation::Horizontal);
+        copyContent.Spacing(8);
+        copyContent.Children().Append(SymbolIcon{Symbol::Copy});
+        auto copyLabel = text(kCopyLogsText);
+        copyLabel.VerticalAlignment(VerticalAlignment::Center);
+        copyContent.Children().Append(copyLabel);
+        copy_.Content(copyContent);
+        Automation::AutomationProperties::SetName(copy_, kCopyLogsText);
+        copyFeedback_.ApplyTemplate();
+        setCopyFeedback(false);
+        copyFeedbackTimer_ = window_.DispatcherQueue().CreateTimer();
+        copyFeedbackTimer_.Interval(std::chrono::seconds(2));
+        copyFeedbackTimer_.IsRepeating(false);
+        copyFeedbackToken_ = copyFeedbackTimer_.Tick([this](const auto&, const auto&) {
+            try { resetCopyFeedback(); }
+            catch (const hresult_error& error) {
+                if (isNonlocalUiError(error)) throw;
+                state_->fail(error);
+            }
+        });
+        copy_.VerticalAlignment(VerticalAlignment::Center);
+        copyActions_ = StackPanel{};
+        copyActions_.Orientation(Orientation::Horizontal);
+        copyActions_.VerticalAlignment(VerticalAlignment::Center);
+        copyActions_.Margin({16, 0, 0, 0});
+        copyActions_.Visibility(Visibility::Collapsed);
+        copyActions_.Children().Append(copyFeedback_);
+        copyActions_.Children().Append(copy_);
+        ToolTipService::SetToolTip(copy_, box_value(L"Copy all logs"));
+        copyToken_ = copy_.Click([this](const auto&, const auto&) {
+            try {
+                resetCopyFeedback();
+                using namespace winrt::Windows::ApplicationModel::DataTransfer;
+                DataPackage content;
+                content.RequestedOperation(DataPackageOperation::Copy);
+                content.SetText(state_->snapshot.diagnostics);
+                Clipboard::SetContent(content);
+                Clipboard::Flush();
+                setCopyFeedback(true);
+                copyFeedbackTimer_.Start();
+            } catch (const hresult_error& error) {
+                if (isNonlocalUiError(error)) throw;
+                state_->reportError(L"Failed to copy diagnostic logs: " + formatException(std::current_exception()));
+            }
+        });
+        Grid::SetColumn(copyActions_, 1);
+        header.Children().Append(copyActions_);
+        root_.Children().Append(header);
 
         frame_ = Frame{};
         Media::Animation::TransitionCollection transitions;
@@ -183,39 +311,44 @@ private:
             try {
                 const auto item = args.SelectedItem().try_as<NavigationViewItem>();
                 if (!item) return;
-                const auto pageId = static_cast<DashboardPage>(unbox_value<std::int32_t>(item.Tag()));
+                const auto pageId = static_cast<MainWindowPage>(unbox_value<std::int32_t>(item.Tag()));
                 if (currentPage_) scrollOffsets_[*currentPage_] = scroll_.VerticalOffset();
                 currentPage_ = pageId;
-                const bool statusPage = pageId == DashboardPage::status;
-                const bool diagnosticsPage = pageId == DashboardPage::diagnostics;
+                const bool statusPage = pageId == MainWindowPage::status;
+                const bool diagnosticsPage = pageId == MainWindowPage::diagnostics;
                 if (statusPage) {
                     statusPage_ = navigateTo<winrt::UnlockDesktop::StatusPage>();
                     get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->SetHost([this](bool resetScroll) {
                         if (resetScroll) {
-                            scrollOffsets_[DashboardPage::status] = 0.0;
-                            if (currentPage_ == DashboardPage::status) scroll_.ChangeView(nullptr, 0.0, nullptr, true);
+                            scrollOffsets_[MainWindowPage::status] = 0.0;
+                            if (currentPage_ == MainWindowPage::status) scroll_.ChangeView(nullptr, 0.0, nullptr, true);
                         }
                         state_->refresh();
-                    });
+                    }, state_->bindingReport);
                     get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->Update(state_->snapshot);
                 } else if (diagnosticsPage) {
                     diagnosticsPage_ = navigateTo<winrt::UnlockDesktop::DiagnosticsPage>();
                     get_self<winrt::UnlockDesktop::implementation::DiagnosticsPage>(diagnosticsPage_)->SetScrollHost(scroll_);
                     get_self<winrt::UnlockDesktop::implementation::DiagnosticsPage>(diagnosticsPage_)->Update(state_->snapshot.diagnostics);
-                } else if (pageId == DashboardPage::password) {
+                } else if (pageId == MainWindowPage::password) {
                     passwordPage_ = navigateTo<winrt::UnlockDesktop::PasswordPage>();
                     auto* page = get_self<winrt::UnlockDesktop::implementation::PasswordPage>(passwordPage_);
                     page->Bind(state_->passwordReport);
                     page->Refresh();
-                } else if (pageId == DashboardPage::about) {
+                } else if (pageId == MainWindowPage::about) {
                     aboutPage_ = navigateTo<winrt::UnlockDesktop::AboutPage>();
                     get_self<winrt::UnlockDesktop::implementation::AboutPage>(aboutPage_)->Bind(
-                        state_->reportError);
+                        state_->aboutReport);
                 } else throw hresult_invalid_argument(L"Unknown Dashboard page.");
                 title_.Text(unbox_value<hstring>(item.Content()));
+                resetCopyFeedback();
+                copyActions_.Visibility(diagnosticsPage ? Visibility::Visible : Visibility::Collapsed);
                 scroll_.UpdateLayout();
                 scroll_.ChangeView(nullptr, scrollOffsets_[pageId], nullptr, true);
-            } catch (const hresult_error& error) { state_->fail(error); }
+            } catch (const hresult_error& error) {
+                if (isNonlocalUiError(error)) throw;
+                state_->fail(error);
+            }
         });
         nav_.SelectedItem(pages_[0]);
         if (!state_->failure.empty()) return;
@@ -241,12 +374,16 @@ private:
                     get_self<winrt::UnlockDesktop::implementation::PasswordPage>(passwordPage_)->Refresh();
                 if (statusPage_ && nav_.SelectedItem() == pages_[0])
                     get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->Refresh();
-            } catch (const hresult_error& error) { state_->fail(error); }
+            } catch (const hresult_error& error) {
+                if (isNonlocalUiError(error)) throw;
+                state_->fail(error);
+            }
         });
     }
 
     void applySnapshot() {
         const auto& snapshot = state_->snapshot;
+        copy_.IsEnabled(!copyFeedbackTimer_.IsRunning() && !snapshot.diagnostics.empty());
         if (statusPage_) get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->Update(snapshot);
         if (diagnosticsPage_) get_self<winrt::UnlockDesktop::implementation::DiagnosticsPage>(diagnosticsPage_)->Update(snapshot.diagnostics);
     }
@@ -255,9 +392,14 @@ public:
     void shutdown() {
         if (exiting_) return;
         exiting_ = true;
+        if (copyFeedbackTimer_) {
+            copyFeedbackTimer_.Stop();
+            if (copyFeedbackToken_.value) copyFeedbackTimer_.Tick(copyFeedbackToken_);
+        }
         if (appWindow_ && closingToken_.value) appWindow_.Closing(closingToken_);
         if (window_ && activatedToken_.value) window_.Activated(activatedToken_);
         if (nav_ && navigationToken_.value) nav_.SelectionChanged(navigationToken_);
+        if (copy_ && copyToken_.value) copy_.Click(copyToken_);
         if (aboutPage_) get_self<winrt::UnlockDesktop::implementation::AboutPage>(aboutPage_)->Stop();
         if (passwordPage_) get_self<winrt::UnlockDesktop::implementation::PasswordPage>(passwordPage_)->Stop();
         if (statusPage_) get_self<winrt::UnlockDesktop::implementation::StatusPage>(statusPage_)->Stop();
@@ -275,8 +417,8 @@ private:
     NavigationView nav_{nullptr};
     std::array<NavigationViewItem, 4> pages_{nullptr, nullptr, nullptr, nullptr};
     ScrollViewer scroll_{nullptr};
-    std::optional<DashboardPage> currentPage_;
-    std::map<DashboardPage, double> scrollOffsets_;
+    std::optional<MainWindowPage> currentPage_;
+    std::map<MainWindowPage, double> scrollOffsets_;
     Grid root_{nullptr};
     Frame frame_{nullptr};
     winrt::UnlockDesktop::StatusPage statusPage_{nullptr};
@@ -284,27 +426,35 @@ private:
     winrt::UnlockDesktop::AboutPage aboutPage_{nullptr};
     winrt::UnlockDesktop::PasswordPage passwordPage_{nullptr};
     TextBlock title_{nullptr};
+    Button copy_{nullptr};
+    StackPanel copyActions_{nullptr};
+    ContentControl copyFeedback_{nullptr};
+    Dispatching::DispatcherQueueTimer copyFeedbackTimer_{nullptr};
     bool exiting_ = false;
     event_token closingToken_{}, navigationToken_{};
     event_token activatedToken_{};
+    event_token copyToken_{};
+    event_token copyFeedbackToken_{};
 };
 
-Dashboard::Dashboard(RefreshAction refresh, ReportError reportError, ReportError passwordReport) : state_(std::make_unique<State>()) {
+MainWindow::MainWindow(RefreshAction refresh, ReportError reportError, ReportError passwordReport,
+                     ReportError bindingReport, ReportError aboutReport) : state_(std::make_unique<State>()) {
     state_->refresh = std::move(refresh);
     state_->reportError = std::move(reportError);
     state_->passwordReport = std::move(passwordReport);
+    state_->bindingReport = std::move(bindingReport);
+    state_->aboutReport = std::move(aboutReport);
 }
 
-Dashboard::~Dashboard() { stop(); }
+MainWindow::~MainWindow() { stop(); }
 
-void Dashboard::State::fail(const hresult_error& error) {
-    rethrowNonlocalUiError(error);
+void MainWindow::State::fail(const hresult_error& error) {
     failure = std::wstring(error.message());
-    reportError(L"Dashboard: " + failure);
+    reportError(failure);
     if (view) view->shutdown();
 }
 
-void Dashboard::show(std::optional<DashboardPage> page) {
+void MainWindow::show(std::optional<MainWindowPage> page) {
     if (state_->stopping) return;
     if (!state_->failure.empty()) {
         state_->reportError(L"Dashboard is unavailable: " + state_->failure);
@@ -313,16 +463,19 @@ void Dashboard::show(std::optional<DashboardPage> page) {
     try {
         if (!state_->view) state_->view = std::make_unique<State::View>(state_.get());
         state_->view->show(page);
-    } catch (const hresult_error& error) { state_->fail(error); }
+    } catch (const hresult_error& error) {
+        if (isNonlocalUiError(error)) throw;
+        state_->fail(error);
+    }
 }
 
-void Dashboard::update(DashboardSnapshot snapshot) {
+void MainWindow::update(DesktopSnapshot snapshot) {
     if (state_->stopping || !state_->failure.empty()) return;
     state_->snapshot = std::move(snapshot);
     if (state_->view) state_->view->refresh();
 }
 
-void Dashboard::stop() {
+void MainWindow::stop() {
     state_->stopping = true;
     if (state_->view) state_->view->shutdown();
     state_->view.reset();

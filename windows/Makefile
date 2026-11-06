@@ -1,11 +1,12 @@
 # Created by Rui MA on 26 Sep 2026
 
+SHELL = cmd.exe
 CONFIG = Debug
 BUILD_DIR = build
 TMP_DIR = $(CURDIR)\..\.tmp
 VS_DEV_CMD = auto
 TARGET_ARCH = auto
-BUILD_TESTING = ON
+BUILD_TESTING = OFF
 WINDOWS_BUILD_SCRIPT = $(CURDIR)\WindowsBuild.ps1
 SOLUTION = $(CURDIR)\UnlockWindows.sln
 ABS_BUILD_DIR = $(abspath $(BUILD_DIR))

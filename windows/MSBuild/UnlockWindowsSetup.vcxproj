@@ -88,7 +88,7 @@
     <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\WindowsBuild.ps1&quot; &quot;$(UnlockProductVersion)&quot; &quot;$(UnlockBuildDirectory)\package\$(Configuration)\PackagePayload.rc&quot; &quot;$(UnlockBuildDirectory)\package\$(Configuration)\PackagePayload.bin&quot; &quot;$(UnlockBuildDirectory)\DesktopApp.files&quot; &quot;$(UnlockBuildDirectory)\unlock_credential_provider.dll&quot; &quot;$(UnlockBuildDirectory)\unlock_saved_credential_service.exe&quot; &quot;$(UnlockBuildDirectory)\UnlockWithIPhone.exe&quot;" />
   </Target>
   <Target Name="CopySetupToDist" AfterTargets="Build" DependsOnTargets="GeneratePackagePayload">
-    <MakeDir Directories="$(MSBuildThisFileDirectory)..\dist" />
-    <Copy SourceFiles="$(TargetPath)" DestinationFiles="$(MSBuildThisFileDirectory)..\dist\$(UnlockSetupFile)" />
+    <MakeDir Directories="$(MSBuildThisFileDirectory)..\..\dist" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFiles="$(MSBuildThisFileDirectory)..\..\dist\$(UnlockSetupFile)" />
   </Target>
 </Project>

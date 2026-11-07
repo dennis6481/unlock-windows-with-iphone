@@ -40,10 +40,6 @@ jobs:
       - name: Build Release solution
         shell: cmd
         run: |
-          if not exist "..\.tmp" mkdir "..\.tmp"
-          if errorlevel 1 exit /b %errorlevel%
-          set "TEMP=%CD%\..\.tmp"
-          set "TMP=%TEMP%"
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File WindowsBuild.ps1 -Prepare -OutputDirectory build
           if errorlevel 1 exit /b %errorlevel%
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File WindowsBuild.ps1 -InvokeMSBuild "UnlockWindows.sln" /restore /m /nologo "/p:Configuration=Release" "/p:UnlockBuildDirectory=%CD%\build" "/p:BuildTesting=OFF"
@@ -56,7 +52,7 @@ jobs:
           . .\WindowsBuild.ps1
           $metadata = Get-ProductBuildMetadata -Architecture $env:UNLOCK_TARGET_ARCH
           "name=$([IO.Path]::GetFileNameWithoutExtension($metadata.SetupFile))-SNAPSHOT($($metadata.Build))" >> $env:GITHUB_OUTPUT
-          "path=windows/dist/$($metadata.SetupFile)" >> $env:GITHUB_OUTPUT
+          "path=dist/$($metadata.SetupFile)" >> $env:GITHUB_OUTPUT
 
       - name: Upload snapshot installer
         uses: actions/upload-artifact@v7

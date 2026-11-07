@@ -9,7 +9,6 @@
 
 build/
 dist/
-.tmp/
 
 /docs/Testing.md
 /docs/BleSystemPoc.md

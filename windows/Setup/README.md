@@ -24,7 +24,7 @@ Flow: entry/UI -> transaction -> package and Windows deployment -> SYSTEM exit f
 
 ## Package and deployment
 
-The build produces a self-contained `windows/dist/UnlockWithIPhone_<version>_<architecture>_setup.exe` with `x64` or `arm64` as the compiler target architecture suffix; the version is read automatically from [ProductVersion.h](../ProductVersion.h). The service, CP DLL and desktop app are embedded as resources after their builds complete. Component changes regenerate the resource and SHA-256 manifest and rebuild setup. The installed/staged maintenance program is named `setup.exe` and retains the embedded payload. Fixed component names are defined in [ComponentFiles.h](../ComponentFiles.h).
+The build produces a self-contained `dist/UnlockWithIPhone_<version>_<architecture>_setup.exe` in the repository root with `x64` or `arm64` as the compiler target architecture suffix; the version is read automatically from [ProductVersion.h](../ProductVersion.h). The service, CP DLL and desktop app are embedded as resources after their builds complete. Component changes regenerate the resource and SHA-256 manifest and rebuild setup. The installed/staged maintenance program is named `setup.exe` and retains the embedded payload. Fixed component names are defined in [ComponentFiles.h](../ComponentFiles.h).
 
 The desktop uses official Windows App SDK self-contained output and Hybrid CRT; authentication components and setup retain their runtime policy. The native build is driven by the checked-in MSBuild projects through `make`.
 

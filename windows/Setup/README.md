@@ -1,6 +1,6 @@
 # Windows Installer
 
-The self-contained x64 and ARM64 MSI packages use standard Windows installation and maintenance dialogs. Installation is per machine at fixed locations; no EXE bootstrapper or target-machine .NET runtime is required.
+The self-contained x64 and ARM64 MSI packages use standard Windows installation and maintenance dialogs. Installation is per machine: the desktop app, service, Credential Provider and desktop runtime files share `%ProgramFiles%\Unlock Windows with iPhone`. Credential and binding data remain in protected ProgramData directories. No EXE bootstrapper or target-machine .NET runtime is required.
 
 ## Package and version
 
@@ -16,9 +16,11 @@ Payload filenames come from [ComponentFiles.h](../ComponentFiles.h); desktop/run
 
 The all-users Start Menu shortcut is advertised and belongs to the main executable's component. Repair restores it through that component.
 
-## Previous EXE installations
+## Previous installation layouts
 
-EXE installations cannot be upgraded by MSI. Complete any unfinished operation and uninstall the EXE version with its original installer, then install the MSI and save your password and bind your iPhone again. Windows Bluetooth pairing is retained. MSI detects old installations and refuses to take over or clean up their resources.
+EXE installations and MSI installations with service/CP files in System32 cannot be upgraded to this layout. Complete any unfinished operation and uninstall with the original installer, then install this MSI and save your password and bind your iPhone again. Windows Bluetooth pairing is retained. The installer refuses to take over or clean up old resources.
+
+Before deployment changes, MSI checks the registered package's cached component directories. Missing or unreadable metadata is an error; missing deployed files do not prevent repair of this layout.
 
 ## Identity and user interaction
 
@@ -42,6 +44,6 @@ CI retains the native test gate and checks MSI properties, architecture, lifecyc
 
 ICE03 is excluded because it rejects WinUI language resources and DLL language lists. Package checks compare file language metadata with the extracted payload and validate its language IDs; other ICE checks remain enabled.
 
-Use recoverable x64/ARM64 test machines for first installation, rejection of old EXE installations and disabled rollback, injected failure/rollback, same-version repair, fourth-part upgrade/downgrade, active versus upgrade removal, locked-console rejection, absent target user, alternate administrator elevation and disabled startup. Check occupied files, postponed restart and post-restart component consistency on the minimum supported and current Windows versions. Record BLE and native unlock separately from package checks.
+Use recoverable x64/ARM64 test machines for first installation, rejection of old EXE/System32 MSI installations and disabled rollback, injected failure/rollback, same-version and missing-component repair, fourth-part upgrade/downgrade, active versus upgrade removal, locked-console rejection, absent target user, alternate administrator elevation and disabled startup. Check occupied files, postponed restart and post-restart component consistency on the minimum supported and current Windows versions. Record BLE and native unlock separately from package checks.
 
 References: [WiX release notes](https://docs.firegiant.com/wix/whatsnew/releasenotes/), [major upgrades](https://docs.firegiant.com/wix/schema/wxs/majorupgrade/).

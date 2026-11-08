@@ -275,8 +275,10 @@ inline bool fileExists(const std::filesystem::path& path) {
     CoTaskMemFree(raw);
     return path;
 }
-[[nodiscard]] inline std::filesystem::path desktopDirectory() {
-    return setupKnownFolder(FOLDERID_ProgramFiles) / kDesktopDirectoryName;
+[[nodiscard]] inline std::filesystem::path productDirectory() {
+    std::filesystem::path directory;
+    checkHresult(readProductDirectory(directory), L"Resolve product installation directory");
+    return directory;
 }
 [[nodiscard]] inline std::filesystem::path startMenuShortcut() {
     return setupKnownFolder(FOLDERID_CommonPrograms) / (std::wstring(UNLOCK_PRODUCT_DISPLAY_NAME) + L".lnk");

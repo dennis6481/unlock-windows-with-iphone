@@ -34,11 +34,14 @@ function Get-MsiPayload([string]$Directory, [string]$Architecture) {
     $names = Get-HeaderStrings (Join-Path $PSScriptRoot '..\ComponentFiles.h')
     $entries = [Collections.Generic.List[object]]::new()
     $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-    foreach ($match in [regex]::Matches($header, '\{(k\w+File), (true|false)\}')) {
+    $manifest = [regex]::Match($header, '(?s)kComponentFiles\{\{(.*?)\}\};')
+    if (!$manifest.Success) { throw 'Missing component filename contract.' }
+    foreach ($match in [regex]::Matches($manifest.Groups[1].Value, '\b(k\w+File)\b')) {
         $name = $names[$match.Groups[1].Value]
         if (!$name -or !$seen.Add($name)) { throw 'Invalid component filename contract.' }
-        $entries.Add([pscustomobject]@{Name=$name; Desktop=($match.Groups[2].Value -eq 'true'); Product=$true; Path=(Join-Path $Directory $name)})
+        $entries.Add([pscustomobject]@{Name=$name; Product=$true; Path=(Join-Path $Directory $name)})
     }
+    if (!$entries.Count) { throw 'Empty component filename contract.' }
     $pathPolicy = [regex]::Match([IO.File]::ReadAllText((Join-Path $PSScriptRoot 'PayloadPaths.h')), '(?s)kPayloadPathComponentPattern\[\]\s*=\s*LR"regex\((.*?)\)regex";').Groups[1].Value
     if (!$pathPolicy) { throw 'Missing package path policy.' }
     foreach ($line in [IO.File]::ReadAllLines((Join-Path $Directory 'DesktopApp.files'))) {
@@ -46,7 +49,7 @@ function Get-MsiPayload([string]$Directory, [string]$Architecture) {
         if ([IO.Path]::IsPathRooted($name) -or @($name -split '\\' | Where-Object { $_ -notmatch ('\A(?:' + $pathPolicy + ')\z') }).Count) { throw "Unsafe payload path: $name" }
         if ($name -ceq $metadata.MainAppFile) { continue }
         if (!$seen.Add($name)) { throw "Duplicate payload path: $name" }
-        $entries.Add([pscustomobject]@{Name=$name; Desktop=$true; Product=$false; Path=(Join-Path $Directory $name)})
+        $entries.Add([pscustomobject]@{Name=$name; Product=$false; Path=(Join-Path $Directory $name)})
     }
     foreach ($entry in $entries) {
         $item = Get-Item -LiteralPath $entry.Path -ErrorAction Stop
@@ -107,9 +110,9 @@ function Write-MsiSources([string]$Directory, [string]$Architecture) {
     $components = [Collections.Generic.List[string]]::new()
     $directories = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($entry in $entries) {
-        $id = Get-PayloadId ($entry.Desktop.ToString() + '\' + $entry.Name)
+        $id = Get-PayloadId $entry.Name
         $components.Add($id)
-        $directoryId = if ($entry.Desktop) { 'DesktopDirectory' } else { 'System64Folder' }
+        $directoryId = 'DesktopDirectory'
         $parts = @($entry.Name -split '\\')
         $relative = ''
         for ($i=0; $i -lt $parts.Count-1; $i++) {
@@ -120,8 +123,7 @@ function Write-MsiSources([string]$Directory, [string]$Architecture) {
             }
             $directoryId = $childId
         }
-        $directoryElement = if ($directoryId -eq 'System64Folder') { 'StandardDirectory' } else { 'DirectoryRef' }
-        $lines.Add(('<{0} Id="{1}">' -f $directoryElement,$directoryId))
+        $lines.Add(('<DirectoryRef Id="{0}">' -f $directoryId))
         $lines.Add(('<Component Id="{0}" Guid="*" Bitness="always64">' -f $id))
         if ($entry.Name -ceq $metadata.MainAppFile) {
             $lines.Add(('<File Id="F{0}" Source="{1}" KeyPath="yes">' -f $id,(ConvertTo-Xml $entry.Path)))
@@ -143,7 +145,7 @@ function Write-MsiSources([string]$Directory, [string]$Architecture) {
             $lines.Add(('<ServiceControl Id="CredentialServiceControl" Name="{0}" Stop="both" Remove="uninstall" Wait="yes" />' -f $ipc.kServiceName))
         }
         $lines.Add('</Component>')
-        $lines.Add(('</{0}>' -f $directoryElement))
+        $lines.Add('</DirectoryRef>')
     }
     $lines.Add('<ComponentGroup Id="ProductPayload">')
     foreach ($id in $components) { $lines.Add(('<ComponentRef Id="{0}" />' -f $id)) }
@@ -234,6 +236,10 @@ function Test-MsiPackage([string]$Path, [string]$Architecture, [string]$Director
     foreach ($row in (Read-MsiRows $database 'SELECT `Component`,`Directory_`,`Attributes` FROM `Component`' 3)) { $components[$row[0]]=$row }
     $directories = @{}
     foreach ($row in (Read-MsiRows $database 'SELECT `Directory`,`Directory_Parent`,`DefaultDir` FROM `Directory`' 3)) { $directories[$row[0]]=$row }
+    $identity = Get-HeaderStrings (Join-Path $PSScriptRoot '..\ProductIdentity.h')
+    $root = $directories['DesktopDirectory']
+    if (!$root -or $root[1] -cne 'ProgramFiles64Folder' -or
+        (($root[2] -split ':')[0] -split '\|')[-1] -cne $identity.kDesktopDirectoryName) { throw 'Wrong MSI product installation directory.' }
     $expected = @(Get-MsiPayload ((Resolve-Path -LiteralPath $Directory).Path) $Architecture)
     if ($files.Count -ne $expected.Count) { throw 'Unexpected MSI file count.' }
     # Extract embedded cabinets as data with expand.exe; never execute msiexec or an administrative install.
@@ -249,7 +255,7 @@ function Test-MsiPackage([string]$Path, [string]$Architecture, [string]$Director
             if ($LASTEXITCODE -ne 0) { throw 'MSI cabinet extraction failed.' }
         }
         foreach ($entry in $expected) {
-            $id = 'F' + (Get-PayloadId ($entry.Desktop.ToString() + '\' + $entry.Name))
+            $id = 'F' + (Get-PayloadId $entry.Name)
             $extracted = Join-Path $scratch $id
             if (!(Test-Path -LiteralPath $extracted -PathType Leaf) -or
                 (Get-FileHash -LiteralPath $extracted -Algorithm SHA256).Hash -cne (Get-FileHash -LiteralPath $entry.Path -Algorithm SHA256).Hash) { throw "MSI cabinet payload mismatch: $($entry.Name)" }
@@ -267,14 +273,13 @@ function Test-MsiPackage([string]$Path, [string]$Architecture, [string]$Director
             $directoryId = $component[1]
             $relative = ($match[0][1] -split '\|')[-1]
             $visited = [Collections.Generic.HashSet[string]]::new()
-            while ($directoryId -notin @('DesktopDirectory','System64Folder')) {
+            while ($directoryId -cne 'DesktopDirectory') {
                 if (!$visited.Add($directoryId) -or !$directories.ContainsKey($directoryId)) { throw 'Invalid MSI target directory chain.' }
                 $directoryRow = $directories[$directoryId]
                 $relative = (($directoryRow[2] -split ':')[0] -split '\|')[-1] + '\' + $relative
                 $directoryId = $directoryRow[1]
             }
-            $rootId = if ($entry.Desktop) { 'DesktopDirectory' } else { 'System64Folder' }
-            if ($directoryId -cne $rootId -or $relative -cne $entry.Name) { throw "Unexpected MSI install path: $($entry.Name)" }
+            if ($relative -cne $entry.Name) { throw "Unexpected MSI install path: $($entry.Name)" }
             $stream=[IO.File]::OpenRead($extracted)
             try { $pe=$stream.ReadByte() -eq 0x4d -and $stream.ReadByte() -eq 0x5a } finally { $stream.Dispose() }
             if ($pe) { Assert-PayloadArchitecture $extracted $Architecture $entry.Product }

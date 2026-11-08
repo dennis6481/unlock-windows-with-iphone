@@ -18,7 +18,7 @@ using namespace unlock::components::msi;
 namespace {
 struct MsiHandle {
     MSIHANDLE value;
-    explicit MsiHandle(MSIHANDLE h) : value(h) {}
+    explicit MsiHandle(MSIHANDLE h = 0) : value(h) {}
     ~MsiHandle() { if (value) MsiCloseHandle(value); }
 };
 void msiCheck(UINT result, const wchar_t* action) {
@@ -31,6 +31,65 @@ std::wstring property(MSIHANDLE install, const wchar_t* name) {
     std::wstring value(size + 1, L'\0'); ++size;
     msiCheck(MsiGetPropertyW(install, name, value.data(), &size), L"Read MSI property");
     value.resize(size); return value;
+}
+std::wstring recordString(MSIHANDLE record, UINT field) {
+    DWORD size = 0; wchar_t empty = 0;
+    const auto result = MsiRecordGetStringW(record, field, &empty, &size);
+    if (result != ERROR_SUCCESS && result != ERROR_MORE_DATA) msiCheck(result, L"Read cached MSI field");
+    std::wstring value(size + 1, L'\0'); ++size;
+    msiCheck(MsiRecordGetStringW(record, field, value.data(), &size), L"Read cached MSI field");
+    value.resize(size); return value;
+}
+void validateInstalledLayout(const std::wstring& code) {
+    // Read package metadata rather than deployed files so missing files remain repairable.
+    DWORD size = 0; wchar_t empty = 0;
+    const auto result = MsiGetProductInfoW(code.c_str(), INSTALLPROPERTY_LOCALPACKAGE, &empty, &size);
+    if (result != ERROR_SUCCESS && result != ERROR_MORE_DATA) msiCheck(result, L"Locate installed MSI cache");
+    std::wstring cached(size + 1, L'\0'); ++size;
+    msiCheck(MsiGetProductInfoW(code.c_str(), INSTALLPROPERTY_LOCALPACKAGE, cached.data(), &size),
+        L"Locate installed MSI cache");
+    cached.resize(size);
+    if (cached.empty()) fail(L"The installed MSI cache path is missing. No changes were made.");
+    MsiHandle database, files;
+    msiCheck(MsiOpenDatabaseW(cached.c_str(), MSIDBOPEN_READONLY, &database.value), L"Open installed MSI cache");
+    msiCheck(MsiDatabaseOpenViewW(database.value,
+        L"SELECT `File`.`FileName`, `Component`.`Directory_` FROM `File`, `Component` "
+        L"WHERE `File`.`Component_` = `Component`.`Component`", &files.value), L"Read installed component directories");
+    msiCheck(MsiViewExecute(files.value, 0), L"Read installed component directories");
+    std::array<std::wstring, kComponentFiles.size()> directories{};
+    for (;;) {
+        MsiHandle row;
+        const auto fetched = MsiViewFetch(files.value, &row.value);
+        if (fetched == ERROR_NO_MORE_ITEMS) break;
+        msiCheck(fetched, L"Read installed component directory");
+        auto name = recordString(row.value, 1);
+        const auto separator = name.find(L'|');
+        if (separator != std::wstring::npos) name.erase(0, separator + 1);
+        for (size_t i = 0; i < kComponentFiles.size(); ++i) {
+            if (_wcsicmp(name.c_str(), kComponentFiles[i]) != 0) continue;
+            if (!directories[i].empty()) fail(L"Duplicate product file in the installed MSI cache.");
+            directories[i] = recordString(row.value, 2);
+        }
+    }
+    constexpr auto layoutError = L"The installed MSI uses a different component layout. Uninstall it with its original "
+        L"installer before installing this package, then save your password and bind your iPhone again. No changes were made.";
+    for (const auto& directory : directories) {
+        if (directory.empty()) fail(L"Product component metadata is missing from the installed MSI cache.");
+        if (directory != directories.front()) fail(layoutError);
+    }
+    MsiHandle folder, parameters(MsiCreateRecord(1)), row;
+    msiCheck(MsiDatabaseOpenViewW(database.value,
+        L"SELECT `Directory_Parent`, `DefaultDir` FROM `Directory` WHERE `Directory` = ?", &folder.value),
+        L"Read installed product directory");
+    msiCheck(MsiRecordSetStringW(parameters.value, 1, directories.front().c_str()), L"Select installed product directory");
+    msiCheck(MsiViewExecute(folder.value, parameters.value), L"Read installed product directory");
+    msiCheck(MsiViewFetch(folder.value, &row.value), L"Read installed product directory");
+    auto name = recordString(row.value, 2);
+    const auto source = name.find(L':');
+    if (source != std::wstring::npos) name.resize(source);
+    const auto separator = name.find(L'|');
+    if (separator != std::wstring::npos) name.erase(0, separator + 1);
+    if (recordString(row.value, 1) != L"ProgramFiles64Folder" || name != kDesktopDirectoryName) fail(layoutError);
 }
 void set(MSIHANDLE install, const wchar_t* name, const std::wstring& value) {
     msiCheck(MsiSetPropertyW(install, name, value.c_str()), L"Set MSI property");
@@ -167,14 +226,9 @@ bool pendingReplacement() {
     if (raw->type != REG_MULTI_SZ || raw->bytes.size() % sizeof(wchar_t)) fail(L"Invalid pending file rename list.");
     std::wstring list(reinterpret_cast<const wchar_t*>(raw->bytes.data()), raw->bytes.size() / sizeof(wchar_t));
     for (auto& c : list) c = towlower(c);
-    for (const auto& component : kComponentFiles) {
-        auto path = ((component.desktopTool ? desktopDirectory() : system32Directory()) / component.name).wstring();
-        for (auto& c : path) c = towlower(c);
-        if (list.find(path) != std::wstring::npos) return true;
-    }
-    auto desktop = desktopDirectory().wstring();
-    for (auto& c : desktop) c = towlower(c);
-    return list.find(desktop + L"\\") != std::wstring::npos || registryKeyExists(kRebootKey);
+    auto directory = productDirectory().wstring();
+    for (auto& c : directory) c = towlower(c);
+    return list.find(directory + L"\\") != std::wstring::npos || registryKeyExists(kRebootKey);
 }
 void clearBackup() {
     if (std::filesystem::exists(backupRoot())) {
@@ -297,7 +351,7 @@ extern "C" __declspec(dllexport) UINT __stdcall ValidateDeployment(MSIHANDLE ins
             registryKeyExists(L"SOFTWARE\\UnlockWindowsWithIPhone\\ComponentResult") ||
             registryKeyExists(L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\UnlockWindowsWithIPhone") ||
             (existing && readRegistryString(HKEY_LOCAL_MACHINE, kInstalledProductRegistryPath, kDeploymentKindValueName) != L"MSI") ||
-            fileExists(desktopDirectory() / L"setup.exe"))
+            fileExists(productDirectory() / L"setup.exe"))
             fail(L"Complete any unfinished EXE installation and uninstall it with its original installer before running this MSI. "
                 L"Your saved password and iPhone binding must be configured again.");
         if (!existing) {
@@ -318,8 +372,8 @@ extern "C" __declspec(dllexport) UINT __stdcall ValidateDeployment(MSIHANDLE ins
                 fail(L"Unowned or inaccessible product service exists. Use the original installer to remove it.");
             if (fileExists(startMenuShortcut()))
                 fail(L"An unowned product shortcut exists. Use the original installer to remove it.");
-            for (const auto& component : kComponentFiles)
-                if (fileExists((component.desktopTool ? desktopDirectory() : system32Directory()) / component.name))
+            for (const auto* component : kComponentFiles)
+                if (fileExists(productDirectory() / component))
                     fail(L"Unowned product files exist. Use the original installer to remove them.");
         }
         if ((installed || !property(install, L"WIX_UPGRADE_DETECTED").empty()) && !existing)
@@ -328,6 +382,7 @@ extern "C" __declspec(dllexport) UINT __stdcall ValidateDeployment(MSIHANDLE ins
             const auto code = readRegistryString(HKEY_LOCAL_MACHINE, kInstalledProductRegistryPath, kMsiProductCodeValueName).value_or(L"");
             if (MsiQueryProductStateW(code.c_str()) != INSTALLSTATE_DEFAULT)
                 fail(L"The MSI identity does not match a registered product. No changes were made.");
+            validateInstalledLayout(code);
         }
         const auto op = operation(installed, removing, upgrading, existing);
         const auto sid = existing ? configuredSid() : consoleUserSid();
@@ -450,7 +505,7 @@ extern "C" __declspec(dllexport) UINT __stdcall CommitDeployment(MSIHANDLE insta
         clearBackup();
         const auto op = deferredOperation(install);
         if (op != Operation::remove && op != Operation::upgradeRemoval && !pendingReplacement())
-            (void)launchAsTarget(deferredSid(install), desktopDirectory() / kMainAppFile,
+            (void)launchAsTarget(deferredSid(install), productDirectory() / kMainAppFile,
                 op == Operation::firstInstall ? unlock_windows::desktop_app::kBackgroundRole
                     : unlock_windows::desktop_app::kRestoreTrayRole, false);
     });

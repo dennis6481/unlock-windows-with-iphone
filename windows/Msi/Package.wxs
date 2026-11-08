@@ -22,7 +22,6 @@
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="DesktopDirectory" Name="$(var.DesktopDirectoryName)" />
     </StandardDirectory>
-    <StandardDirectory Id="System64Folder" />
     <StandardDirectory Id="ProgramMenuFolder" />
     <DirectoryRef Id="DesktopDirectory">
       <Component Id="MachineIdentity" Guid="*" Bitness="always64">

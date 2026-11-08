@@ -2,7 +2,7 @@
 
 # Windows developer guide
 
-The Windows side contains three installed components: the desktop app, LocalSystem credential service and Credential Provider DLL, deployed by MSI. [PROTOCOL.md](../PROTOCOL.md) defines authentication; [SECURITY.md](../SECURITY.md) explains credential protection.
+The Windows side contains three installed components: the desktop app, LocalSystem credential service and Credential Provider DLL, deployed by MSI to `%ProgramFiles%\Unlock Windows with iPhone` alongside desktop runtime files. [PROTOCOL.md](../PROTOCOL.md) defines authentication; [SECURITY.md](../SECURITY.md) explains credential protection.
 
 ## Compatibility
 
@@ -55,7 +55,7 @@ Open **Unlock with iPhone** from the Start Menu to show the main window. Install
 
 ## Update and uninstall
 
-Run a newer installer to **Update**, or the same version to **Reinstall**. All four version parts participate in this comparison, including the fourth-part check in the execute sequence. Running the same MSI opens maintenance; Repair replaces equal-version files. Downgrades are rejected. MSI updates and repairs preserve your saved password, binding and configured SID. EXE installations must first be uninstalled with their original installer; installing MSI afterward requires saving your password and binding your iPhone again.
+Run a newer installer to **Update**, or the same version to **Reinstall**. All four version parts participate in this comparison, including the fourth-part check in the execute sequence. Running the same MSI opens maintenance; Repair replaces equal-version files. Downgrades are rejected. MSI updates and repairs within this layout preserve your saved password, binding and configured SID. EXE installations and MSI installations with service/CP files in System32 must first be uninstalled with their original installer; installing MSI afterward requires saving your password and binding your iPhone again.
 
 For uninstall instructions, see the [main guide](../README.md#uninstall). For installation compatibility and failure recovery, see the [installer guide](Setup/README.md).
 

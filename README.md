@@ -110,7 +110,7 @@ The [Windows module index](windows/README.md#module-index) explains the source d
 
 Do not mix service, Credential Provider and desktop binaries from different builds.
 
-Windows distribution consists of self-contained x64 and ARM64 `dist/UnlockWithIPhone_<version>_<architecture>_setup.msi` packages. The product version uses `major.minor.patch.build`; filenames omit build. Higher fourth parts update, identical four-part versions reinstall and lower versions are rejected. Updates and repairs preserve credentials and binding.
+Windows distribution consists of self-contained x64 and ARM64 `dist/UnlockWithIPhone_<version>_<architecture>_setup.msi` packages. The product version uses `major.minor.patch.build`; filenames omit build. Higher fourth parts update, identical four-part versions reinstall and lower versions are rejected. Updates and repairs within this installation layout preserve credentials and binding.
 
 
 ## Known limitations

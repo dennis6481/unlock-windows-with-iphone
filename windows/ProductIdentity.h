@@ -1,7 +1,10 @@
 // Shared machine identity. Installation transactions are never an identity source.
 #pragma once
 #include <Windows.h>
+#include <knownfolders.h>
+#include <shlobj.h>
 #include <sddl.h>
+#include <filesystem>
 #include <string>
 #include <string_view>
 
@@ -15,6 +18,16 @@ inline constexpr wchar_t kMsiProductCodeValueName[] = L"MsiProductCode";
 inline constexpr wchar_t kDesktopDirectoryName[] = L"Unlock Windows with iPhone";
 inline constexpr wchar_t kStartupRegistryPath[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 inline constexpr wchar_t kSetupPromptValueName[] = L"SetupPromptPending";
+inline HRESULT readProductDirectory(std::filesystem::path& directory) {
+    directory.clear();
+    PWSTR raw = nullptr;
+    const HRESULT result = SHGetKnownFolderPath(FOLDERID_ProgramFiles, KF_FLAG_DEFAULT, nullptr, &raw);
+    if (FAILED(result)) return result;
+    const std::filesystem::path root(raw);
+    CoTaskMemFree(raw);
+    directory = root / kDesktopDirectoryName;
+    return S_OK;
+}
 inline HRESULT readSetupTargetSid(std::wstring& target) {
     target.clear();
     wchar_t value[256]{};

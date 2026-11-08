@@ -149,7 +149,7 @@ void withUserHive(const std::wstring& sid, const std::function<void(HKEY)>& oper
 }
 namespace {
 std::wstring startupCommand() {
-    return L"\"" + (desktopDirectory() / kMainAppFile).wstring() + L"\" " +
+    return L"\"" + (productDirectory() / kMainAppFile).wstring() + L"\" " +
         unlock_windows::desktop_app::kBackgroundRole;
 }
 }
@@ -179,7 +179,7 @@ void registerUserStartup(const std::wstring& targetSid) {
 }
 void stopTray(const std::wstring& targetSid) {
 
-    TraySearch search{desktopDirectory() / kMainAppFile, targetSid, WTSGetActiveConsoleSessionId()};
+    TraySearch search{productDirectory() / kMainAppFile, targetSid, WTSGetActiveConsoleSessionId()};
     const auto instances = pinMainInstances(search.expected);
     EnumWindows(visitTray, reinterpret_cast<LPARAM>(&search));
     if (!search.error.empty()) throw ComponentError(search.error);
@@ -192,5 +192,5 @@ void stopTray(const std::wstring& targetSid) {
     if (!pinMainInstances(search.expected).empty())
         throw ComponentError(L"A main application instance started during maintenance. Close it before continuing. No process was killed.");
 }
-bool mainInstancesPresent() { return !pinMainInstances(desktopDirectory() / kMainAppFile).empty(); }
+bool mainInstancesPresent() { return !pinMainInstances(productDirectory() / kMainAppFile).empty(); }
 }

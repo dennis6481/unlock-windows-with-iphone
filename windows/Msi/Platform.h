@@ -76,11 +76,8 @@ inline void checkWin32(const BOOL result, const std::wstring& action) {
 }
 
 inline void validateTargetSid(const std::wstring& sid) {
-    PSID binary = nullptr;
-    checkWin32(ConvertStringSidToSidW(sid.c_str(), &binary), L"Validate target SID");
-    const bool valid = IsValidSid(binary) != FALSE;
-    LocalFree(binary);
-    if (!valid || sid == L"S-1-5-18") throw ComponentError(L"A real console user is required.");
+    std::wstring normalized;
+    checkHresult(normalizeTargetSid(sid.c_str(), normalized), L"Validate target SID");
 }
 
 struct RegistryValue final {

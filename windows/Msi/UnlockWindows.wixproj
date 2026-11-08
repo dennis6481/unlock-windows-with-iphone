@@ -3,7 +3,7 @@
   <PropertyGroup>
     <AcceptEula>wix7</AcceptEula>
     <!-- ICE03 rejects WinUI MUI language IDs recognized by Windows and its 430-character DLL language lists.
-         Build.ps1 checks File.Language against the extracted files and validates the IDs; other ICEs remain enabled. -->
+         Build.ps1 verifies extracted hashes, checks File.Language in the source MUI layout and validates the IDs; other ICEs remain enabled. -->
     <SuppressIces>$(SuppressIces);ICE03</SuppressIces>
     <OutputType>Package</OutputType>
     <InstallerPlatform>$(UnlockArchitecture)</InstallerPlatform>

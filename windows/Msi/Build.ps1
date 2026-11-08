@@ -261,7 +261,8 @@ function Test-MsiPackage([string]$Path, [string]$Architecture, [string]$Director
                 (Get-FileHash -LiteralPath $extracted -Algorithm SHA256).Hash -cne (Get-FileHash -LiteralPath $entry.Path -Algorithm SHA256).Hash) { throw "MSI cabinet payload mismatch: $($entry.Name)" }
             $match = @($files | Where-Object { $_[0] -ceq $id })
             if ($match.Count -ne 1 -or ($entry.Product -and $match[0][2] -cne $metadata.Version)) { throw "MSI file metadata mismatch: $($entry.Name)" }
-            if ($match[0][4] -cne [string]$installer.FileVersion($extracted,$true)) { throw "MSI file language differs from payload: $($entry.Name)" }
+            # Read language in the original MUI layout; CAB file IDs lose satellite associations.
+            if ($match[0][4] -cne [string]$installer.FileVersion($entry.Path,$true)) { throw "MSI file language differs from payload: $($entry.Name)" }
             if ($match[0][4]) {
                 foreach ($language in ($match[0][4] -split ',')) {
                     if ($language -notmatch '\A[0-9]+\z') { throw "Invalid MSI file language: $($entry.Name)" }

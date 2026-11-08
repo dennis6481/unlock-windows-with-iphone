@@ -1,6 +1,6 @@
 #include "Platform.h"
 #include "ActionPolicy.h"
-#include "LegacySchema5.h"
+#include "../CredentialProvider/UnlockCredentialProvider.h"
 #include "UserIntegration.h"
 #include "MsiContract.h"
 #include "../ProtectedStorage.h"
@@ -10,7 +10,6 @@
 #include <msiquery.h>
 #include <wtsapi32.h>
 #include <userenv.h>
-#include <set>
 #include <cwctype>
 #include <utility>
 
@@ -35,19 +34,6 @@ std::wstring property(MSIHANDLE install, const wchar_t* name) {
 }
 void set(MSIHANDLE install, const wchar_t* name, const std::wstring& value) {
     msiCheck(MsiSetPropertyW(install, name, value.c_str()), L"Set MSI property");
-}
-std::wstring recordText(MSIHANDLE record, UINT field) {
-    DWORD size = 0; wchar_t empty = 0;
-    const auto result = MsiRecordGetStringW(record, field, &empty, &size);
-    if (result != ERROR_SUCCESS && result != ERROR_MORE_DATA) msiCheck(result, L"Read MSI database field");
-    std::wstring value(size + 1, L'\0'); ++size;
-    msiCheck(MsiRecordGetStringW(record, field, value.data(), &size), L"Read MSI database field");
-    value.resize(size); return value;
-}
-std::wstring pathKey(const std::filesystem::path& path) {
-    auto text = path.lexically_normal().wstring();
-    for (auto& character : text) character = towlower(character);
-    return text;
 }
 void message(MSIHANDLE install, const std::wstring& text, INSTALLMESSAGE kind = INSTALLMESSAGE_INFO) {
     MsiHandle record(MsiCreateRecord(1));
@@ -84,7 +70,7 @@ std::vector<std::wstring> actionData(MSIHANDLE install) {
         if (end == std::wstring::npos) break;
         start = end + 1;
     }
-    if (parts.size() != 4) fail(L"Invalid MSI action data.");
+    if (parts.size() != 3) fail(L"Invalid MSI action data.");
     return parts;
 }
 Operation deferredOperation(MSIHANDLE install) {
@@ -127,13 +113,6 @@ void restoreUser() {
             }
         }
     });
-}
-void copyTree(HKEY sourceRoot, const std::wstring& source, HKEY targetRoot, const std::wstring& target) {
-    ScopedRegistryKey from, to;
-    checkRegistry(RegOpenKeyExW(sourceRoot, source.c_str(), 0, KEY_READ | KEY_WOW64_64KEY, &from.value), L"Open deployment registry snapshot source");
-    checkRegistry(RegCreateKeyExW(targetRoot, target.c_str(), 0, nullptr, 0,
-        KEY_ALL_ACCESS | KEY_WOW64_64KEY, nullptr, &to.value, nullptr), L"Create deployment registry snapshot");
-    checkRegistry(RegCopyTreeW(from.value, nullptr, to.value), L"Copy deployment registry snapshot");
 }
 DWORD serviceState() {
     auto manager = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
@@ -197,137 +176,23 @@ bool pendingReplacement() {
     for (auto& c : desktop) c = towlower(c);
     return list.find(desktop + L"\\") != std::wstring::npos || registryKeyExists(kRebootKey);
 }
-void addLegacyRemovals(MSIHANDLE install, const LegacyInstallation& legacy) {
-    MsiHandle database(MsiGetActiveDatabase(install));
-    MSIHANDLE raw = 0;
-    msiCheck(MsiDatabaseOpenViewW(database.value,
-        L"SELECT `File`.`FileName`,`Component`.`Directory_` FROM `File`,`Component` WHERE `File`.`Component_`=`Component`.`Component`", &raw), L"Read incoming MSI file ownership");
-    MsiHandle incoming(raw);
-    msiCheck(MsiViewExecute(incoming.value, 0), L"Read incoming MSI file ownership");
-    std::set<std::wstring> incomingPaths;
-    for (;;) {
-        MSIHANDLE row = 0; const auto result = MsiViewFetch(incoming.value, &row);
-        if (result == ERROR_NO_MORE_ITEMS) break;
-        msiCheck(result, L"Read incoming MSI file row");
-        MsiHandle record(row);
-        auto name = recordText(row, 1);
-        if (const auto separator = name.find(L'|'); separator != std::wstring::npos) name.erase(0, separator + 1);
-        const auto directory = property(install, recordText(row, 2).c_str());
-        if (directory.empty()) fail(L"An incoming MSI target directory is unresolved.");
-        incomingPaths.insert(pathKey(std::filesystem::path(directory) / name));
-    }
-    msiCheck(MsiDatabaseOpenViewW(database.value,
-        L"INSERT INTO `RemoveFile` (`FileKey`,`Component_`,`FileName`,`DirProperty`,`InstallMode`) VALUES (?,?,?,?,?) TEMPORARY", &raw), L"Prepare legacy file ownership");
-    MsiHandle view(raw);
-    size_t index = 0;
-    for (const auto& file : legacy.files) {
-        const auto path = legacyTarget(file);
-        if (incomingPaths.contains(pathKey(path))) continue; // MSI replaces and owns current payload files.
-        const auto id = L"LegacyFile" + std::to_wstring(index);
-        const auto directory = L"LEGACYDIR" + std::to_wstring(index++);
-        set(install, directory.c_str(), path.parent_path().wstring() + L"\\");
-        MsiHandle record(MsiCreateRecord(5));
-        MsiRecordSetStringW(record.value, 1, id.c_str());
-        MsiRecordSetStringW(record.value, 2, L"MachineIdentity");
-        MsiRecordSetStringW(record.value, 3, path.filename().c_str());
-        MsiRecordSetStringW(record.value, 4, directory.c_str());
-        MsiRecordSetInteger(record.value, 5, 1);
-        msiCheck(MsiViewExecute(view.value, record.value), L"Adopt legacy file into MSI transaction");
-    }
-}
-void backupLegacy(const LegacyInstallation& legacy) {
-    if (std::filesystem::exists(backupRoot()) || registryKeyExists(backupKey().c_str()))
-        fail(L"A migration recovery snapshot already exists. No deployment resources were modified.");
-    unlock_windows::storage::ensureProtectedDirectory(productDataDirectory(), true);
-    unlock_windows::storage::ensureProtectedDirectory(backupRoot(), true);
-    // Ready is written last. A partial snapshot never authorizes restoring over a deployment.
-    for (const auto& file : legacy.files) {
-        const auto target = backupRoot() / (file.desktopTool ? L"desktop" : L"system") / file.name;
-        std::filesystem::create_directories(target.parent_path());
-        checkWin32(CopyFileW(legacyTarget(file).c_str(), target.c_str(), TRUE), L"Back up legacy deployment file");
-    }
-    checkWin32(CopyFileW(startMenuShortcut().c_str(), (backupRoot() / L"shortcut.lnk").c_str(), TRUE), L"Back up legacy shortcut");
-    const auto keys = deploymentRegistryKeys();
-    for (size_t i = 0; i < keys.size(); ++i) {
-        if (!registryKeyExists(keys[i].c_str())) continue;
-        copyTree(HKEY_LOCAL_MACHINE, keys[i], HKEY_LOCAL_MACHINE, backupKey() + L"\\" + std::to_wstring(i));
-    }
-    copyTree(HKEY_LOCAL_MACHINE, std::wstring(L"SYSTEM\\CurrentControlSet\\Services\\") +
-        unlock_windows::saved_credential::kServiceName, HKEY_LOCAL_MACHINE, backupKey() + L"\\Service");
-    writeRegistryDword(HKEY_LOCAL_MACHINE, backupKey().c_str(), L"WasRunning", serviceRunning());
-    writeRegistryDword(HKEY_LOCAL_MACHINE, backupKey().c_str(), L"Ready", 1);
-}
 void clearBackup() {
     if (std::filesystem::exists(backupRoot())) {
         unlock_windows::storage::ensureProtectedDirectory(backupRoot(), false);
-        // Snapshot paths are installer-owned; reject junctions rather than traversing them.
-        for (const auto& entry : std::filesystem::recursive_directory_iterator(backupRoot()))
-            if (GetFileAttributesW(entry.path().c_str()) & FILE_ATTRIBUTE_REPARSE_POINT) fail(L"Unsafe migration snapshot path.");
-        std::filesystem::remove_all(backupRoot());
+        const auto helper = backupRoot() / kCustomActionFile;
+        if (fileExists(helper)) checkWin32(DeleteFileW(helper.c_str()), L"Remove normal-exit module");
+        checkWin32(RemoveDirectoryW(backupRoot().c_str()), L"Remove MSI rollback directory");
     }
     deleteRegistryTree(HKEY_LOCAL_MACHINE, backupKey().c_str());
 }
-void restoreLegacy(MSIHANDLE install) {
-    if (readRegistryDword(HKEY_LOCAL_MACHINE, backupKey().c_str(), L"Ready") != 1) {
-        // MSI rolls its own service controls back. Only undo a native start or
-        // reset the removal-only state when a clear request may have reached it.
-        const bool wasRunning = readRegistryDword(HKEY_LOCAL_MACHINE, backupKey().c_str(), L"WasRunning") == 1;
-        if (!wasRunning && readRegistryDword(HKEY_LOCAL_MACHINE, backupKey().c_str(), L"StartedService") == 1)
-            stopServiceNormally();
-        if (wasRunning && readRegistryDword(HKEY_LOCAL_MACHINE, backupKey().c_str(), L"ClearAttempted") == 1 && !pendingReplacement())
-            startService();
-        clearBackup(); return; // Preparation failed before any deployment mutation.
-    }
-    if (readRegistryDword(HKEY_LOCAL_MACHINE, backupKey().c_str(), L"ResourcesChanged") != 1) {
-        clearBackup(); return;
-    }
-    unlock_windows::storage::ensureProtectedDirectory(backupRoot(), false);
-    const auto setup = backupRoot() / L"desktop" / kInstallerFile;
-    const auto files = readLegacyManifest(setup);
-    bool reboot = false;
-    for (const auto& file : files) {
-        const auto source = backupRoot() / (file.desktopTool ? L"desktop" : L"system") / file.name;
-        const auto target = legacyTarget(file);
-        std::filesystem::create_directories(target.parent_path());
-        if (!CopyFileW(source.c_str(), target.c_str(), FALSE)) {
-            const auto error = GetLastError();
-            if (error != ERROR_SHARING_VIOLATION && error != ERROR_ACCESS_DENIED) checkWin32(FALSE, L"Restore legacy file");
-            const auto restore = target.wstring() + L".msirollback";
-            checkWin32(CopyFileW(source.c_str(), restore.c_str(), TRUE), L"Stage legacy rollback replacement");
-            checkWin32(MoveFileExW(restore.c_str(), target.c_str(), MOVEFILE_DELAY_UNTIL_REBOOT | MOVEFILE_REPLACE_EXISTING), L"Schedule legacy file restoration");
-            reboot = true;
-        }
-    }
-    const auto keys = deploymentRegistryKeys();
-    for (size_t i = 0; i < keys.size(); ++i) {
-        deleteRegistryTree(HKEY_LOCAL_MACHINE, keys[i].c_str());
-        const auto snapshot = backupKey() + L"\\" + std::to_wstring(i);
-        if (registryKeyExists(snapshot.c_str())) copyTree(HKEY_LOCAL_MACHINE, snapshot, HKEY_LOCAL_MACHINE, keys[i]);
-    }
-    checkWin32(CopyFileW((backupRoot() / L"shortcut.lnk").c_str(), startMenuShortcut().c_str(), FALSE), L"Restore legacy shortcut");
-    // MSI may remove an adopted service during rollback. Recreate through SCM, then restore its saved configuration.
-    auto manager = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT | SC_MANAGER_CREATE_SERVICE);
-    if (!manager) fail(L"Cannot restore legacy service manager.");
-    auto service = OpenServiceW(manager, unlock_windows::saved_credential::kServiceName, SERVICE_CHANGE_CONFIG);
-    const auto image = L"\"" + (system32Directory() / kSavedCredentialServiceFile).wstring() + L"\"";
-    if (!service && GetLastError() == ERROR_SERVICE_DOES_NOT_EXIST)
-        service = CreateServiceW(manager, unlock_windows::saved_credential::kServiceName,
-            unlock_windows::saved_credential::kServiceDisplayName, SERVICE_CHANGE_CONFIG, SERVICE_WIN32_OWN_PROCESS,
-            SERVICE_AUTO_START, SERVICE_ERROR_NORMAL, image.c_str(), nullptr, nullptr, nullptr, L"LocalSystem", nullptr);
-    const bool restored = service && ChangeServiceConfigW(service, SERVICE_WIN32_OWN_PROCESS, SERVICE_AUTO_START,
-        SERVICE_ERROR_NORMAL, image.c_str(), nullptr, nullptr, L"", L"LocalSystem", nullptr, nullptr);
-    if (service) CloseServiceHandle(service); CloseServiceHandle(manager);
-    if (!restored) fail(L"Cannot restore the legacy service. Recovery snapshot retained.");
-    copyTree(HKEY_LOCAL_MACHINE, backupKey() + L"\\Service", HKEY_LOCAL_MACHINE,
-        std::wstring(L"SYSTEM\\CurrentControlSet\\Services\\") + unlock_windows::saved_credential::kServiceName);
-    if (reboot) {
-        markReboot(install);
-        message(install, L"Migration rolled back. Restart Windows to finish restoring occupied legacy files.");
-        clearBackup();
-    } else {
-        if (readRegistryDword(HKEY_LOCAL_MACHINE, backupKey().c_str(), L"WasRunning") == 1) startService();
-        clearBackup();
-    }
+void restoreServiceState() {
+    // MSI rolls its own service controls back. Undo a native start or reset the
+    // removal-only state when a clear request may have reached the service.
+    const bool wasRunning = readRegistryDword(HKEY_LOCAL_MACHINE, backupKey().c_str(), L"WasRunning") == 1;
+    if (!wasRunning && readRegistryDword(HKEY_LOCAL_MACHINE, backupKey().c_str(), L"StartedService") == 1)
+        stopServiceNormally();
+    if (wasRunning && readRegistryDword(HKEY_LOCAL_MACHINE, backupKey().c_str(), L"ClearAttempted") == 1 && !pendingReplacement())
+        startService();
 }
 std::wstring deferredSid(MSIHANDLE install) {
     const auto sid = actionData(install)[1];
@@ -423,13 +288,43 @@ extern "C" __declspec(dllexport) UINT __stdcall ValidateDeployment(MSIHANDLE ins
         const bool removing = property(install, L"REMOVE") == L"ALL";
         const bool upgrading = !property(install, L"UPGRADINGPRODUCTCODE").empty();
         const bool installed = !property(install, L"Installed").empty();
+        // The incoming MSI owns maintenance across the major-upgrade transaction.
+        if (removing && upgrading) return;
         if (registryKeyExists(kRebootKey)) fail(L"Restart Windows to complete the preceding component replacement before maintenance.");
         if (registryKeyExists(kMaintenanceKey)) fail(L"MSI maintenance is active or interrupted. Complete it or restart Windows before retrying.");
-        const auto legacy = readLegacyInstallation();
         const bool existing = registryKeyExists(kInstalledProductRegistryPath);
+        if (registryKeyExists(L"SOFTWARE\\UnlockWindowsWithIPhone\\ComponentsWizard") ||
+            registryKeyExists(L"SOFTWARE\\UnlockWindowsWithIPhone\\ComponentResult") ||
+            registryKeyExists(L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\UnlockWindowsWithIPhone") ||
+            (existing && readRegistryString(HKEY_LOCAL_MACHINE, kInstalledProductRegistryPath, kDeploymentKindValueName) != L"MSI") ||
+            fileExists(desktopDirectory() / L"setup.exe"))
+            fail(L"Complete any unfinished EXE installation and uninstall it with its original installer before running this MSI. "
+                L"Your saved password and iPhone binding must be configured again.");
+        if (!existing) {
+            wchar_t clsid[39]{};
+            if (!StringFromGUID2(unlock_windows::credential_provider::kUnlockCredentialProviderClsid, clsid, ARRAYSIZE(clsid)))
+                fail(L"Cannot format Credential Provider CLSID.");
+            const auto provider = std::wstring(L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Authentication\\Credential Providers\\") + clsid;
+            const auto com = std::wstring(L"SOFTWARE\\Classes\\CLSID\\") + clsid;
+            if (registryKeyExists(provider.c_str()) || registryKeyExists(com.c_str()))
+                fail(L"Unowned Credential Provider registration exists. Use the original installer to remove it.");
+            auto manager = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
+            if (!manager) fail(L"Cannot inspect existing service registration.");
+            auto service = OpenServiceW(manager, unlock_windows::saved_credential::kServiceName, SERVICE_QUERY_STATUS);
+            const auto error = service ? ERROR_SUCCESS : GetLastError();
+            if (service) CloseServiceHandle(service);
+            CloseServiceHandle(manager);
+            if (service || error != ERROR_SERVICE_DOES_NOT_EXIST)
+                fail(L"Unowned or inaccessible product service exists. Use the original installer to remove it.");
+            if (fileExists(startMenuShortcut()))
+                fail(L"An unowned product shortcut exists. Use the original installer to remove it.");
+            for (const auto& component : kComponentFiles)
+                if (fileExists((component.desktopTool ? desktopDirectory() : system32Directory()) / component.name))
+                    fail(L"Unowned product files exist. Use the original installer to remove them.");
+        }
         if ((installed || !property(install, L"WIX_UPGRADE_DETECTED").empty()) && !existing)
             fail(L"The configured product identity is missing. Maintenance cannot choose a replacement user.");
-        if (existing && !legacy) {
+        if (existing) {
             const auto code = readRegistryString(HKEY_LOCAL_MACHINE, kInstalledProductRegistryPath, kMsiProductCodeValueName).value_or(L"");
             if (MsiQueryProductStateW(code.c_str()) != INSTALLSTATE_DEFAULT)
                 fail(L"The MSI identity does not match a registered product. No changes were made.");
@@ -444,32 +339,16 @@ extern "C" __declspec(dllexport) UINT __stdcall ValidateDeployment(MSIHANDLE ins
                 fail(L"The installed four-part version is newer or invalid. No changes were made.");
         }
         if (std::filesystem::exists(backupRoot()) || registryKeyExists(backupKey().c_str()))
-            fail(L"A migration recovery snapshot requires attention. No changes were made.");
+            fail(L"An unfinished MSI rollback requires attention. No changes were made.");
         set(install, L"TARGETSID", sid);
-        const auto data = std::to_wstring(static_cast<unsigned>(op)) + L"|" + sid + (legacy ? L"|1" : L"|0") + (serviceRunning() ? L"|1" : L"|0");
+        const auto data = std::to_wstring(static_cast<unsigned>(op)) + L"|" + sid + (serviceRunning() ? L"|1" : L"|0");
         for (const auto name : {L"PrepareDeployment", L"RollbackDeployment", L"CompleteDeployment", L"CommitDeployment", L"ClearForRemoval"}) set(install, name, data);
-        if (legacy && !removing) addLegacyRemovals(install, *legacy);
     });
 }
 extern "C" __declspec(dllexport) UINT __stdcall PrepareDeployment(MSIHANDLE install) {
     return action(install, [&] {
         const auto sid = deferredSid(install);
         const auto data = actionData(install);
-        ScopedHandle legacyMutex;
-        if (data[2] == L"1") {
-            legacyMutex.value = CreateMutexW(nullptr, FALSE, kLegacyOperationMutex);
-            checkWin32(legacyMutex.value != nullptr, L"Open EXE installer operation lock");
-            const auto acquired = WaitForSingleObject(legacyMutex.value, 0);
-            if (acquired != WAIT_OBJECT_0 && acquired != WAIT_ABANDONED)
-                fail(L"The original EXE installer is busy. Finish its operation before MSI takeover.");
-        }
-        struct ReleaseLock {
-            HANDLE value;
-            ~ReleaseLock() { if (value) ReleaseMutex(value); }
-        } release{legacyMutex.value};
-        const auto legacy = data[2] == L"1" ? readLegacyInstallation() : std::nullopt;
-        if (data[2] == L"1" && !legacy) fail(L"EXE deployment changed before migration.");
-        if (legacy && legacy->sid != sid) fail(L"Configured user changed during installation.");
         if (deferredOperation(install) == Operation::firstInstall && consoleUserSid() != sid) fail(L"Physical console user changed during installation.");
         if (deferredOperation(install) == Operation::firstInstall) {
             const auto vault = setupKnownFolder(FOLDERID_ProgramData) / unlock_windows::saved_credential::kVaultDirectoryName;
@@ -477,33 +356,15 @@ extern "C" __declspec(dllexport) UINT __stdcall PrepareDeployment(MSIHANDLE inst
                 fileExists(productDataDirectory() / unlock_windows::system_ble::kEnrollmentFileName))
                 fail(L"Unowned credential or binding data exists. Use the original maintenance tool; no data was changed.");
         }
-        if (legacy) backupLegacy(*legacy);
-        else {
-            unlock_windows::storage::ensureProtectedDirectory(productDataDirectory(), true);
-            unlock_windows::storage::ensureProtectedDirectory(backupRoot(), true);
-            writeRegistryDword(HKEY_LOCAL_MACHINE, backupKey().c_str(), L"WasRunning", data[3] == L"1");
-        }
+        unlock_windows::storage::ensureProtectedDirectory(productDataDirectory(), true);
+        unlock_windows::storage::ensureProtectedDirectory(backupRoot(), true);
+        writeRegistryDword(HKEY_LOCAL_MACHINE, backupKey().c_str(), L"WasRunning", data[2] == L"1");
         snapshotUser(sid);
         ScopedRegistryKey maintenance;
         checkRegistry(RegCreateKeyExW(HKEY_LOCAL_MACHINE, kMaintenanceKey, 0, nullptr, REG_OPTION_VOLATILE,
             KEY_WRITE | KEY_WOW64_64KEY, nullptr, &maintenance.value, nullptr), L"Block app startup during maintenance");
         removeUserStartup(sid);
         stopTargetTray(sid);
-        if (legacy) {
-            writeRegistryDword(HKEY_LOCAL_MACHINE, backupKey().c_str(), L"ResourcesChanged", 1);
-            // The schema 5 app predates the maintenance guard. Retire its normal
-            // entry until MSI installs the guarded app; the deployment snapshot restores it on rollback.
-            checkWin32(MoveFileExW((desktopDirectory() / kMainAppFile).c_str(),
-                (backupRoot() / L"LegacyMainApp.exe").c_str(), MOVEFILE_WRITE_THROUGH), L"Retire the schema 5 app entry during takeover");
-            // Retire the EXE's authority while holding its operation mutex. Its
-            // own revalidation rejects a record without schema 5; rollback restores it.
-            ScopedRegistryKey identity;
-            checkRegistry(RegOpenKeyExW(HKEY_LOCAL_MACHINE, kInstalledProductRegistryPath, 0,
-                KEY_SET_VALUE | KEY_WOW64_64KEY, &identity.value), L"Retire EXE installation ownership");
-            checkRegistry(RegDeleteValueW(identity.value, kLegacySchemaValueName), L"Retire EXE schema ownership");
-            deleteRegistryTree(HKEY_LOCAL_MACHINE, kLegacyUninstall);
-            deleteRegistryTree(HKEY_LOCAL_MACHINE, kLegacyResult);
-        }
     });
 }
 extern "C" __declspec(dllexport) UINT __stdcall RollbackDeployment(MSIHANDLE install) {
@@ -515,7 +376,8 @@ extern "C" __declspec(dllexport) UINT __stdcall RollbackDeployment(MSIHANDLE ins
                 : L"Removal stopped without a complete clear acknowledgment. Data may already have been deleted; deployment rollback cannot restore deleted credentials.", INSTALLMESSAGE_WARNING);
             stopServiceNormally();
         }
-        restoreUser(); restoreLegacy(install);
+        restoreUser(); restoreServiceState();
+        clearBackup();
         deleteRegistryTree(HKEY_LOCAL_MACHINE, kMaintenanceKey);
     });
 }
@@ -575,27 +437,6 @@ extern "C" __declspec(dllexport) UINT __stdcall CommitDeployment(MSIHANDLE insta
     const auto result = action(install, [&] {
         if (pendingReplacement()) markReboot(install);
         deleteRegistryTree(HKEY_LOCAL_MACHINE, kMaintenanceKey);
-        if (readRegistryDword(HKEY_LOCAL_MACHINE, backupKey().c_str(), L"Ready") == 1) {
-            std::set<std::filesystem::path, std::greater<>> directories;
-            for (const auto& file : readLegacyManifest(backupRoot() / L"desktop" / kInstallerFile)) {
-                if (!file.desktopTool) continue;
-                for (auto parent = std::filesystem::path(file.name).parent_path(); !parent.empty(); parent = parent.parent_path())
-                    directories.insert(desktopDirectory() / parent);
-            }
-            directories.insert(productDataDirectory() / L"Setup" / L"Transactions");
-            directories.insert(productDataDirectory() / L"Setup");
-            for (const auto& directory : directories) {
-                if (!std::filesystem::exists(directory)) continue;
-                unlock_windows::storage::ensureProtectedDirectory(directory, false);
-                if (std::filesystem::is_empty(directory)) checkWin32(RemoveDirectoryW(directory.c_str()), L"Remove superseded empty EXE directory");
-            }
-            for (const auto name : {kLegacySchemaValueName, kLegacyWizardPathValueName, kLegacyLastOperationIdValueName}) {
-                ScopedRegistryKey key;
-                checkRegistry(RegOpenKeyExW(HKEY_LOCAL_MACHINE, kInstalledProductRegistryPath, 0, KEY_SET_VALUE | KEY_WOW64_64KEY, &key.value), L"Open migrated installation record");
-                const auto status = RegDeleteValueW(key.value, name);
-                if (status != ERROR_FILE_NOT_FOUND) checkRegistry(status, L"Remove superseded EXE installation value");
-            }
-        }
         clearBackup();
         const auto op = deferredOperation(install);
         if (op != Operation::remove && op != Operation::upgradeRemoval && !pendingReplacement())

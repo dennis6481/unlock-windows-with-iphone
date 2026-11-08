@@ -214,11 +214,14 @@ function Test-MsiPackage([string]$Path, [string]$Architecture, [string]$Director
         if ($sequence[$node.Action][1] -cne [string]$node.Condition) { throw "MSI action condition differs from authoring: $($node.Action)" }
     }
     if ([int]$sequence.ValidateDeployment[2] -ge [int]$sequence.InstallInitialize[2] -or
-        [int]$sequence.RemoveExistingProducts[2] -le [int]$sequence.InstallInitialize[2] -or
-        [int]$sequence.RemoveExistingProducts[2] -ge [int]$sequence.ProcessComponents[2] -or
-        [int]$sequence.RollbackDeployment[2] -le [int]$sequence.RemoveExistingProducts[2] -or
+        [int]$sequence.RemoveExistingProducts[2] -le [int]$sequence.InstallExecute[2] -or
+        [int]$sequence.RemoveExistingProducts[2] -ge [int]$sequence.InstallFinalize[2] -or
+        [int]$sequence.RollbackDeployment[2] -le [int]$sequence.InstallInitialize[2] -or
         [int]$sequence.PrepareDeployment[2] -le [int]$sequence.RollbackDeployment[2] -or
         [int]$sequence.PrepareDeployment[2] -ge [int]$sequence.StopServices[2] -or
+        [int]$sequence.CompleteDeployment[2] -le [int]$sequence.RemoveExistingProducts[2] -or
+        [int]$sequence.CompleteDeployment[2] -ge [int]$sequence.CommitDeployment[2] -or
+        [int]$sequence.CommitDeployment[2] -ge [int]$sequence.InstallFinalize[2] -or
         $sequence.ClearForRemoval[1] -cne $authoredClearCondition -or
         [int]$sequence.ClearForRemoval[2] -ge [int]$sequence.StopServices[2]) { throw 'Unsafe MSI lifecycle action ordering or conditions.' }
     foreach ($name in @('PrepareDeployment','CompleteDeployment','ClearForRemoval')) {

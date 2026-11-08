@@ -36,25 +36,18 @@
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <AdditionalDependencies>msi.lib;userenv.lib;advapi32.lib;bcrypt.lib;comctl32.lib;gdi32.lib;ole32.lib;oleaut32.lib;secur32.lib;shell32.lib;taskschd.lib;uuid.lib;wtsapi32.lib;user32.lib;version.lib;windowsapp.lib;$(UnlockLibraryDirectory)\unlock_saved_credential_ipc.lib;$(UnlockLibraryDirectory)\unlock_protocol_crypto.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>msi.lib;userenv.lib;advapi32.lib;ole32.lib;shell32.lib;uuid.lib;wtsapi32.lib;user32.lib;windowsapp.lib;$(UnlockLibraryDirectory)\unlock_saved_credential_ipc.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/MANIFEST:NO %(AdditionalOptions)</AdditionalOptions>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\Msi\CustomActions.cpp" />
-    <ClCompile Include="..\Msi\LegacySchema5.cpp" />
-    <ClCompile Include="..\Msi\LegacyManifest.cpp" />
     <ClCompile Include="..\Msi\UserIntegration.cpp" />
     <ResourceCompile Include="$(UnlockGeneratedDirectory)\$(UnlockInstallerBaseName)-version.rc" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="UnlockSavedCredentialIpc.vcxproj">
       <Project>{8CBDEB42-8B4B-4F2B-9D52-0BF1A9824D02}</Project>
-      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
-      <LinkLibraryDependencies>false</LinkLibraryDependencies>
-    </ProjectReference>
-    <ProjectReference Include="UnlockProtocolCrypto.vcxproj">
-      <Project>{0F62E4AF-0B7D-47D9-9E01-37DD7FE0D1C1}</Project>
       <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
       <LinkLibraryDependencies>false</LinkLibraryDependencies>
     </ProjectReference>

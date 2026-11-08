@@ -1,5 +1,5 @@
 #include "../Msi/ActionPolicy.h"
-#include "../Msi/LegacySchema5.h"
+#include "../ProductVersion.h"
 #include "../DesktopApp/DesktopApp.h"
 #include <cstdlib>
 #include <iostream>
@@ -48,16 +48,11 @@ int main() {
             L"65536.0.0", L"1.2.3.65536", L"999999999999999999999.0.0", L"0.1.0junk", L"1.2.3.4junk"})
         expect(!parseProductVersion(invalid), "malformed product versions fail closed");
     using namespace unlock::components::msi;
-    expect(supportedLegacyVersion(5,L"1.0.0.23") == ProductVersion{1,0,0,23}, "complete schema 5 version can be read");
-    expect(!supportedLegacyVersion(4,L"1.0.0.23"), "earlier schemas are rejected");
-    expect(!supportedLegacyVersion(0,L"1.0.0.23"), "missing schema is rejected");
-    expect(!supportedLegacyVersion(5,L"1.0.0"), "legacy takeover requires the fourth version part");
-    expect(!supportedLegacyVersion(5,L"1.0.0.023"), "noncanonical legacy version is rejected");
     expect(packageAction({1,0,0,24},{1,0,0,23}) == PackageAction::update, "fourth part update");
     expect(packageAction({1,0,0,24},{1,0,0,24}) == PackageAction::reinstall, "fourth part reinstall");
     expect(packageAction({1,0,0,23},{1,0,0,24}) == PackageAction::rejectDowngrade, "fourth part downgrade");
     expect(operation(false,false,false,false) == Operation::firstInstall, "fresh install");
-    expect(operation(false,false,false,true) == Operation::maintain, "migration and major upgrade preserve configuration");
+    expect(operation(false,false,false,true) == Operation::maintain, "major upgrade preserves configuration");
     expect(operation(true,false,false,true) == Operation::maintain, "repair preserves configuration");
     expect(operation(true,true,true,true) == Operation::upgradeRemoval, "upgrade removal preserves credentials");
     expect(operation(true,true,false,true) == Operation::remove, "active removal clears credentials");
@@ -70,9 +65,5 @@ int main() {
         if (value != IpcOperation::clearForRemoval)
             expect(!maintenanceAllowed(true,true,value), "maintenance identity cannot invoke other operations");
     }
-    for (const auto name : {L"runtime.dll",L"nested\\runtime.dll"})
-        expect(isPackageRelativePath(name), "legacy manifest accepts relative dependency names");
-    for (const auto name : {L"",L"..\\file",L"C:\\file",L"\\file",L"a\\..\\b",L"a:stream",L"NUL",L"file. ",L"a\\CON.dll"})
-        expect(!isPackageRelativePath(name), "unsafe legacy dependency paths rejected before adoption");
     return EXIT_SUCCESS;
 }

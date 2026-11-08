@@ -54,7 +54,7 @@ Phone unlock requires an existing, locked Windows session. Windows Automatic Res
 ### Installation
 
 > [!IMPORTANT]
-> If a version earlier than **1.0.0** is installed, uninstall it in Windows **Settings → Apps** first, then run this installer. 
+> If a version earlier than **1.0.0-rc3** is installed, uninstall it in Windows **Settings → Apps** first, then run this installer. You will have to re-bind your iPhone and re-save your Windows account password.
 
 1. Sign in as the Windows user you want to configure, then get the native x64 or ARM64 [Windows installer](https://github.com/dennis6481/unlock-windows-with-iphone/releases) and follow its steps. After restarting, sign back in as that user and choose **Start setup**.
 2. Save your **Microsoft account password** or **local Windows account password**, not your PIN. The encrypted copy stays on this PC and is never sent to the phone.

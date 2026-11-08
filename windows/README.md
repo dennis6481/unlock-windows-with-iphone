@@ -55,7 +55,7 @@ Open **Unlock with iPhone** from the Start Menu to show the main window. Install
 
 ## Update and uninstall
 
-Run a newer installer to **Update**, or the same version to **Reinstall**. All four version parts participate in this comparison, including the fourth-part check in the execute sequence. Running the same MSI opens maintenance; Repair replaces equal-version files. Downgrades are rejected. Migration, updates and repairs preserve your saved password, binding and configured SID. Direct EXE takeover supports only complete schema 5 installations; unfinished transactions and older formats require the original tool.
+Run a newer installer to **Update**, or the same version to **Reinstall**. All four version parts participate in this comparison, including the fourth-part check in the execute sequence. Running the same MSI opens maintenance; Repair replaces equal-version files. Downgrades are rejected. MSI updates and repairs preserve your saved password, binding and configured SID. EXE installations must first be uninstalled with their original installer; installing MSI afterward requires saving your password and binding your iPhone again.
 
 For uninstall instructions, see the [main guide](../README.md#uninstall). For installation compatibility and failure recovery, see the [installer guide](Setup/README.md).
 
@@ -75,8 +75,7 @@ windows/
 ├── Enrollment/         Binding client, UAC helper and protected binding store.
 ├── SavedCredential/    Credential service, IPC, encrypted password storage and management UI.
 ├── CredentialProvider/ Windows sign-in tile and native credential submission.
-├── Protocol/           SHA-256 hashing for installer package integrity.
-├── Msi/                WiX package, native lifecycle actions and schema 5 reader.
+├── Msi/                WiX package and native lifecycle actions.
 ├── Resources/          Win32 appearance, manifests, icons and version resources.
 └── *Tests/             C++ regression tests orchestrated by UnlockWindowsTests.proj.
 ```

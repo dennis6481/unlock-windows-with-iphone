@@ -41,21 +41,11 @@
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
-      <AdditionalDependencies>;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ResourceCompile Include="..\Resources\AppIcon.rc" />
     <ClCompile Include="..\SetupTests\main.cpp" />
-    <ClCompile Include="..\Msi\LegacyManifest.cpp" />
-
-
-
   </ItemGroup>
-  <ItemDefinitionGroup>
-    <Link>
-
-    </Link>
-  </ItemDefinitionGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

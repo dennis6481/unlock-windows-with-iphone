@@ -45,15 +45,6 @@ inline void checkHresult(HRESULT value, const std::wstring& text) {
 inline void checkRegistry(LSTATUS status, const std::wstring& operation) {
     if (status != ERROR_SUCCESS) throw ComponentError(operation + L" (Win32=" + std::to_wstring(status) + L")");
 }
-struct ScopedComApartment final {
-    HRESULT value = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    ScopedComApartment() {
-        if (FAILED(value) && value != RPC_E_CHANGED_MODE) checkHresult(value, L"Initialize COM");
-    }
-    ~ScopedComApartment() { if (SUCCEEDED(value)) CoUninitialize(); }
-    ScopedComApartment(const ScopedComApartment&) = delete;
-    ScopedComApartment& operator=(const ScopedComApartment&) = delete;
-};
 inline std::wstring setupErrorText(const std::exception& error) {
     if (const auto* component = dynamic_cast<const ComponentError*>(&error)) return component->wideWhat();
     const std::string text(error.what());

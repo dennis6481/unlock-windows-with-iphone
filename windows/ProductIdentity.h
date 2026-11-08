@@ -3,6 +3,7 @@
 #include <Windows.h>
 #include <sddl.h>
 #include <string>
+#include <string_view>
 
 namespace unlock::components {
 inline constexpr wchar_t kProductRegistryPath[] = L"SOFTWARE\\UnlockWindowsWithIPhone";
@@ -21,8 +22,11 @@ inline HRESULT readSetupTargetSid(std::wstring& target) {
     const auto status = RegGetValueW(HKEY_LOCAL_MACHINE, kInstalledProductRegistryPath,
         kTargetSidValueName, RRF_RT_REG_SZ | RRF_SUBKEY_WOW6464KEY, nullptr, value, &bytes);
     if (status != ERROR_SUCCESS) return HRESULT_FROM_WIN32(status);
-    if (bytes < 2 * sizeof(wchar_t) || bytes % sizeof(wchar_t) ||
-        wcslen(value) + 1 != bytes / sizeof(wchar_t)) return HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
+    if (bytes < 2 * sizeof(wchar_t) || bytes > sizeof(value) || bytes % sizeof(wchar_t))
+        return HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
+    const std::wstring_view text(value, bytes / sizeof(wchar_t));
+    if (text.back() != L'\0' || text.find(L'\0') != text.size() - 1)
+        return HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
     PSID sid = nullptr;
     if (!ConvertStringSidToSidW(value, &sid)) return HRESULT_FROM_WIN32(GetLastError());
     LPWSTR normalized = nullptr;

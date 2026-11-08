@@ -243,11 +243,11 @@ void stopTargetTray(const std::wstring& sid) {
     if (!mainInstancesPresent()) return;
     // MSI runs in session 0. A short-lived ordinary-user host is necessary to
     // enumerate the target desktop; impersonating its token does not change sessions.
-    HMODULE module = nullptr;
+    HMODULE actionModule = nullptr;
     checkWin32(GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-        reinterpret_cast<LPCWSTR>(&stopTargetTray), &module), L"Locate native action module");
+        reinterpret_cast<LPCWSTR>(&stopTargetTray), &actionModule), L"Locate native action module");
     std::wstring path(32768, L'\0');
-    const auto size = GetModuleFileNameW(module, path.data(), static_cast<DWORD>(path.size()));
+    const auto size = GetModuleFileNameW(actionModule, path.data(), static_cast<DWORD>(path.size()));
     if (!size || size >= path.size()) fail(L"Cannot locate native action image.");
     path.resize(size);
     const auto helper = backupRoot() / kCustomActionFile;
@@ -352,7 +352,17 @@ extern "C" __declspec(dllexport) UINT __stdcall PrepareDeployment(MSIHANDLE inst
         if (deferredOperation(install) == Operation::firstInstall && consoleUserSid() != sid) fail(L"Physical console user changed during installation.");
         if (deferredOperation(install) == Operation::firstInstall) {
             const auto vault = setupKnownFolder(FOLDERID_ProgramData) / unlock_windows::saved_credential::kVaultDirectoryName;
-            if ((std::filesystem::exists(vault) && !std::filesystem::is_empty(vault)) ||
+            bool vaultHasData = false;
+            const auto attributes = GetFileAttributesW(vault.c_str());
+            if (attributes != INVALID_FILE_ATTRIBUTES) {
+                unlock_windows::storage::verifyProtectedPath(vault, true);
+                vaultHasData = !std::filesystem::is_empty(vault);
+            } else {
+                const auto error = GetLastError();
+                if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND)
+                    fail(L"Cannot inspect saved credential directory: " + win32ErrorMessage(error));
+            }
+            if (vaultHasData ||
                 fileExists(productDataDirectory() / unlock_windows::system_ble::kEnrollmentFileName))
                 fail(L"Unowned credential or binding data exists. Use the original maintenance tool; no data was changed.");
         }

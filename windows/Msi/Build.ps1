@@ -269,9 +269,9 @@ function Test-MsiPackage([string]$Path, [string]$Architecture, [string]$Director
             $visited = [Collections.Generic.HashSet[string]]::new()
             while ($directoryId -notin @('DesktopDirectory','System64Folder')) {
                 if (!$visited.Add($directoryId) -or !$directories.ContainsKey($directoryId)) { throw 'Invalid MSI target directory chain.' }
-                $directory = $directories[$directoryId]
-                $relative = (($directory[2] -split ':')[0] -split '\|')[-1] + '\' + $relative
-                $directoryId = $directory[1]
+                $directoryRow = $directories[$directoryId]
+                $relative = (($directoryRow[2] -split ':')[0] -split '\|')[-1] + '\' + $relative
+                $directoryId = $directoryRow[1]
             }
             $rootId = if ($entry.Desktop) { 'DesktopDirectory' } else { 'System64Folder' }
             if ($directoryId -cne $rootId -or $relative -cne $entry.Name) { throw "Unexpected MSI install path: $($entry.Name)" }

@@ -9,7 +9,6 @@
             Message="This package requires the supported native 64-bit Windows version." />
     <Launch Condition="NOT RollbackDisabled" Message="This package requires Windows Installer rollback to be enabled." />
     <Property Id="FullProductVersion" Value="$(var.FullVersion)" />
-    <Property Id="REINSTALLMODE" Value="amus" />
     <Property Id="MSIRESTARTMANAGERCONTROL" Value="DisableShutdown" />
     <Property Id="MSIDISABLERMRESTART" Value="1" />
     <Property Id="TARGETSID" Secure="yes" Hidden="yes" />

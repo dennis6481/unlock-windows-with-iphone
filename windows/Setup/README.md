@@ -7,7 +7,7 @@ The self-contained x64 and ARM64 MSI packages use standard Windows installation 
 - [WiX SDK and UI extension](../Msi/UnlockWindows.wixproj) are pinned to **7.0.1**. The existing make/MSBuild entry builds native components, generates WiX sources and builds the MSI.
 - [ProductVersion.h](../ProductVersion.h) owns the four-part version. Generation checks MSI ranges: major/minor <= 255, patch <= 65535. No field is truncated.
 - MSI ProductVersion uses the first three parts; `FullProductVersion` and product file versions retain all four. `.23 → .24` updates, `.24 → .24` reinstalls and `.24 → .23` is rejected in the execute sequence, including silent installation.
-- Each architecture has a fixed UpgradeCode; new packages receive new ProductCode/PackageCode values. Running the same package opens maintenance. Repair uses `REINSTALLMODE=amus` to replace equal-version files.
+- Each architecture has a fixed UpgradeCode; new packages receive new ProductCode/PackageCode values. Running the same package opens maintenance. Repair uses the standard WiX maintenance options to replace missing files and equal or older versions.
 - Major upgrades close the tray and install new components before removing the old MSI after InstallExecute, inside the rollback transaction. Service startup follows old-package removal; upgrade removal skips native lifecycle actions and credential clearing.
 - Windows Installer rollback must be enabled; packages reject installations when it is disabled.
 - Output: `dist/UnlockWithIPhone_<major.minor.patch>_<x64|arm64>_setup.msi`. Snapshot artifact names retain `SNAPSHOT(<build>)`.

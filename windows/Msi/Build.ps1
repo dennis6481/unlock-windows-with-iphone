@@ -199,7 +199,9 @@ function Test-MsiPackage([string]$Path, [string]$Architecture, [string]$Director
     if ($properties.UpgradeCode -ine $upgrade) { throw 'Wrong MSI product family.' }
     [guid]::Parse($properties.ProductCode) | Out-Null
     [guid]::Parse($database.SummaryInformation(0).Property(9)) | Out-Null
-    if ($properties.REINSTALLMODE -cne 'amus') { throw 'Repair must replace equal-version files.' }
+    if ($properties.ContainsKey('REINSTALLMODE')) { throw 'Do not override REINSTALLMODE in the package Property table.' }
+    $repairModes = @(Read-MsiRows $database 'SELECT `Argument` FROM `ControlEvent` WHERE `Event`=''ReinstallMode''' 1)
+    if (!@($repairModes | Where-Object { $_[0] -match 'e' -and $_[0] -notmatch 'a' }).Count) { throw 'Repair must replace equal-version files without forcing replacement of every file.' }
     $upgrades = @(Read-MsiRows $database 'SELECT `VersionMax`,`Attributes`,`ActionProperty` FROM `Upgrade`' 3)
     if (!@($upgrades | Where-Object { $_[2] -ceq 'WIX_UPGRADE_DETECTED' -and $_[0] -ceq $metadata.ReleaseVersion -and ([int]$_[1] -band 512) }).Count) { throw 'Same MSI version upgrade recognition is missing.' }
     $media = @(Read-MsiRows $database 'SELECT `Cabinet` FROM `Media`' 1)

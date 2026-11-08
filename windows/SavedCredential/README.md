@@ -35,7 +35,7 @@ Request completion clears evidence while retaining a valid connection. Disconnec
 The service consumes authorization before decrypting. CP rebuild, packing failure and native password rejection cannot restore it. Connection, selected BLE pairing/removal, console/power/account and registration changes invalidate affected requests. Actual native Windows session recovery remains the acceptance result.
 ## Password management
 
-After the first native sign-in, choose **Start setup** on the installation result page or launch `--setup`. The elevated WinUI password window verifies the installed target account. Only a saved copy matching the complete verified identity permits skipping the password step. Saving a copy successfully enables binding on the ordinary Status page; cancellation and failure do not. For independent maintenance, open tray **Password…** and choose save, update or removal.
+On the ordinary app's one-time first-install prompt, choose **Start setup**, or launch `--setup`. If MSI requests a restart, this prompt waits until a subsequent app launch after restart. The elevated WinUI password window verifies the installed target account. Only a saved copy matching the complete verified identity permits skipping the password step. Saving a copy successfully enables binding on the ordinary Status page; cancellation and failure do not. For independent maintenance, open tray **Password…** and choose save, update or removal.
 
 `credentialSummary` returns the verified account and saved-copy state to the unlocked installation target's ordinary console session. It returns no password or snapshot nonce and creates no management snapshot or authorization. The single pipe accepts local authenticated connections, but management status/nonces and credential changes still require an administrator.
 
@@ -53,6 +53,6 @@ The Password page refreshes on entry, activation and operation completion; faile
 
 ## Removal and maintenance
 
-Installer `clearForRemoval` must receive service confirmation that the password, grant, snapshot and BLE request were cleared before removal continues. There is no success path that skips a failed credential-clear operation.
+Active MSI uninstall requires `clearForRemoval` confirmation for password, binding, grant, snapshot and BLE-request deletion before stopping the service. A separate identity accepts only the native system-directory MSI process with matching SYSTEM process/pipe tokens; it can call only this operation and cannot bypass the unlocked configured-console requirement. Upgrade removal skips clearing. Deletion is irreversible if a later uninstall step fails.
 
 Keep identity checks, consume-before-decrypt ordering, caller separation and impersonation boundaries intact during maintenance. Logs must not include passwords, nonce bytes, credential plaintext or device identifiers in public reports. Verify caller, identity, replay and restart scenarios.

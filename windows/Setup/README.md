@@ -1,100 +1,50 @@
-<!-- Created by Rui MA on 28 Sep 2026 -->
+# Windows Installer
 
-# Installer and maintenance
+The self-contained x64 and ARM64 MSI packages use standard Windows installation and maintenance dialogs. Installation is per machine at fixed locations; no EXE bootstrapper or target-machine .NET runtime is required.
 
-The native Setup installs, updates, reinstalls and removes the four Windows product components. It handles restart continuation and finalization. Authentication and BLE contracts remain outside the installer.
+## Package and version
 
-Progress logs append in chronological order and scroll to the latest entry. Unchanged result polling preserves the scroll position. Installer C++ sources compile as UTF-8.
+- [WiX SDK and UI extension](../Msi/UnlockWindows.wixproj) are pinned to **7.0.1**. The existing make/MSBuild entry builds native components, generates WiX sources and builds the MSI.
+- [ProductVersion.h](../ProductVersion.h) owns the four-part version. Generation checks MSI ranges: major/minor <= 255, patch <= 65535. No field is truncated.
+- MSI ProductVersion uses the first three parts; `FullProductVersion` and product file versions retain all four. `.23 → .24` updates, `.24 → .24` reinstalls and `.24 → .23` is rejected in the execute sequence, including silent installation.
+- Each architecture has a fixed UpgradeCode; new packages receive new ProductCode/PackageCode values. Running the same package opens maintenance. Repair uses `REINSTALLMODE=amus` to replace equal-version files.
+- Major upgrades remove the old MSI after InstallInitialize, inside the rollback transaction. Upgrade removal never clears credentials or binding.
+- Output: `dist/UnlockWithIPhone_<major.minor.patch>_<x64|arm64>_setup.msi`. Snapshot artifact names retain `SNAPSHOT(<build>)`.
 
-## Code responsibilities
+Payload filenames come from [ComponentFiles.h](../ComponentFiles.h); desktop/runtime files come from `DesktopApp.files`. MSI manages files, service registration, CP registration, the all-users shortcut and its own uninstall registration. Third-party files retain their own versions.
 
-| Module | Responsibility |
-|---|---|
-| `main.cpp` and resources | Launch modes, elevation/operation lock and Win32 pages. |
-| `SetupTransaction` | Operation sequencing, maintenance inspection and phase-based continuation. |
-| `ComponentState` | Separate installed-product/active-transaction types and pure maintenance decisions. |
-| `WindowsAdapter` / `DesktopIntegration.cpp` | Windows mechanisms; console identity, user hive, Run, shortcut and normal app exit. |
-| `PackageDeployment` / `PackageManifest` | Embedded package verification, protected staging, file replacement/removal and package format. |
-| `SetupStateStore` | Installation/transaction registry records, reboot guard and atomic completion snapshots. |
-| `SetupFinalization` | Scheduled continuation, generated exit-cleanup stages and ordinary-user result handoff. |
-| `SetupContract` / `SetupIdentity` | Shared persisted contract and service-side target-user lookup. |
-| `SetupPlatform.h` | Internal Windows handles, error/registry primitives and installation paths. |
+The all-users Start Menu shortcut is advertised and belongs to the main executable's component. Repair restores it through that component.
 
-Flow: entry/UI -> transaction -> package and Windows deployment -> SYSTEM exit finalizer -> ordinary-user result acknowledgment. The active transaction takes precedence over the formal installation. Deployment verification does not mean exit cleanup or user handoff has completed.
+## EXE takeover
 
-## Package and deployment
+Only complete **schema 5** installations are supported. The reader checks four-part version, native architecture, target SID, installed components, embedded dependency hashes, service/CP registration and maintenance entry before mutation. Old transactions, pending result/continuation tasks, inconsistent state and older formats are rejected; complete or remove them with the original installer.
 
-The build produces a self-contained `dist/UnlockWithIPhone_<version>_<architecture>_setup.exe` in the repository root with `x64` or `arm64` as the compiler target architecture suffix; the version is read automatically from [ProductVersion.h](../ProductVersion.h). The service, CP DLL and desktop app are embedded as resources after their builds complete. Component changes regenerate the resource and SHA-256 manifest and rebuild setup. The installed/staged maintenance program is named `setup.exe` and retains the embedded payload. Fixed component names are defined in [ComponentFiles.h](../ComponentFiles.h).
+Takeover preserves password, binding and configured user. It never calls `setup.exe --uninstall`. A protected snapshot contains only deployment files, shortcut, service configuration and non-sensitive registry registration. MSI owns file removal/replacement, including occupied-file reboot scheduling; the native rollback restores the snapshot and original maintenance entry on failure. Restoration of occupied files can itself require restart. Recovery errors retain the snapshot and report failure.
 
-The desktop uses official Windows App SDK self-contained output and Hybrid CRT; authentication components and setup retain their runtime policy. The native build is driven by the checked-in MSBuild projects through `make`.
+After successful commit, the old EXE, uninstall entry and superseded schema fields are removed. The schema 5 module only reads old installations; the old deployment engine, PowerShell finalizer, result events and SYSTEM continuation tasks are not shipped.
 
-| Location | Contents |
-|---|---|
-| Native System32 | Credential Provider DLL and LocalSystem service. |
-| Program Files / Unlock Windows with iPhone | `UnlockWithIPhone.exe`, its self-contained runtime files and `setup.exe`. |
-| ProgramData / UnlockWindowsWithIPhone / Setup / Transactions | Protected staging for active transactions only. |
-| Windows Settings → Apps | One product entry, version and uninstall command. |
+## Identity and user interaction
 
-Setup requests UAC and binds installation to the actual physical-console user, even if another administrator supplies elevation. The service starts automatically as LocalSystem. The tray starts normally through that user's Run entry; the installer does not override a user's startup-disable choice. Login startup passes the shared `--background` argument. Install/update creates a shortcut in the all-users Start Menu that opens the main window; uninstall removes it.
+[ProductIdentity.h](../ProductIdentity.h) defines the durable configured SID at the existing `InstalledProduct\TargetSid` location for MSI, service and CP. First installation selects the physical-console user. Migration, upgrade and repair retain that user, including when another administrator supplies elevation.
 
-Project binaries must match the native OS architecture and product version. Third-party PE machine types are checked against their generated manifest entries, including metadata and resource files. Protected directories require appropriate owner/ACL checks; unsafe paths and reparse points are rejected. Missing or mixed file versions are errors, not guessed installation state.
+First installation writes a non-sensitive one-time marker in that user's profile. The ordinary app shows **Start setup / Later**, clearing the marker after either choice. Updates and repairs do not recreate it or change an existing login-startup choice.
 
-Before writing a transaction, setup validates its own version/architecture and hashes each embedded component against the build-generated version/architecture manifest. During protected staging it extracts project components and self-contained desktop dependencies, copies itself as `setup.exe` and verifies each file before setting `payloadReady`. Project versions must match; vendor versions are retained. The installer copy is checked against its validated source by size and SHA-256. The hashes detect payload corruption; they are not publisher signatures. There is no adjacent-file fallback or extra extraction directory.
+On commit without pending replacement, MSI starts the app with the target user's ordinary token when that console session is available. Otherwise it waits for normal login startup or manual launch. Launch errors are reported separately from committed deployment; MSI does not wait for the user to acknowledge setup.
 
-Preflight and preparation use the same package validator. Preparation keeps that validated resource mapping open and extracts its verified bytes without a second resource hash. Installed-package format is checked with installed versions; pending-package format is checked when reading the pending transaction. Project names remain in `ComponentFiles.h`, product version in `ProductVersion.h`, and packed little-endian manifest layout in `PackageManifest.h`. The generator reads every header/record field and the shared SHA-256 digest type; unsupported fields and missing values are errors. The manifest records relative paths, sizes, SHA-256 and each PE machine type; installation, verification, replacement and removal read it. Installed-version verification reads the resident package manifest.
+## Restart and removal
 
-Setup requires Windows 10 2004, build 19041, or later, using the minimum from [ComponentFiles.h](../ComponentFiles.h). Desktop runtime files stay in the app directory; authentication components retain their system paths.
+A short-lived native DLL host runs the existing normal-exit request in the target user session; the installer does not kill the app or LogonUI. A maintenance marker blocks app startup during deployment; takeover temporarily retires the old app entry, with snapshot restoration on rollback. MSI handles occupied-file replacement and reports a required restart. Pending replacement blocks service/app startup before restart; afterward the automatic service and normal user startup apply.
 
-## Version and data rules
+Active uninstall requires the configured physical-console user to be signed in and unlocked and the credential service to be running. Before stopping the service, MSI requires `clearForRemoval` acknowledgment for password, binding and active authorization deletion. The removal-only SYSTEM MSI identity cannot invoke other management operations or bypass lock restrictions.
 
-Versions earlier than **1.0.0** must be uninstalled in Windows **Settings → Apps** before running this installer. The fixed maintenance floor is defined in `ProductVersion.h`; old installations and transactions are rejected before changes. Version read failures are errors, not an empty installation.
+Credential deletion is irreversible. Later removal failure reports that fact; rollback restores deployment resources, not deleted credentials. Windows Bluetooth pairing and the Windows account password are unchanged. See [SECURITY.md](../../SECURITY.md).
 
-Versions use `major.minor.patch.build`, compared numerically across all four parts. Three-part installed/transaction versions default to build `0`; malformed versions remain errors. Project binary and text versions must agree, including build.
+## Verification
 
-| Operation | Behavior |
-|---|---|
-| Install | Confirm and deploy a new complete installation. |
-| Update | Higher version; preserve password and product binding. |
-| Reinstall | Same version, explicitly confirmed; preserve those records. |
-| Downgrade | Rejected. |
-| Uninstall | Confirm, clear password through the service, remove product binding and Windows components/integration. |
+CI retains the native test gate and checks MSI properties, architecture, lifecycle-action conditions and embedded cabinets before artifact upload. It extracts cabinets as data, compares the actual payload with the authoritative file lists and checks PE architecture and four-part product versions. PE checks distinguish native code, resource/metadata containers and ARM64X runtime binaries; product components must match the target architecture.
 
-The current installation schema is **5**, defined in [SetupContract.h](SetupContract.h). Unsupported schemas, incomplete installations and mismatched pending transactions are rejected. This tool does not migrate them; remove them with their own maintenance tool before a fresh installation. Windows system Bluetooth pairing is separate and is not removed by product binding removal or uninstall.
+ICE03 is excluded because it rejects WinUI language resources and DLL language lists. Package checks compare file language metadata with the extracted payload and validate its language IDs; other ICE checks remain enabled.
 
-Missing dependency manifests are rejected; no migration path is retained. Uninstall removes the saved password and product binding, so a fresh installation requires configuration again. Windows system Bluetooth pairing remains.
+Use recoverable x64/ARM64 test machines for first installation, complete schema 5 takeover, injected failure/rollback, same-version repair, fourth-part upgrade/downgrade, active versus upgrade removal, locked-console rejection, absent target user, alternate administrator elevation and disabled startup. Check occupied files, postponed restart and post-restart component consistency on the minimum supported and current Windows versions. Record BLE and native unlock separately from package checks.
 
-UAC cancellation and confirmation cancellation do not begin the operation. Uninstall from Settings passes `--uninstall` and opens confirmation with Cancel as default. An active transaction takes precedence over starting another operation.
-
-## Transaction and completion boundaries
-
-The installer re-queries state before acting. It persists transaction ownership and target paths before creating/writing staging. Preparation failure keeps its ownership and error evidence; continuation remains tied to that same transaction.
-
-Update/removal remove Run, identify all instances by the installed main-app path, verify the tray user/session and request normal exit. Each retained instance is waited on for 30 seconds; an active/new instance pauses maintenance rather than being killed or considered released. Update disables CP/stops the service, crosses a real restart boundary, replaces and verifies files, then restores the service, CP and Run.
-
-Deployment and exit finalization are separate. Formal installation records, active transaction state and non-secret result snapshots have distinct roles. Shared schema, registry names, stages, task/event/mutex names and snapshot layout come from SetupContract.h; C++ and generated in-memory PowerShell consume that source.
-
-- A SYSTEM completion task runs the protected staged installer for the current transaction.
-- A serialized SYSTEM finalizer uses short-lived Windows PowerShell, waits for the verified continuation process and holds the maintenance mutex. Generated commands enforce a 32,000-character limit.
-- The ordinary-user result task and temporary Settings recovery entry start PowerShell through system `conhost --headless`, without a console window. The verified result record/events determine completion; the host's exit code is not the operation result.
-- Deletion is limited to the transaction's known files and empty directories. Unknown contents, unsafe ACLs, reparse points and deletion errors prevent a success claim.
-- Install/update finalization releases staging before handing the result to the ordinary target user. The tray starts with `--background`. A fresh install shows **Start setup** and **Later**; either choice acknowledges the one-time result. Successful update/reinstall silently starts the tray and acknowledges the result without creating a window. Failures retain their result UI.
-- The observer derives the first-install handoff from the existing transaction operation. It passes an internal setup argument to the verified result UI; no persisted installation or completion schema is added. Setup progress comes from credential and enrollment records.
-- Uninstall copies a non-secret result into the target-user process, signals a transaction/user-bound acknowledgment event, then finishes SYSTEM cleanup. Verified success exits silently; failed or timed-out cleanup displays an error. The event conveys receipt, not paths or authentication authority; its owner/ACL are checked.
-- With the target user absent, result handoff remains pending until sign-in. Starting a task, scheduling deletion or deleting components alone is not full completion.
-
-File replacement verifies staging and prepares all `.update` files before replacing targets. Obsolete dependencies are removed before the resident installer is replaced last. Failure preserves staging and transaction diagnostics; continuation repeats verification and replacement without automatic rollback. The Settings entry may temporarily refer to protected staging or a constrained PowerShell continuation while its normal EXE is being released. Completion requires the verified final result; use the maintained continuation entry for an incomplete transaction.
-
-File removal is not physical erasure of SSD, backup or snapshot history. See [SECURITY.md](../../SECURITY.md).
-
-## UI and diagnostics
-
-The wizard uses themed Win32 controls, PerMonitorV2 layout, Task Dialog confirmations/errors and a scrollable operation log. Execution disallows cancel/close; Restart now / Later preserves the restart state as appropriate. UI display failure is distinct from the transaction result.
-
-Verify versions, restarts, cancellation, failure, result handoff and complete removal. Tests must check the actual final state, not just whether the app entry disappeared.
-
-## References
-
-- [Windows Run entries](https://learn.microsoft.com/en-us/windows/win32/setupapi/run-and-runonce-registry-keys)
-- [Uninstall registry values](https://learn.microsoft.com/en-us/windows/win32/msi/uninstall-registry-key)
-- [Task Scheduler schema](https://learn.microsoft.com/en-us/windows/win32/taskschd/task-scheduler-schema)
-- [TaskDialog and Common Controls v6](https://learn.microsoft.com/en-us/windows/win32/api/commctrl/nf-commctrl-taskdialog)
+References: [WiX release notes](https://docs.firegiant.com/wix/whatsnew/releasenotes/), [major upgrades](https://docs.firegiant.com/wix/schema/wxs/majorupgrade/).

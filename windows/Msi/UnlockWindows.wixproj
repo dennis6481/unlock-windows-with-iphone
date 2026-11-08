@@ -1,0 +1,19 @@
+<Project Sdk="WixToolset.Sdk/7.0.1">
+  <Import Project="$(UnlockBuildDirectory)\generated\UnlockBuild.props" />
+  <PropertyGroup>
+    <AcceptEula>wix7</AcceptEula>
+    <!-- ICE03 rejects WinUI MUI language IDs recognized by Windows and its 430-character DLL language lists.
+         Build.ps1 checks File.Language against the extracted files and validates the IDs; other ICEs remain enabled. -->
+    <SuppressIces>$(SuppressIces);ICE03</SuppressIces>
+    <OutputType>Package</OutputType>
+    <InstallerPlatform>$(UnlockArchitecture)</InstallerPlatform>
+    <OutputName>$(UnlockSetupBaseName)</OutputName>
+    <OutputPath>$(MSBuildThisFileDirectory)..\..\dist\</OutputPath>
+    <IntermediateOutputPath>$(UnlockBuildDirectory)\obj\$(Platform)\$(Configuration)\Msi\</IntermediateOutputPath>
+    <DefineConstants>GeneratedDirectory=$(UnlockBuildDirectory)\generated;ActionsPath=$(UnlockBuildDirectory)\$(UnlockInstallerFile)</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="WixToolset.UI.wixext" Version="7.0.1" />
+    <Compile Include="$(UnlockBuildDirectory)\generated\Payload.wxs" />
+  </ItemGroup>
+</Project>

@@ -8,11 +8,14 @@
 #include "UI/Pages/PageControls.h"
 #include "DesktopController.h"
 #include "../Resources/DesktopUi.h"
+#include "../ProductIdentity.h"
+#include <commctrl.h>
 #include <WtsApi32.h>
 #include <winrt/Microsoft.UI.Dispatching.h>
 #include <winrt/Microsoft.UI.Xaml.h>
 #include <memory>
 #include <chrono>
+#include <vector>
 
 namespace unlock_windows::desktop_app {
 namespace {
@@ -20,11 +23,47 @@ using namespace winrt;
 using namespace Microsoft::UI;
 using namespace Microsoft::UI::Xaml;
 
+bool firstSetupPrompt() {
+    using namespace unlock::components;
+    DWORD pending = 0, bytes = sizeof(pending);
+    const auto read = RegGetValueW(HKEY_CURRENT_USER, kProductRegistryPath, kSetupPromptValueName,
+        RRF_RT_REG_DWORD, nullptr, &pending, &bytes);
+    if (read == ERROR_FILE_NOT_FOUND) return false;
+    winrt::check_win32(read);
+    if (pending != 1) throw std::runtime_error("Invalid first setup prompt marker");
+    std::wstring target;
+    winrt::check_hresult(readSetupTargetSid(target));
+    HANDLE token = nullptr;
+    winrt::check_bool(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token));
+    winrt::handle owner{token};
+    GetTokenInformation(token, TokenUser, nullptr, 0, &bytes);
+    std::vector<BYTE> user(bytes);
+    winrt::check_bool(GetTokenInformation(token, TokenUser, user.data(), bytes, &bytes));
+    PSID expected = nullptr;
+    winrt::check_bool(ConvertStringSidToSidW(target.c_str(), &expected));
+    const bool match = EqualSid(expected, reinterpret_cast<TOKEN_USER*>(user.data())->User.Sid);
+    LocalFree(expected);
+    if (!match) throw std::runtime_error("Only the configured user can start first setup");
+    const TASKDIALOG_BUTTON buttons[]{{IDYES, L"Start setup"}, {IDNO, L"Later"}};
+    TASKDIALOGCONFIG dialog{sizeof(dialog)};
+    dialog.pszWindowTitle = UNLOCK_PRODUCT_DISPLAY_NAME;
+    dialog.pszMainInstruction = L"Unlock with your iPhone";
+    dialog.pszContent = L"Save your Windows password and choose your iPhone to finish setup.";
+    dialog.cButtons = ARRAYSIZE(buttons); dialog.pButtons = buttons; dialog.nDefaultButton = IDYES;
+    int selected = 0;
+    winrt::check_hresult(TaskDialogIndirect(&dialog, &selected, nullptr, nullptr));
+    HKEY key = nullptr;
+    winrt::check_win32(RegOpenKeyExW(HKEY_CURRENT_USER, kProductRegistryPath, 0, KEY_SET_VALUE, &key));
+    const auto cleared = RegDeleteValueW(key, kSetupPromptValueName); RegCloseKey(key);
+    winrt::check_win32(cleared);
+    return selected == IDYES;
+}
+
 constexpr ULONGLONG kShutdownReportDelayMs = 10000;
 
 class DesktopHost final : public std::enable_shared_from_this<DesktopHost> {
 public:
-    DesktopHost(HINSTANCE instance, bool setup, bool background) : instance_(instance), setup_(setup), background_(background),
+    DesktopHost(HINSTANCE instance, bool setup, bool background, bool suppressPrompt) : instance_(instance), setup_(setup), background_(background), suppressPrompt_(suppressPrompt),
         tray_([this](TrayCommand command) {
                 switch (command) {
                 case TrayCommand::showWindow: show(); break;
@@ -46,7 +85,10 @@ public:
         desktop_ui::require(ProcessIdToSessionId(GetCurrentProcessId(), &session_), "ProcessIdToSessionId");
         singleton_ = CreateMutexW(nullptr, FALSE, L"Local\\UnlockWindowsWithIPhone-DesktopHost");
         desktop_ui::require(singleton_ != nullptr, "CreateMutexW");
-        if (GetLastError() != ERROR_ALREADY_EXISTS) return true;
+        if (GetLastError() != ERROR_ALREADY_EXISTS) {
+            if (!suppressPrompt_ && firstSetupPrompt()) setup_ = true;
+            return true;
+        }
         if (setup_ || !background_) {
             HWND existing = nullptr;
             for (int attempt = 0; attempt < 40 && !existing; ++attempt) {
@@ -262,7 +304,7 @@ private:
     }
 
     HINSTANCE instance_;
-    bool setup_, background_;
+    bool setup_, background_, suppressPrompt_;
     HANDLE singleton_ = nullptr;
     DWORD session_ = 0;
     HWND window_ = nullptr;
@@ -285,11 +327,11 @@ private:
 };
 }
 
-int runTray(HINSTANCE instance, bool setup, bool background) {
+int runTray(HINSTANCE instance, bool setup, bool background, bool suppressPrompt) {
     std::shared_ptr<DesktopHost> host;
     bool uiStarted = false;
     try {
-        host = std::make_shared<DesktopHost>(instance, setup, background);
+        host = std::make_shared<DesktopHost>(instance, setup, background, suppressPrompt);
         if (!host->prepare()) return 0;
         init_apartment(apartment_type::single_threaded);
         struct Apartment final { ~Apartment() { uninit_apartment(); } } apartment;

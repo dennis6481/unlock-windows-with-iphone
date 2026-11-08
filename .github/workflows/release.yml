@@ -76,33 +76,17 @@ jobs:
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File WindowsBuild.ps1 -InvokeMSBuild "UnlockWindows.sln" /restore /m /nologo "/p:Configuration=Release" "/p:UnlockBuildDirectory=%CD%\build" "/p:BuildTesting=OFF"
           if errorlevel 1 exit /b %errorlevel%
 
-      - name: Verify installer version and architecture
+      - name: Verify MSI database and embedded payload
         shell: pwsh
         run: |
           . .\WindowsBuild.ps1
-          $installers = @(Get-ChildItem -LiteralPath ..\dist -Filter '*.exe' -File -ErrorAction Stop)
-          if ($installers.Count -ne 1) {
-              throw "Expected one installer, found $($installers.Count)."
-          }
-          $installer = $installers[0]
           $metadata = Get-ProductBuildMetadata -Architecture $env:UNLOCK_TARGET_ARCH
-          $expected = [version]$metadata.Version
-          $version = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($installer.FullName)
-          if ($version.ProductVersion -cne $metadata.Version -or $version.FileVersion -cne $metadata.Version -or
-              [version]::new($version.ProductMajorPart, $version.ProductMinorPart, $version.ProductBuildPart, $version.ProductPrivatePart) -ne $expected -or
-              [version]::new($version.FileMajorPart, $version.FileMinorPart, $version.FileBuildPart, $version.FilePrivatePart) -ne $expected -or
-              $installer.Name -cne $metadata.SetupFile) {
-              throw 'Installer name or four-part version does not match ProductVersion.h.'
-          }
-          if ((Get-PortableExecutableArchitecture -Path $installer.FullName) -cne $env:UNLOCK_TARGET_ARCH) {
-              throw "Installer architecture does not match $env:UNLOCK_TARGET_ARCH."
-          }
-
+          .\Msi\Build.ps1 -Validate -PackagePath "..\dist\$($metadata.SetupFile)" -BuildDirectory build -Architecture $env:UNLOCK_TARGET_ARCH
       - name: Upload installer
         uses: actions/upload-artifact@v7
         with:
           name: windows-${{ github.ref_name }}-${{ matrix.architecture }}
-          path: dist/*.exe
+          path: dist/*.msi
           if-no-files-found: error
 
   publish:
@@ -126,7 +110,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_PRERELEASE: ${{ needs.validate.outputs.prerelease }}
         run: |
-          $installers = @(Get-ChildItem -LiteralPath installers -Filter '*.exe' -File -ErrorAction Stop)
+          $installers = @(Get-ChildItem -LiteralPath installers -Filter '*.msi' -File -ErrorAction Stop)
           if ($installers.Count -ne 2) {
               throw "Expected two installers, found $($installers.Count)."
           }
@@ -138,7 +122,7 @@ jobs:
           Build: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID
 
 
-          CI requires all four native Release test programs to pass on both x64 and ARM64 and checks Windows package versions and PE architectures. Installation, BLE and native unlock are not exercised by this workflow.
+          CI requires all four native Release test programs to pass on both x64 and ARM64 and checks MSI database properties, embedded cabinets and extracted PE versions/architectures. Installation, BLE and native unlock are not exercised by this workflow.
           "@ | Set-Content -LiteralPath release-notes.md -Encoding utf8
           $releaseOptions = @()
           if ($env:RELEASE_PRERELEASE -ceq 'true') {

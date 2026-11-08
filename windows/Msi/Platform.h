@@ -1,20 +1,24 @@
-// Created by Rui MA on 04 Oct 2026
-// Internal Windows primitives and installation paths shared by setup modules.
-
 #pragma once
-
-#include "WindowsAdapter.h"
+#include "../ProductIdentity.h"
+#include "../ProductVersion.h"
+#include "../ComponentFiles.h"
 #include "../Resources/resource.h"
 #include "../Enrollment/EnrollmentStore.h"
 #include <Windows.h>
 #include <shlobj.h>
 #include <sddl.h>
-#include <cstddef>
+#include <filesystem>
 #include <optional>
+#include <stdexcept>
 #include <cstring>
 #include <vector>
-
 namespace unlock::components {
+class ComponentError : public std::runtime_error {
+    std::wstring text_;
+public:
+    explicit ComponentError(std::wstring text) : std::runtime_error("MSI deployment failed"), text_(std::move(text)) {}
+    const std::wstring& wideWhat() const { return text_; }
+};
 inline void fail(const std::wstring& message) { throw ComponentError(message); }
 class ScopedHandle final {
 public:
@@ -288,8 +292,5 @@ inline bool fileExists(const std::filesystem::path& path) {
 }
 [[nodiscard]] inline std::filesystem::path productDataDirectory() {
     return setupKnownFolder(FOLDERID_ProgramData) / unlock_windows::system_ble::kEnrollmentDataDirectoryName;
-}
-[[nodiscard]] inline std::filesystem::path transactionRoot() {
-    return productDataDirectory() / kSetupDirectoryName / kTransactionsDirectoryName;
 }
 }

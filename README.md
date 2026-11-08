@@ -88,7 +88,7 @@ Your iPhone can stay locked. The Windows app does not need to remain open.
 
 Open Windows **Settings → Apps**, find *Unlock with iPhone* and select **Uninstall**. Follow the uninstaller's instructions, including restarting if prompted.
 
-Uninstalling removes the Windows components, the Start Menu shortcut, the saved password copy and the product binding stored on your PC. It does not change your Windows account password. If you reinstall, you will need to set up the app again.
+Uninstalling removes the Windows components, the Start Menu shortcut, the saved password copy and the product binding stored on your PC. It does not change your Windows account password. Deletion is irreversible even if later removal fails. After uninstalling, a fresh installation requires setup again.
 
 Windows system Bluetooth pairing is kept. Remove it separately in Windows Bluetooth settings if desired.
 
@@ -110,7 +110,7 @@ The [Windows module index](windows/README.md#module-index) explains the source d
 
 Do not mix service, Credential Provider and desktop binaries from different builds.
 
-Windows distribution is a single `dist/UnlockWithIPhone_<version>_<architecture>_setup.exe` with the desktop app, service and Credential Provider embedded. The product version uses `major.minor.patch.build`; installer filenames omit build. Existing three-part versions are read with build `0`.
+Windows distribution consists of self-contained x64 and ARM64 `dist/UnlockWithIPhone_<version>_<architecture>_setup.msi` packages. The product version uses `major.minor.patch.build`; filenames omit build. Higher fourth parts update, identical four-part versions reinstall and lower versions are rejected. Updates and repairs preserve credentials and binding.
 
 
 ## Known limitations
@@ -124,7 +124,7 @@ Windows distribution is a single `dist/UnlockWithIPhone_<version>_<architecture>
 - [ ] Support multiple Windows users. [#24](https://github.com/dennis6481/unlock-windows-with-iphone/issues/24).
 - [ ] Add support for Apple Watch. [#23](https://github.com/dennis6481/unlock-windows-with-iphone/issues/23).
 - [ ] Investigate LSA-based Windows authentication to replace the current implementation that stores a local Windows password copy. [#22](https://github.com/dennis6481/unlock-windows-with-iphone/issues/22).
-- [ ] Evaluate Windows Installer (MSI) to simplify installation, upgrades and maintenance. [#25](https://github.com/dennis6481/unlock-windows-with-iphone/issues/25).
+- [x] ~~Evaluate Windows Installer (MSI) to simplify installation, upgrades and maintenance. [#25](https://github.com/dennis6481/unlock-windows-with-iphone/issues/25).~~
 
 ## Security
 

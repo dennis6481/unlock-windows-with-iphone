@@ -6,6 +6,7 @@
 .vs/
 *.vcxproj.user
 /windows/DesktopApp/packages/
+/windows/Msi/obj/
 
 build/
 dist/

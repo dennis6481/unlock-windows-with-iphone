@@ -5,6 +5,7 @@
 #include "../Enrollment/EnrollmentSession.h"
 #include "../Enrollment/BindingClient.h"
 #include "../Resources/resource.h"
+#include "../Msi/MsiContract.h"
 #include <shellapi.h>
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
@@ -19,12 +20,30 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
         arguments.value = CommandLineToArgvW(GetCommandLineW(), &argc);
         unlock_windows::enrollment::require(arguments.value != nullptr, "CommandLineToArgvW");
         const auto launch = parseLaunch(argc, arguments.value);
+        HKEY reboot = nullptr;
+        const auto boundary = RegOpenKeyExW(HKEY_LOCAL_MACHINE, unlock::components::msi::kRebootKey,
+            0, KEY_READ | KEY_WOW64_64KEY, &reboot);
+        if (boundary == ERROR_SUCCESS) {
+            RegCloseKey(reboot);
+            if (launch.background) return 0;
+            throw std::runtime_error("Restart Windows to finish component replacement before starting the app");
+        }
+        if (boundary != ERROR_FILE_NOT_FOUND) winrt::check_win32(boundary);
+        HKEY maintenance = nullptr;
+        const auto active = RegOpenKeyExW(HKEY_LOCAL_MACHINE, unlock::components::msi::kMaintenanceKey,
+            0, KEY_READ | KEY_WOW64_64KEY, &maintenance);
+        if (active == ERROR_SUCCESS) {
+            RegCloseKey(maintenance);
+            if (launch.background) return 0;
+            throw std::runtime_error("Wait for Windows Installer maintenance to finish before starting the app");
+        }
+        if (active != ERROR_FILE_NOT_FOUND) winrt::check_win32(active);
         switch (launch.role) {
         case Role::tray:
         case Role::setup:
             if (unlock_windows::enrollment::elevatedAdmin())
                 throw std::runtime_error("Start Unlock with iPhone as the ordinary console user, without administrator elevation");
-            return runTray(instance, launch.role == Role::setup, launch.background);
+            return runTray(instance, launch.role == Role::setup, launch.background, launch.suppressSetupPrompt);
         case Role::savedPassword:
             return runSavedPassword(instance, show, launch.setup, launch.passwordOperation, launch.setupCancelEvent);
         case Role::bindingHelper:

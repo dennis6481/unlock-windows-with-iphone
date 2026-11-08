@@ -1,18 +1,26 @@
 // Created by Rui MA on 09 Oct 2026
 // Parses the authoritative package format and rejects unsafe or inconsistent records.
 
-#include "PackageManifest.h"
-#include "WindowsAdapter.h"
+#include "LegacyManifest.h"
+#include "Platform.h"
 #include <cstring>
 #include <set>
 #include <cwctype>
 #include <regex>
 
 namespace unlock::components {
+std::vector<PackageFile> readLegacyManifest(const std::filesystem::path& path) {
+    const auto module = LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_AS_DATAFILE_EXCLUSIVE);
+    if (!module) fail(L"Cannot open the schema 5 dependency manifest: " + path.wstring());
+    try {
+        auto files = readPackageManifest(module);
+        FreeLibrary(module); return files;
+    } catch (...) { FreeLibrary(module); throw; }
+}
 bool isPackageRelativePath(std::wstring_view name) {
     const std::filesystem::path path(name);
     if (path.empty() || path.is_absolute() || path.has_root_name()) return false;
-    static const std::wregex component(kPackagePathComponentPattern, std::regex::icase);
+    static const std::wregex component(kPayloadPathComponentPattern, std::regex::icase);
     for (const auto& part : path)
         if (!std::regex_match(part.wstring(), component)) return false;
     return true;
@@ -76,14 +84,11 @@ std::vector<PackageFile> readPackageManifest(HMODULE module) {
         bool project = false;
         for (const auto& component : kComponentFiles)
             if (file.name == component.name && file.desktopTool == component.desktopTool) project = true;
+        if (file.name == kInstallerFile) project = true;
         if (file.productComponent != project || (!file.desktopTool && !project))
             throw ComponentError(L"Invalid project component ownership in package manifest.");
     }
     return files;
 }
 
-std::span<const PackageFile> packageFiles() {
-    static const auto files = readPackageManifest(GetModuleHandleW(nullptr));
-    return files;
-}
 }

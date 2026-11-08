@@ -11,17 +11,15 @@ enum class Architecture { x64, arm64, unknown };
 inline constexpr wchar_t kCredentialProviderFile[] = L"unlock_credential_provider.dll";
 inline constexpr wchar_t kSavedCredentialServiceFile[] = L"unlock_saved_credential_service.exe";
 inline constexpr wchar_t kMainAppFile[] = L"UnlockWithIPhone.exe";
-inline constexpr wchar_t kInstallerFile[] = L"setup.exe";
 
 struct ComponentFile final {
     const wchar_t* name;
     bool desktopTool;
 };
 
-inline constexpr std::array<ComponentFile, 4> kComponentFiles{{
+inline constexpr std::array<ComponentFile, 3> kComponentFiles{{
     {kCredentialProviderFile, false},
     {kSavedCredentialServiceFile, false},
     {kMainAppFile, true},
-    {kInstallerFile, true},
 }};
 }

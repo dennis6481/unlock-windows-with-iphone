@@ -35,7 +35,7 @@
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
-      <AdditionalIncludeDirectories>..\Setup;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\Msi;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
@@ -47,7 +47,7 @@
   <ItemGroup>
     <ResourceCompile Include="..\Resources\AppIcon.rc" />
     <ClCompile Include="..\SetupTests\main.cpp" />
-    <ClCompile Include="..\Setup\ComponentState.cpp" />
+    <ClCompile Include="..\Msi\LegacyManifest.cpp" />
 
 
 

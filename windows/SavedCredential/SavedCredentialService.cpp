@@ -8,7 +8,8 @@
 #include "../Bluetooth/SystemBleSession.h"
 #include "../Bluetooth/PresenceAuthorization.h"
 #include "../ConsoleSession.h"
-#include "../Setup/SetupIdentity.h"
+#include "../ProductIdentity.h"
+#include "../Msi/ActionPolicy.h"
 
 #include <WtsApi32.h>
 #include <lm.h>
@@ -150,6 +151,7 @@ struct Client final {
     DWORD session = 0xffffffff;
     bool logonUi = false;
     bool admin = false;
+    bool msiMaintenance = false;
 };
 
 Client inspectClient(const HANDLE pipe) {
@@ -191,6 +193,22 @@ Client inspectClient(const HANDLE pipe) {
     client.logonUi = client.userSid == L"S-1-5-18" &&
         _wcsicmp(processImage(client.process.value).c_str(), expectedLogonUi().c_str()) == 0;
     client.admin = client.userSid != L"S-1-5-18" && elevatedAdmin(pipeToken.value);
+    // Only the native Windows Installer server may use the removal-only identity.
+    // Both process and pipe tokens have already been matched above.
+    wchar_t nativeSystem[MAX_PATH]{};
+    const auto length = GetSystemDirectoryW(nativeSystem, MAX_PATH);
+    if (!length || length >= MAX_PATH) fail("native system directory unavailable");
+    const auto installer = std::wstring(nativeSystem) + L"\\msiexec.exe";
+    const auto attributes = GetFileAttributesW(installer.c_str());
+    client.msiMaintenance = client.userSid == L"S-1-5-18" && client.session == 0 &&
+        _wcsicmp(processImage(client.process.value).c_str(), installer.c_str()) == 0 &&
+        attributes != INVALID_FILE_ATTRIBUTES && !(attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT));
+    if (client.msiMaintenance) {
+        USHORT processMachine = 0, nativeMachine = 0;
+        if (!IsWow64Process2(client.process.value, &processMachine, &nativeMachine))
+            fail("MSI maintenance process architecture unavailable");
+        client.msiMaintenance = processMachine == IMAGE_FILE_MACHINE_UNKNOWN;
+    }
     return client;
 }
 
@@ -356,6 +374,9 @@ public:
         response.result = Result::rejected;
         try {
             auto client = inspectClient(pipe);
+            const bool maintenance = unlock::components::msi::maintenanceAllowed(
+                client.userSid == L"S-1-5-18", client.msiMaintenance, request.operation);
+            if (client.msiMaintenance && !maintenance) return response;
             if (requiresLogonUi(request.operation) && !client.logonUi) {
                 if (request.operation == Operation::reportUnlockResult) appendDiagnostic("unlock result rejected: caller is not LogonUI");
                 return response;
@@ -390,7 +411,7 @@ public:
             if (unlockHistory_.pending() || unlockHistory_.summary())
                 refreshUnlockHistory(console, bindingSummary(), vault_.storedIdentity());
             expireRequest(console);
-            if (client.session != console.session) return response;
+            if (client.session != console.session && !maintenance) return response;
             if (removing_ && request.operation != Operation::clearForRemoval) return response;
             if (request.operation == Operation::reportUnlockResult) {
                 UnlockResult result;
@@ -629,8 +650,11 @@ public:
                 grant_.reset();
                 rejectTask(AuthenticationFailure::bindingChanged);
             } else if (request.operation == Operation::clearForRemoval) {
-                if (!client.admin || console.locked || !request.payload.value.empty()) return response;
+                std::wstring targetSid;
+                if ((!client.admin && !maintenance) || console.locked || !request.payload.value.empty() ||
+                    FAILED(unlock::components::readSetupTargetSid(targetSid)) || targetSid != console.sid) return response;
                 vault_.clear();
+                enrollmentStore_.remove();
                 clearUnlockHistory();
                 grant_.reset();
                 snapshot_.reset();

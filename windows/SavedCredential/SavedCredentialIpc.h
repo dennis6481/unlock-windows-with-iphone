@@ -17,6 +17,7 @@ namespace unlock_windows::saved_credential {
 
 inline constexpr wchar_t kPipeName[] = L"\\\\.\\pipe\\unlock-windows-saved-credential-v1";
 inline constexpr wchar_t kServiceName[] = L"UnlockWindowsSavedCredentialService";
+inline constexpr wchar_t kServiceDisplayName[] = L"Unlock Windows saved credential";
 inline constexpr std::size_t kMaxPacket = 16 * 1024;
 inline constexpr std::size_t kMaxPasswordChars = 1024;
 inline constexpr std::size_t kMaxQualifiedUserNameChars = 1024;

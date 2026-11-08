@@ -6,6 +6,7 @@ No iPhone app is used. Windows system pairing identifies the selected phone; the
 
 ## Shared contracts
 
+- [ProductIdentity.h](windows/ProductIdentity.h): durable configured-user SID shared by MSI, service and CP, independent of installation transactions.
 - [SystemBleContract.h](windows/Bluetooth/SystemBleContract.h): ANCS/Notification Source UUIDs, binding record layout, RSSI range −100…−20 dBm, 1 dBm step, −60 dBm default, 15-second BLE deadline and 3-second evidence lifetime.
 - [SavedCredentialIpc.h](windows/SavedCredential/SavedCredentialIpc.h): IPC version **3**, operations, status/failure enums, binding and packet codecs. Unsupported versions and operations are rejected.
 - [SystemBleSession](windows/Bluetooth/SystemBleSession.cpp): reusable paired BLE endpoint and protected GATT operations. [PresenceAuthorization](windows/Bluetooth/PresenceAuthorization.h) combines communication with request-local RSSI from [RssiSampler](windows/Bluetooth/RssiSampler.h), shared with the independent diagnostic.
@@ -52,6 +53,7 @@ Unlock, request cancellation/expiry and credential consumption keep a valid conn
 | Elevated administrator at the target's unlocked console | Existing password management, binding/replace/remove and threshold save. Full target identity remains service-verified. |
 | Verified SYSTEM LogonUI in the locked physical console | Provisioning/capture, eligibility, verification start/status/cancel, one-time offer and credential claim. |
 | Verified SYSTEM LogonUI completing its claim | Native result reporting before or after the same session unlocks; no new credential access. |
+| Native system-directory MSI process with matching SYSTEM process/pipe tokens | `clearForRemoval` only, with the configured console unlocked. No other management authority. |
 
 There is one saved-credential pipe. No phone pipe, signature submission, public-key reload, desktop approval operation or desktop credential claim exists. The service pins the client process and compares actual pipe/process tokens, sessions and expected LogonUI image. Client code checks SCM identity and server PID/session. Impersonation ends before LocalSystem DPAPI access.
 

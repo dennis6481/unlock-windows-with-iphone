@@ -4,7 +4,7 @@
 #include "UnlockCredentialProvider.h"
 #include "CredentialSerialization.h"
 #include "SavedCredentialIpc.h"
-#include "../Setup/SetupIdentity.h"
+#include "../ProductIdentity.h"
 #include "../Resources/resource.h"
 #include <algorithm>
 #include <array>

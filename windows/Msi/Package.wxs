@@ -6,7 +6,7 @@
                   DowngradeErrorMessage="A newer version is already installed." />
     <MediaTemplate EmbedCab="yes" />
     <Launch Condition="Installed OR (VersionNT64 AND WindowsBuild &gt;= $(var.MinimumWindowsBuild))"
-            Message="This installer does not support the currently installed version of Unlock with iPhone®. Uninstall it from Apps in Windows Settings, then run this installer again." />
+            Message="This package requires the supported native 64-bit Windows version." />
     <Launch Condition="NOT RollbackDisabled" Message="This package requires Windows Installer rollback to be enabled." />
     <Property Id="FullProductVersion" Value="$(var.FullVersion)" />
     <Property Id="MSIRESTARTMANAGERCONTROL" Value="DisableShutdown" />

@@ -5,8 +5,12 @@
     <MajorUpgrade AllowSameVersionUpgrades="yes" Schedule="afterInstallExecute"
                   DowngradeErrorMessage="A newer version is already installed." />
     <MediaTemplate EmbedCab="yes" />
-    <Launch Condition="Installed OR (VersionNT64 AND WindowsBuild &gt;= $(var.MinimumWindowsBuild))"
-            Message="This package requires the supported native 64-bit Windows version." />
+    <Property Id="WINDOWSBUILDNUMBER" Secure="yes">
+      <RegistrySearch Id="BuildNumberSearch" Root="HKLM" Key="SOFTWARE\Microsoft\Windows NT\CurrentVersion"
+                      Name="CurrentBuildNumber" Type="raw" Bitness="always64" />
+    </Property>
+    <Launch Condition="Installed OR (VersionNT64 AND WINDOWSBUILDNUMBER &gt;= $(var.MinimumWindowsBuild))"
+            Message="$(var.ProductName) requires 64-bit Windows 10 build $(var.MinimumWindowsBuild) or later. Please update Windows and try again." />
     <Launch Condition="NOT RollbackDisabled" Message="This package requires Windows Installer rollback to be enabled." />
     <Property Id="FullProductVersion" Value="$(var.FullVersion)" />
     <Property Id="MSIRESTARTMANAGERCONTROL" Value="DisableShutdown" />

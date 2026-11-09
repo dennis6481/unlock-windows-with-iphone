@@ -214,8 +214,18 @@ function Test-MsiPackage([string]$Path, [string]$Architecture, [string]$Director
     $authoredClearCondition = $authoring.SelectSingleNode('//*[local-name()="InstallExecuteSequence"]/*[@Action="ClearForRemoval"]').Condition
     $sequence = @{}
     foreach ($row in (Read-MsiRows $database 'SELECT `Action`,`Condition`,`Sequence` FROM `InstallExecuteSequence`' 3)) { $sequence[$row[0]]=$row }
-    foreach ($node in $authoring.SelectNodes('//*[local-name()="InstallExecuteSequence"]/*[@Action]')) {
-        if ($sequence[$node.Action][1] -cne [string]$node.Condition) { throw "MSI action condition differs from authoring: $($node.Action)" }
+    $uiSequence = @{}
+    foreach ($row in (Read-MsiRows $database 'SELECT `Action`,`Condition`,`Sequence` FROM `InstallUISequence`' 3)) { $uiSequence[$row[0]]=$row }
+    foreach ($table in @('InstallUISequence','InstallExecuteSequence')) {
+        $tableSequence = if ($table -ceq 'InstallUISequence') { $uiSequence } else { $sequence }
+        foreach ($node in $authoring.SelectNodes("//*[local-name()='$table']/*[@Action]")) {
+            if ($tableSequence[$node.Action][1] -cne [string]$node.Condition) { throw "MSI action condition differs from authoring: $table/$($node.Action)" }
+        }
+        if (!$tableSequence.ContainsKey('CheckExeInstallation') -or
+            [int]$tableSequence.CheckExeInstallation[2] -le [int]$tableSequence.LaunchConditions[2] -or
+            [int]$tableSequence.CheckExeInstallation[2] -ge [int]$tableSequence.CostInitialize[2]) {
+            throw "EXE installation check must follow launch conditions before costing: $table"
+        }
     }
     if ([int]$sequence.ValidateDeployment[2] -ge [int]$sequence.InstallInitialize[2] -or
         [int]$sequence.RemoveExistingProducts[2] -le [int]$sequence.InstallExecute[2] -or

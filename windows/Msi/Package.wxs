@@ -40,13 +40,18 @@
     </DirectoryRef>
     <Icon Id="AppIcon.exe" SourceFile="$(var.MainAppSource)" />
     <Binary Id="NativeActions" SourceFile="$(var.ActionsPath)" />
+    <CustomAction Id="CheckExeInstallation" BinaryRef="NativeActions" DllEntry="CheckExeInstallation" Execute="immediate" Return="check" />
     <CustomAction Id="ValidateDeployment" BinaryRef="NativeActions" DllEntry="ValidateDeployment" Execute="immediate" Return="check" />
     <CustomAction Id="PrepareDeployment" BinaryRef="NativeActions" DllEntry="PrepareDeployment" Execute="deferred" Impersonate="no" Return="check" HideTarget="yes" />
     <CustomAction Id="RollbackDeployment" BinaryRef="NativeActions" DllEntry="RollbackDeployment" Execute="rollback" Impersonate="no" Return="check" HideTarget="yes" />
     <CustomAction Id="ClearForRemoval" BinaryRef="NativeActions" DllEntry="ClearForRemoval" Execute="deferred" Impersonate="no" Return="check" HideTarget="yes" />
     <CustomAction Id="CompleteDeployment" BinaryRef="NativeActions" DllEntry="CompleteDeployment" Execute="deferred" Impersonate="no" Return="check" HideTarget="yes" />
     <CustomAction Id="CommitDeployment" BinaryRef="NativeActions" DllEntry="CommitDeployment" Execute="commit" Impersonate="no" Return="check" HideTarget="yes" />
+    <InstallUISequence>
+      <Custom Action="CheckExeInstallation" After="LaunchConditions" Condition="NOT UPGRADINGPRODUCTCODE" />
+    </InstallUISequence>
     <InstallExecuteSequence>
+      <Custom Action="CheckExeInstallation" After="LaunchConditions" Condition="NOT UPGRADINGPRODUCTCODE" />
       <Custom Action="ValidateDeployment" Before="InstallInitialize" />
       <Custom Action="RollbackDeployment" After="InstallInitialize" Condition="NOT UPGRADINGPRODUCTCODE" />
       <Custom Action="PrepareDeployment" After="RollbackDeployment" Condition="NOT UPGRADINGPRODUCTCODE" />

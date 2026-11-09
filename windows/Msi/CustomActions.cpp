@@ -113,6 +113,15 @@ template<class Work> UINT action(MSIHANDLE install, Work work) noexcept {
         message(install, L"Unexpected native MSI action failure.", INSTALLMESSAGE_ERROR); return ERROR_INSTALL_FAILURE;
     }
 }
+void validateNoExeInstallation(bool existing) {
+    if (registryKeyExists(L"SOFTWARE\\UnlockWindowsWithIPhone\\ComponentsWizard") ||
+        registryKeyExists(L"SOFTWARE\\UnlockWindowsWithIPhone\\ComponentResult") ||
+        registryKeyExists(L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\UnlockWindowsWithIPhone") ||
+        (existing && readRegistryString(HKEY_LOCAL_MACHINE, kInstalledProductRegistryPath, kDeploymentKindValueName) != L"MSI") ||
+        fileExists(productDirectory() / L"setup.exe"))
+        fail(L"This package cannot upgrade the currently installed version. Uninstall Unlock with iPhone in Windows Settings > Apps, "
+            L"then run this package again.\n\nYou will need to save your Windows password and bind your iPhone again.");
+}
 std::filesystem::path backupRoot() { return productDataDirectory() / L"MsiRollback"; }
 std::wstring backupKey() { return std::wstring(kProductRegistryPath) + L"\\MsiRollback"; }
 
@@ -330,6 +339,12 @@ extern "C" __declspec(dllexport) void CALLBACK RequestUserExit(HWND, HINSTANCE, 
     } catch (...) { ExitProcess(ERROR_INSTALL_FAILURE); }
 }
 
+extern "C" __declspec(dllexport) UINT __stdcall CheckExeInstallation(MSIHANDLE install) {
+    return action(install, [&] {
+        validateNoExeInstallation(registryKeyExists(kInstalledProductRegistryPath));
+    });
+}
+
 extern "C" __declspec(dllexport) UINT __stdcall ValidateDeployment(MSIHANDLE install) {
     return action(install, [&] {
         SYSTEM_INFO native{}; GetNativeSystemInfo(&native);
@@ -347,13 +362,7 @@ extern "C" __declspec(dllexport) UINT __stdcall ValidateDeployment(MSIHANDLE ins
         if (registryKeyExists(kRebootKey)) fail(L"Restart Windows to complete the preceding component replacement before maintenance.");
         if (registryKeyExists(kMaintenanceKey)) fail(L"MSI maintenance is active or interrupted. Complete it or restart Windows before retrying.");
         const bool existing = registryKeyExists(kInstalledProductRegistryPath);
-        if (registryKeyExists(L"SOFTWARE\\UnlockWindowsWithIPhone\\ComponentsWizard") ||
-            registryKeyExists(L"SOFTWARE\\UnlockWindowsWithIPhone\\ComponentResult") ||
-            registryKeyExists(L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\UnlockWindowsWithIPhone") ||
-            (existing && readRegistryString(HKEY_LOCAL_MACHINE, kInstalledProductRegistryPath, kDeploymentKindValueName) != L"MSI") ||
-            fileExists(productDirectory() / L"setup.exe"))
-            fail(L"Complete any unfinished EXE installation and uninstall it with its original installer before running this MSI. "
-                L"Your saved password and iPhone binding must be configured again.");
+        validateNoExeInstallation(existing);
         if (!existing) {
             wchar_t clsid[39]{};
             if (!StringFromGUID2(unlock_windows::credential_provider::kUnlockCredentialProviderClsid, clsid, ARRAYSIZE(clsid)))

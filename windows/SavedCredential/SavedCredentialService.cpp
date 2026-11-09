@@ -152,6 +152,7 @@ struct Client final {
     bool logonUi = false;
     bool admin = false;
     bool msiMaintenance = false;
+    std::string msiIdentityFailure;
 };
 
 Client inspectClient(const HANDLE pipe) {
@@ -195,19 +196,27 @@ Client inspectClient(const HANDLE pipe) {
     client.admin = client.userSid != L"S-1-5-18" && elevatedAdmin(pipeToken.value);
     // Only the native Windows Installer server may use the removal-only identity.
     // Both process and pipe tokens have already been matched above.
+    // A SYSTEM custom-action host can run in the console session, not only session 0.
     wchar_t nativeSystem[MAX_PATH]{};
     const auto length = GetSystemDirectoryW(nativeSystem, MAX_PATH);
     if (!length || length >= MAX_PATH) fail("native system directory unavailable");
     const auto installer = std::wstring(nativeSystem) + L"\\msiexec.exe";
     const auto attributes = GetFileAttributesW(installer.c_str());
-    client.msiMaintenance = client.userSid == L"S-1-5-18" && client.session == 0 &&
-        _wcsicmp(processImage(client.process.value).c_str(), installer.c_str()) == 0 &&
-        attributes != INVALID_FILE_ATTRIBUTES && !(attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT));
-    if (client.msiMaintenance) {
+    if (client.userSid != L"S-1-5-18") {
+        client.msiIdentityFailure = "The process and pipe tokens are not SYSTEM.";
+    } else if (_wcsicmp(processImage(client.process.value).c_str(), installer.c_str()) != 0) {
+        client.msiIdentityFailure = "The SYSTEM caller image is not msiexec.exe in the native system directory.";
+    } else if (attributes == INVALID_FILE_ATTRIBUTES ||
+        (attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))) {
+        client.msiIdentityFailure = "The native system-directory msiexec.exe is missing or has disallowed file attributes.";
+    } else {
         USHORT processMachine = 0, nativeMachine = 0;
         if (!IsWow64Process2(client.process.value, &processMachine, &nativeMachine))
             fail("MSI maintenance process architecture unavailable");
         client.msiMaintenance = processMachine == IMAGE_FILE_MACHINE_UNKNOWN;
+        if (!client.msiMaintenance)
+            client.msiIdentityFailure = "The MSI caller is not a native-architecture process (processMachine=" +
+                std::to_string(processMachine) + ", nativeMachine=" + std::to_string(nativeMachine) + ").";
     }
     return client;
 }
@@ -411,7 +420,12 @@ public:
             if (unlockHistory_.pending() || unlockHistory_.summary())
                 refreshUnlockHistory(console, bindingSummary(), vault_.storedIdentity());
             expireRequest(console);
-            if (client.session != console.session && !maintenance) return response;
+            if (client.session != console.session && !maintenance) {
+                if (request.operation == Operation::clearForRemoval)
+                    setText(response.payload, "The removal caller is outside the physical console session and was not recognized as authorized native Windows Installer maintenance. " +
+                        client.msiIdentityFailure);
+                return response;
+            }
             if (removing_ && request.operation != Operation::clearForRemoval) return response;
             if (request.operation == Operation::reportUnlockResult) {
                 UnlockResult result;
@@ -651,8 +665,29 @@ public:
                 rejectTask(AuthenticationFailure::bindingChanged);
             } else if (request.operation == Operation::clearForRemoval) {
                 std::wstring targetSid;
-                if ((!client.admin && !maintenance) || console.locked || !request.payload.value.empty() ||
-                    FAILED(unlock::components::readSetupTargetSid(targetSid)) || targetSid != console.sid) return response;
+                if (!client.admin && !maintenance) {
+                    setText(response.payload, "The removal caller is neither an elevated administrator nor authorized native Windows Installer maintenance. " +
+                        client.msiIdentityFailure);
+                    return response;
+                }
+                if (console.locked) {
+                    setText(response.payload, "The physical console is locked. Unlock it as the configured Windows user and retry uninstall.");
+                    return response;
+                }
+                if (!request.payload.value.empty()) {
+                    setText(response.payload, "The removal request contains an unexpected payload.");
+                    return response;
+                }
+                const auto targetResult = unlock::components::readSetupTargetSid(targetSid);
+                if (FAILED(targetResult)) {
+                    setText(response.payload, "The configured Windows user could not be read (HRESULT=" +
+                        std::to_string(static_cast<unsigned long>(targetResult)) + ").");
+                    return response;
+                }
+                if (targetSid != console.sid) {
+                    setText(response.payload, "The physical console user differs from the configured Windows user. Sign in at the physical console as the configured user and retry uninstall.");
+                    return response;
+                }
                 vault_.clear();
                 enrollmentStore_.remove();
                 clearUnlockHistory();
@@ -732,7 +767,8 @@ public:
             response.payload.clear();
             if (request.operation == Operation::beginBinding || request.operation == Operation::saveThreshold ||
                 request.operation == Operation::removeBinding || request.operation == Operation::bindingStatus ||
-                request.operation == Operation::bindingTaskStatus) setText(response.payload, winrt::to_string(message));
+                request.operation == Operation::bindingTaskStatus || request.operation == Operation::clearForRemoval)
+                setText(response.payload, winrt::to_string(message));
         }
         return response;
     }

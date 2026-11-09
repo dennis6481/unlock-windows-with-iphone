@@ -468,9 +468,18 @@ extern "C" __declspec(dllexport) UINT __stdcall ClearForRemoval(MSIHANDLE instal
             L" stage=" + unlock_windows::saved_credential::callStageName(diagnostics.stage) +
             L" Win32=" + std::to_wstring(diagnostics.win32Error);
         message(install, detail);
-        if (!replied || reply.result != unlock_windows::saved_credential::Result::success)
-            fail(L"The service did not confirm credential and binding deletion. Unlock the configured console and retry; the service must be running. " +
+        if (!replied || reply.result != unlock_windows::saved_credential::Result::success) {
+            std::wstring reason;
+            if (!replied)
+                reason = L"Communication with the credential service failed. Check that the service is running and retry. ";
+            else if (reply.payload.value.empty())
+                reason = L"The service returned no failure reason. ";
+            else
+                reason = L"Service: " + std::wstring(winrt::to_hstring(
+                    std::string(reply.payload.value.begin(), reply.payload.value.end()))) + L" ";
+            fail(L"The service did not confirm credential and binding deletion. " + reason +
                 std::wstring(notSent || rejected ? L"This request did not authorize removal. " : L"Data may already have been deleted and cannot be restored. ") + detail);
+        }
         message(install, L"Password and binding deletion confirmed. This deletion is irreversible; later MSI rollback cannot restore them.");
         writeRegistryDword(HKEY_LOCAL_MACHINE, backupKey().c_str(), L"Cleared", 1);
         removeUserStartup(deferredSid(install));

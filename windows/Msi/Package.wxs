@@ -39,9 +39,11 @@
       </Component>
     </DirectoryRef>
     <Icon Id="AppIcon.exe" SourceFile="$(var.MainAppSource)" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon.exe" />
     <Binary Id="NativeActions" SourceFile="$(var.ActionsPath)" />
     <CustomAction Id="CheckExeInstallation" BinaryRef="NativeActions" DllEntry="CheckExeInstallation" Execute="immediate" Return="check" />
     <CustomAction Id="ValidateDeployment" BinaryRef="NativeActions" DllEntry="ValidateDeployment" Execute="immediate" Return="check" />
+    <CustomAction Id="CloseApplication" BinaryRef="NativeActions" DllEntry="CloseApplication" Execute="immediate" Return="check" />
     <CustomAction Id="PrepareDeployment" BinaryRef="NativeActions" DllEntry="PrepareDeployment" Execute="deferred" Impersonate="no" Return="check" HideTarget="yes" />
     <CustomAction Id="RollbackDeployment" BinaryRef="NativeActions" DllEntry="RollbackDeployment" Execute="rollback" Impersonate="no" Return="check" HideTarget="yes" />
     <CustomAction Id="ClearForRemoval" BinaryRef="NativeActions" DllEntry="ClearForRemoval" Execute="deferred" Impersonate="no" Return="check" HideTarget="yes" />
@@ -52,7 +54,8 @@
     </InstallUISequence>
     <InstallExecuteSequence>
       <Custom Action="CheckExeInstallation" After="LaunchConditions" Condition="NOT UPGRADINGPRODUCTCODE" />
-      <Custom Action="ValidateDeployment" Before="InstallInitialize" />
+      <Custom Action="ValidateDeployment" Before="CloseApplication" />
+      <Custom Action="CloseApplication" Before="InstallValidate" Condition="UILevel &gt;= 4 AND NOT UPGRADINGPRODUCTCODE" />
       <Custom Action="RollbackDeployment" After="InstallInitialize" Condition="NOT UPGRADINGPRODUCTCODE" />
       <Custom Action="PrepareDeployment" After="RollbackDeployment" Condition="NOT UPGRADINGPRODUCTCODE" />
       <Custom Action="ClearForRemoval" Before="StopServices" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />

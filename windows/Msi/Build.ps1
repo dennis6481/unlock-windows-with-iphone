@@ -227,7 +227,9 @@ function Test-MsiPackage([string]$Path, [string]$Architecture, [string]$Director
             throw "EXE installation check must follow launch conditions before costing: $table"
         }
     }
-    if ([int]$sequence.ValidateDeployment[2] -ge [int]$sequence.InstallInitialize[2] -or
+    if (!$sequence.ContainsKey('CloseApplication') -or
+        [int]$sequence.ValidateDeployment[2] -ge [int]$sequence.CloseApplication[2] -or
+        [int]$sequence.CloseApplication[2] -ge [int]$sequence.InstallValidate[2] -or
         [int]$sequence.RemoveExistingProducts[2] -le [int]$sequence.InstallExecute[2] -or
         [int]$sequence.RemoveExistingProducts[2] -ge [int]$sequence.InstallFinalize[2] -or
         [int]$sequence.RollbackDeployment[2] -le [int]$sequence.InstallInitialize[2] -or

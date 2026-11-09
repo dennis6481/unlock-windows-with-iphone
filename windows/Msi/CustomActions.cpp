@@ -409,6 +409,13 @@ extern "C" __declspec(dllexport) UINT __stdcall ValidateDeployment(MSIHANDLE ins
         for (const auto name : {L"PrepareDeployment", L"RollbackDeployment", L"CompleteDeployment", L"CommitDeployment", L"ClearForRemoval"}) set(install, name, data);
     });
 }
+extern "C" __declspec(dllexport) UINT __stdcall CloseApplication(MSIHANDLE install) {
+    return action(install, [&] {
+        // Interactive immediate actions can reach the user's desktop before InstallValidate.
+        // Silent maintenance retains the session-0 exit host in PrepareDeployment.
+        stopTray(property(install, L"TARGETSID"));
+    });
+}
 extern "C" __declspec(dllexport) UINT __stdcall PrepareDeployment(MSIHANDLE install) {
     return action(install, [&] {
         const auto sid = deferredSid(install);

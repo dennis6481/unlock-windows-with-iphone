@@ -6,7 +6,7 @@ The LocalSystem service is the Windows authority for bindings, presence verifica
 
 ## Password protection
 
-The vault uses **LocalSystem user-scope DPAPI**, with `CRYPTPROTECT_UI_FORBIDDEN`, not `CRYPTPROTECT_LOCAL_MACHINE`. Password files/directories have SYSTEM-only ACLs. Controlled plaintext is cleared as early as practical. Credentials are packed by CP inside LogonUI, not by the service in Session 0.
+The vault uses **LocalSystem user-scope DPAPI**, with `CRYPTPROTECT_UI_FORBIDDEN`, not `CRYPTPROTECT_LOCAL_MACHINE`. The vault is stored at `%ProgramData%\UnlockWindowsWithIPhone\Credentials\saved-credential.dat`; the `Credentials` directory and its files have SYSTEM-only ACLs. Controlled plaintext is cleared as early as practical. Credentials are packed by CP inside LogonUI, not by the service in Session 0.
 
 This protection does not resist an administrator who obtains SYSTEM or a compromised kernel. Binding stores SID, BLE endpoint ID, display name and threshold (with unused legacy layout fields) using machine-scope DPAPI with SYSTEM/administrator-only writes. Read [SECURITY.md](../../SECURITY.md) for limits.
 

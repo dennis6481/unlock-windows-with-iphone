@@ -415,7 +415,7 @@ extern "C" __declspec(dllexport) UINT __stdcall PrepareDeployment(MSIHANDLE inst
         const auto data = actionData(install);
         if (deferredOperation(install) == Operation::firstInstall && consoleUserSid() != sid) fail(L"Physical console user changed during installation.");
         if (deferredOperation(install) == Operation::firstInstall) {
-            const auto vault = setupKnownFolder(FOLDERID_ProgramData) / unlock_windows::saved_credential::kVaultDirectoryName;
+            const auto vault = productDataDirectory() / unlock_windows::saved_credential::kVaultDirectoryName;
             bool vaultHasData = false;
             const auto attributes = GetFileAttributesW(vault.c_str());
             if (attributes != INVALID_FILE_ATTRIBUTES) {

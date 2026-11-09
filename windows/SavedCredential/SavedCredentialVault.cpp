@@ -1,6 +1,8 @@
 // Created by Rui MA on 30 Sep 2026
 
 #include "SavedCredentialVault.h"
+#include "../ProductIdentity.h"
+#include "../ProtectedStorage.h"
 
 #include <bcrypt.h>
 #include <dpapi.h>
@@ -234,7 +236,9 @@ bool fileExists(const std::filesystem::path& file) {
 
 Vault::Vault() {
     requireSystemContext();
-    directory_ = programData() / kVaultDirectoryName;
+    const auto root = programData() / unlock::components::kProductDataDirectoryName;
+    storage::ensureProtectedDirectory(root, true);
+    directory_ = root / kVaultDirectoryName;
     file_ = directory_ / L"saved-credential.dat";
     SecurityDescriptor security;
     auto attributes = security.attributes();

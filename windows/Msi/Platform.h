@@ -281,6 +281,6 @@ inline bool fileExists(const std::filesystem::path& path) {
     return setupKnownFolder(FOLDERID_CommonPrograms) / (std::wstring(UNLOCK_PRODUCT_DISPLAY_NAME) + L".lnk");
 }
 [[nodiscard]] inline std::filesystem::path productDataDirectory() {
-    return setupKnownFolder(FOLDERID_ProgramData) / unlock_windows::system_ble::kEnrollmentDataDirectoryName;
+    return setupKnownFolder(FOLDERID_ProgramData) / kProductDataDirectoryName;
 }
 }

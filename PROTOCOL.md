@@ -29,7 +29,7 @@ The read-only `serviceDiagnostics` IPC operation returns the latest request's ve
 
 The encrypted version-2 record retains its byte layout. It stores target SID, BLE endpoint ID, display name and threshold; legacy Classic ID and ContainerId slots are unused for identity verification. New bindings write empty/zero legacy values; old records remain readable without migration, and threshold edits preserve their values.
 
-Deploy matching desktop/service binaries; older software cannot read new bindings. Unsupported formats, corruption and permission failures remain errors, distinct from an absent record. Password storage is unchanged.
+Deploy matching desktop/service binaries; older software cannot read new bindings. Unsupported formats, corruption and permission failures remain errors, distinct from an absent record.
 
 ## Request and one-time approval
 

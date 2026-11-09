@@ -3,6 +3,7 @@
 #include "EnrollmentStore.h"
 #include "../SavedCredential/SavedCredentialIpc.h"
 #include "../ProtectedStorage.h"
+#include "../ProductIdentity.h"
 
 #include <Windows.h>
 #include <aclapi.h>
@@ -237,7 +238,7 @@ std::wstring EnrollmentStore::defaultPath() {
         throw std::runtime_error(win32Error("GetEnvironmentVariableW(ProgramData)"));
     }
     programData.resize(length);
-    return programData + L"\\" + kEnrollmentDataDirectoryName + L"\\" + kEnrollmentFileName;
+    return programData + L"\\" + unlock::components::kProductDataDirectoryName + L"\\" + kEnrollmentFileName;
 }
 
 EnrollmentStore::EnrollmentStore(std::wstring path) : path_(std::move(path)) {

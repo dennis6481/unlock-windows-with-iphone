@@ -9,7 +9,7 @@
 
 namespace unlock_windows::saved_credential {
 
-inline constexpr wchar_t kVaultDirectoryName[] = L"UnlockWindowsSavedCredential";
+inline constexpr wchar_t kVaultDirectoryName[] = L"Credentials";
 
 class Vault final {
 public:

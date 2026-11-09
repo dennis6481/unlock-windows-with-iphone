@@ -239,7 +239,7 @@ Vault::Vault() {
     const auto root = programData() / unlock::components::kProductDataDirectoryName;
     storage::ensureProtectedDirectory(root, true);
     directory_ = root / kVaultDirectoryName;
-    file_ = directory_ / L"saved-credential.dat";
+    file_ = directory_ / L"credential.dat";
     SecurityDescriptor security;
     auto attributes = security.attributes();
     if (!CreateDirectoryW(directory_.c_str(), &attributes) && GetLastError() != ERROR_ALREADY_EXISTS) {

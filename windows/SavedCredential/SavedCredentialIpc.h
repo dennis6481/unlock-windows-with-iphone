@@ -24,7 +24,7 @@ inline constexpr std::size_t kMaxQualifiedUserNameChars = 1024;
 inline constexpr std::size_t kNonceSize = 16;
 inline constexpr std::uint16_t kProtocolVersion = 3;
 inline constexpr DWORD kPipeTransferLifetimeMs = 2000;
-inline constexpr wchar_t kBindingCancelPrefix[] = L"Global\\UnlockWindowsWithIPhone-Pairing-";
+inline constexpr wchar_t kBindingCancelPrefix[] = L"Global\\UnlockWithIPhone-Pairing-";
 
 enum class Operation : std::uint16_t {
     captureIdentity = 1,

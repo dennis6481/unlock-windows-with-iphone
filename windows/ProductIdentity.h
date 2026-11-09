@@ -9,14 +9,14 @@
 #include <string_view>
 
 namespace unlock::components {
-inline constexpr wchar_t kProductRegistryPath[] = L"SOFTWARE\\UnlockWindowsWithIPhone";
-inline constexpr wchar_t kInstalledProductRegistryPath[] = L"SOFTWARE\\UnlockWindowsWithIPhone\\InstalledProduct";
+inline constexpr wchar_t kProductRegistryPath[] = L"SOFTWARE\\UnlockWithIPhone";
+inline constexpr wchar_t kInstalledProductRegistryPath[] = L"SOFTWARE\\UnlockWithIPhone\\InstalledProduct";
 inline constexpr wchar_t kTargetSidValueName[] = L"TargetSid";
 inline constexpr wchar_t kInstalledVersionValueName[] = L"InstalledVersion";
 inline constexpr wchar_t kDeploymentKindValueName[] = L"DeploymentKind";
 inline constexpr wchar_t kMsiProductCodeValueName[] = L"MsiProductCode";
 inline constexpr wchar_t kDesktopDirectoryName[] = L"Unlock Windows with iPhone";
-inline constexpr wchar_t kProductDataDirectoryName[] = L"UnlockWindowsWithIPhone";
+inline constexpr wchar_t kProductDataDirectoryName[] = L"UnlockWithIPhone";
 inline constexpr wchar_t kStartupRegistryPath[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 inline constexpr wchar_t kSetupPromptValueName[] = L"SetupPromptPending";
 inline HRESULT readProductDirectory(std::filesystem::path& directory) {

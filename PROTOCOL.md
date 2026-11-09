@@ -25,7 +25,7 @@ The read-only `serviceDiagnostics` IPC operation returns the latest request's ve
 
 ## Registration storage
 
-`%ProgramData%\UnlockWindowsWithIPhone\enrollment.dat` retains machine-bound DPAPI encryption, protected pending-file creation, flushing and atomic replacement. SYSTEM and Administrators alone can write the file and its parent directory. The service owns storage; ordinary desktop clients read non-sensitive status over IPC.
+`%ProgramData%\UnlockWithIPhone\binding.dat` retains machine-bound DPAPI encryption, protected pending-file creation, flushing and atomic replacement. SYSTEM and Administrators alone can write the file and its parent directory. The service owns storage; ordinary desktop clients read non-sensitive status over IPC.
 
 The encrypted version-2 record retains its byte layout. It stores target SID, BLE endpoint ID, display name and threshold; legacy Classic ID and ContainerId slots are unused for identity verification. New bindings write empty/zero legacy values; old records remain readable without migration, and threshold edits preserve their values.
 

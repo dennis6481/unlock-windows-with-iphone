@@ -27,7 +27,7 @@ int main() {
         require(GetTempPathW(MAX_PATH, temporary) != 0, "Cannot locate temporary directory");
         directory = std::filesystem::path(temporary) / (L"unlock-binding-tests-" + std::to_wstring(GetCurrentProcessId()));
         storage::ensureProtectedDirectory(directory, true);
-        const auto path = directory / L"enrollment.dat";
+        const auto path = directory / ble::kEnrollmentFileName;
         ble::EnrollmentStore store(path.wstring());
         require(!store.load(), "Absent binding must remain absent");
         const ble::BindingRecord first{ble::EnrollmentStore::currentUserSid(), L"classic-one", L"ble-one",

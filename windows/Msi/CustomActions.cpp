@@ -114,9 +114,9 @@ template<class Work> UINT action(MSIHANDLE install, Work work) noexcept {
     }
 }
 void validateNoExeInstallation(bool existing) {
-    if (registryKeyExists(L"SOFTWARE\\UnlockWindowsWithIPhone\\ComponentsWizard") ||
-        registryKeyExists(L"SOFTWARE\\UnlockWindowsWithIPhone\\ComponentResult") ||
-        registryKeyExists(L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\UnlockWindowsWithIPhone") ||
+    if (registryKeyExists(L"SOFTWARE\\UnlockWithIPhone\\ComponentsWizard") ||
+        registryKeyExists(L"SOFTWARE\\UnlockWithIPhone\\ComponentResult") ||
+        registryKeyExists(L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\UnlockWithIPhone") ||
         (existing && readRegistryString(HKEY_LOCAL_MACHINE, kInstalledProductRegistryPath, kDeploymentKindValueName) != L"MSI") ||
         fileExists(productDirectory() / L"setup.exe"))
         fail(L"This package cannot upgrade the currently installed version. Uninstall Unlock with iPhone in Windows Settings > Apps, "

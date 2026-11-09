@@ -83,7 +83,7 @@ public:
 
     bool prepare() {
         desktop_ui::require(ProcessIdToSessionId(GetCurrentProcessId(), &session_), "ProcessIdToSessionId");
-        singleton_ = CreateMutexW(nullptr, FALSE, L"Local\\UnlockWindowsWithIPhone-DesktopHost");
+        singleton_ = CreateMutexW(nullptr, FALSE, L"Local\\UnlockWithIPhone-DesktopHost");
         desktop_ui::require(singleton_ != nullptr, "CreateMutexW");
         if (GetLastError() != ERROR_ALREADY_EXISTS) {
             if (!suppressPrompt_ && firstSetupPrompt()) setup_ = true;

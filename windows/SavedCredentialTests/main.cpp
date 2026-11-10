@@ -213,7 +213,7 @@ void testCredentialSummary() {
 
 void testAuthenticationOperationPackets() {
     for (const std::uint16_t operation : {std::uint16_t{12}, std::uint16_t{6},
-            std::uint16_t{9}, std::uint16_t{13}, std::uint16_t{14}, std::uint16_t{15},
+            std::uint16_t{8}, std::uint16_t{9}, std::uint16_t{13}, std::uint16_t{14}, std::uint16_t{15},
             std::uint16_t{16}, std::uint16_t{17}, std::uint16_t{18}, std::uint16_t{19}, std::uint16_t{20}, std::uint16_t{26},
             std::uint16_t{27}, std::uint16_t{28}, std::uint16_t{29}, std::uint16_t{0}, std::uint16_t{65535}}) {
         PipePair pipe;
@@ -563,7 +563,7 @@ void testAutoSubmitOffer() {
 void testPresenceContracts() {
     using namespace unlock_windows::system_ble;
     require(kProtocolVersion == 3, "only IPC v3 is supported");
-    for (const auto unknown : {10, 11, 13, 14, 17}) require(!isKnownOperation(static_cast<std::uint16_t>(unknown)), "unsupported operation must reject");
+    for (const auto unknown : {8, 10, 11, 13, 14, 17}) require(!isKnownOperation(static_cast<std::uint16_t>(unknown)), "unsupported operation must reject");
     for (auto operation : {Operation::claimCredential, Operation::beginVerification, Operation::takeAutoSubmitOffer,
             Operation::captureIdentity, Operation::captureProvisioningIdentity, Operation::verificationStatus})
         require(requiresLogonUi(operation), "desktop must not reach LogonUI operations");
@@ -1073,7 +1073,11 @@ void testConsoleLockState() {
     require(rejects(&info, sizeof(info), 7), "unknown console lock state rejects");
 }
 
-int main() {
+int runVaultRemovalTests();
+
+int main(int argc, char** argv) {
+    if (argc == 2 && std::string(argv[1]) == "--vault-removal") return runVaultRemovalTests();
+    require(argc == 1, "Unknown test arguments");
     testBindingSummaryReadback();
     testEndpointSelection();
     testPreparationState();

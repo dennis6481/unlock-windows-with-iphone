@@ -369,6 +369,15 @@ void EnrollmentStore::save(const BindingRecord& record, const std::function<void
 
 void EnrollmentStore::remove() const {
     WriterLock writer;
+    const auto directory = std::filesystem::path(path_).parent_path();
+    for (const auto& entry : {directory, std::filesystem::path(path_)}) {
+        if (GetFileAttributesW(entry.c_str()) == INVALID_FILE_ATTRIBUTES) {
+            const auto error = GetLastError();
+            if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) return;
+            throw winrt::hresult_error(HRESULT_FROM_WIN32(error));
+        }
+        storage::verifyProtectedPath(entry, entry == directory);
+    }
     if (DeleteFileW(path_.c_str()) == FALSE) {
         const DWORD error = GetLastError();
         if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) {
@@ -376,6 +385,11 @@ void EnrollmentStore::remove() const {
         }
         throw std::runtime_error(win32Error("DeleteFile(enrollment)"));
     }
+    if (GetFileAttributesW(path_.c_str()) != INVALID_FILE_ATTRIBUTES)
+        throw std::runtime_error("Binding deletion unconfirmed");
+    const auto error = GetLastError();
+    if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND)
+        throw winrt::hresult_error(HRESULT_FROM_WIN32(error));
 }
 
 } // namespace unlock_windows::system_ble

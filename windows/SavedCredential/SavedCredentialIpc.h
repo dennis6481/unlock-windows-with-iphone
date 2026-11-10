@@ -33,7 +33,6 @@ enum class Operation : std::uint16_t {
     updateCredential = 4,
     clearCredential = 5,
     claimCredential = 7,
-    clearForRemoval = 8,
     beginVerification = 9,
     takeAutoSubmitOffer = 12,
     verificationStatus = 15,
@@ -53,7 +52,6 @@ inline constexpr bool isKnownOperation(const std::uint16_t value) noexcept {
     case Operation::updateCredential:
     case Operation::clearCredential:
     case Operation::claimCredential:
-    case Operation::clearForRemoval:
     case Operation::beginVerification:
     case Operation::takeAutoSubmitOffer:
     case Operation::verificationStatus:

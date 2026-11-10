@@ -6,6 +6,7 @@
 #include "../ProtectedStorage.h"
 #include "../DesktopApp/DesktopApp.h"
 #include "../Enrollment/EnrollmentSession.h"
+#include "../Enrollment/EnrollmentStore.h"
 #include "../SavedCredential/SavedCredentialVault.h"
 #include <msiquery.h>
 #include <wtsapi32.h>
@@ -249,21 +250,17 @@ void clearBackup() {
     deleteRegistryTree(HKEY_LOCAL_MACHINE, backupKey().c_str());
 }
 void restoreServiceState() {
-    // MSI rolls its own service controls back. Undo a native start or reset the
-    // removal-only state when a clear request may have reached the service.
+    // MSI rolls its own service controls back. Undo a native post-install start.
     const bool wasRunning = readRegistryDword(HKEY_LOCAL_MACHINE, backupKey().c_str(), L"WasRunning") == 1;
     if (!wasRunning && readRegistryDword(HKEY_LOCAL_MACHINE, backupKey().c_str(), L"StartedService") == 1)
         stopServiceNormally();
-    if (wasRunning && readRegistryDword(HKEY_LOCAL_MACHINE, backupKey().c_str(), L"ClearAttempted") == 1 && !pendingReplacement())
-        startService();
 }
 std::wstring deferredSid(MSIHANDLE install) {
     const auto sid = actionData(install)[1];
     validateTargetSid(sid); return sid;
 }
 bool launchAsTarget(const std::wstring& sid, const std::filesystem::path& executable,
-    const std::wstring& arguments, bool wait) {
-    const DWORD session = WTSGetActiveConsoleSessionId();
+    const std::wstring& arguments, bool wait, DWORD session = WTSGetActiveConsoleSessionId()) {
     if (session == 0xffffffff) return false;
     ScopedHandle token;
     if (!WTSQueryUserToken(session, &token.value)) {
@@ -316,10 +313,13 @@ void stopTargetTray(const std::wstring& sid) {
     const auto helper = backupRoot() / kCustomActionFile;
     checkWin32(CopyFileW(path.c_str(), helper.c_str(), TRUE), L"Stage normal-exit module");
     const auto arguments = L"\"" + helper.wstring() + L"\",RequestUserExit " + sid;
-    (void)launchAsTarget(sid, system32Directory() / L"rundll32.exe", arguments, true);
+    for (const auto session : mainInstanceSessions(sid)) {
+        if (!launchAsTarget(sid, system32Directory() / L"rundll32.exe", arguments, true, session))
+            fail(L"The app session has no target-user token. Close the app before maintenance.");
+    }
     checkWin32(DeleteFileW(helper.c_str()), L"Release normal-exit module");
     // Confirm all installed app instances are gone, including when the target is absent.
-    stopTray(sid);
+    if (mainInstancesPresent()) fail(L"An installed app instance is still running. Close it before maintenance. No process was killed.");
 }
 }
 
@@ -406,7 +406,7 @@ extern "C" __declspec(dllexport) UINT __stdcall ValidateDeployment(MSIHANDLE ins
             fail(L"An unfinished MSI rollback requires attention. No changes were made.");
         set(install, L"TARGETSID", sid);
         const auto data = std::to_wstring(static_cast<unsigned>(op)) + L"|" + sid + (serviceRunning() ? L"|1" : L"|0");
-        for (const auto name : {L"PrepareDeployment", L"RollbackDeployment", L"CompleteDeployment", L"CommitDeployment", L"ClearForRemoval"}) set(install, name, data);
+        for (const auto name : {L"PrepareDeployment", L"RollbackDeployment", L"CompleteDeployment", L"CommitDeployment", L"RemoveProductData"}) set(install, name, data);
     });
 }
 extern "C" __declspec(dllexport) UINT __stdcall CloseApplication(MSIHANDLE install) {
@@ -450,55 +450,21 @@ extern "C" __declspec(dllexport) UINT __stdcall PrepareDeployment(MSIHANDLE inst
 }
 extern "C" __declspec(dllexport) UINT __stdcall RollbackDeployment(MSIHANDLE install) {
     return action(install, [&] {
-        if (readRegistryDword(HKEY_LOCAL_MACHINE, backupKey().c_str(), L"ClearAttempted") == 1)
+        if (readRegistryDword(HKEY_LOCAL_MACHINE, backupKey().c_str(), L"DataDeletionStarted") == 1)
         {
-            const bool confirmed = readRegistryDword(HKEY_LOCAL_MACHINE, backupKey().c_str(), L"Cleared") == 1;
+            const bool confirmed = readRegistryDword(HKEY_LOCAL_MACHINE, backupKey().c_str(), L"DataDeletionCompleted") == 1;
             message(install, confirmed ? L"Removal failed after password and binding deletion. Deployment rollback cannot restore the deleted credentials."
-                : L"Removal stopped without a complete clear acknowledgment. Data may already have been deleted; deployment rollback cannot restore deleted credentials.", INSTALLMESSAGE_WARNING);
-            stopServiceNormally();
+                : L"Removal failed during data deletion. Password or binding data may have been deleted; deployment rollback cannot restore them. Configure the product again before use.", INSTALLMESSAGE_WARNING);
         }
         restoreUser(); restoreServiceState();
         clearBackup();
         deleteRegistryTree(HKEY_LOCAL_MACHINE, kMaintenanceKey);
     });
 }
-extern "C" __declspec(dllexport) UINT __stdcall ClearForRemoval(MSIHANDLE install) {
+extern "C" __declspec(dllexport) UINT __stdcall RemoveProductData(MSIHANDLE install) {
     return action(install, [&] {
         if (deferredOperation(install) != Operation::remove) fail(L"Credential deletion is permitted only for active uninstall.");
         if (configuredSid() != deferredSid(install)) fail(L"Configured user changed before removal.");
-        unlock_windows::saved_credential::Packet reply;
-        unlock_windows::saved_credential::CallDiagnostics diagnostics;
-        writeRegistryDword(HKEY_LOCAL_MACHINE, backupKey().c_str(), L"ClearAttempted", 1);
-        const bool replied = unlock_windows::saved_credential::call(unlock_windows::saved_credential::Operation::clearForRemoval,
-            unlock_windows::saved_credential::SensitiveBytes{}, reply,
-            unlock_windows::saved_credential::kPipeTransferLifetimeMs, &diagnostics);
-        using unlock_windows::saved_credential::CallStage;
-        const bool notSent = !replied && (diagnostics.stage == CallStage::requestValidation ||
-            diagnostics.stage == CallStage::waitForPipe || diagnostics.stage == CallStage::openPipe ||
-            diagnostics.stage == CallStage::serverVerification);
-        const bool rejected = replied && reply.result != unlock_windows::saved_credential::Result::success &&
-            reply.result != unlock_windows::saved_credential::Result::internalError;
-        if (notSent || rejected)
-            writeRegistryDword(HKEY_LOCAL_MACHINE, backupKey().c_str(), L"ClearAttempted", 0);
-        const auto detail = L"clearForRemoval result=" + std::to_wstring(static_cast<unsigned>(reply.result)) +
-            L" stage=" + unlock_windows::saved_credential::callStageName(diagnostics.stage) +
-            L" Win32=" + std::to_wstring(diagnostics.win32Error);
-        message(install, detail);
-        if (!replied || reply.result != unlock_windows::saved_credential::Result::success) {
-            std::wstring reason;
-            if (!replied)
-                reason = L"Communication with the credential service failed. Check that the service is running and retry. ";
-            else if (reply.payload.value.empty())
-                reason = L"The service returned no failure reason. ";
-            else
-                reason = L"Service: " + std::wstring(winrt::to_hstring(
-                    std::string(reply.payload.value.begin(), reply.payload.value.end()))) + L" ";
-            fail(L"The service did not confirm credential and binding deletion. " + reason +
-                std::wstring(notSent || rejected ? L"This request did not authorize removal. " : L"Data may already have been deleted and cannot be restored. ") + detail);
-        }
-        message(install, L"Password and binding deletion confirmed. This deletion is irreversible; later MSI rollback cannot restore them.");
-        writeRegistryDword(HKEY_LOCAL_MACHINE, backupKey().c_str(), L"Cleared", 1);
-        removeUserStartup(deferredSid(install));
         withUserHive(deferredSid(install), [](HKEY hive) {
             ScopedRegistryKey key;
             const auto opened = RegOpenKeyExW(hive, kProductRegistryPath, 0, KEY_SET_VALUE, &key.value);
@@ -507,6 +473,17 @@ extern "C" __declspec(dllexport) UINT __stdcall ClearForRemoval(MSIHANDLE instal
             const auto removed = RegDeleteValueW(key.value, kSetupPromptValueName);
             if (removed != ERROR_FILE_NOT_FOUND) checkRegistry(removed, L"Remove user setup marker");
         });
+        if (serviceState() != SERVICE_STOPPED)
+            fail(L"The credential service is not stopped. No password or binding data was deleted.");
+        waitForServiceExit();
+        if (serviceState() != SERVICE_STOPPED)
+            fail(L"The credential service restarted. No password or binding data was deleted.");
+        // Deletion is irreversible, including when a later MSI action rolls back.
+        writeRegistryDword(HKEY_LOCAL_MACHINE, backupKey().c_str(), L"DataDeletionStarted", 1);
+        unlock_windows::saved_credential::Vault::clearStored();
+        unlock_windows::system_ble::EnrollmentStore{}.remove();
+        writeRegistryDword(HKEY_LOCAL_MACHINE, backupKey().c_str(), L"DataDeletionCompleted", 1);
+        message(install, L"Password and binding deletion confirmed. Later MSI rollback cannot restore these data.");
     });
 }
 extern "C" __declspec(dllexport) UINT __stdcall CompleteDeployment(MSIHANDLE install) {

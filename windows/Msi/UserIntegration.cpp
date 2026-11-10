@@ -12,6 +12,7 @@
 #include <wtsapi32.h>
 #include <shlobj.h>
 #include <array>
+#include <algorithm>
 #include <cstring>
 #include <memory>
 #include <vector>
@@ -37,26 +38,31 @@ struct TraySearch {
     DWORD session = 0;
     std::wstring error;
 };
-std::vector<std::unique_ptr<ScopedHandle>> pinMainInstances(const std::filesystem::path& expected) {
+std::vector<std::unique_ptr<ScopedHandle>> pinInstances(const std::filesystem::path& expected,
+    DWORD session = MAXDWORD) {
     ScopedHandle snapshot(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0));
-    checkWin32(snapshot.value != INVALID_HANDLE_VALUE, L"Enumerate main application processes");
+    checkWin32(snapshot.value != INVALID_HANDLE_VALUE, L"Enumerate installed processes");
     PROCESSENTRY32W entry{};
     entry.dwSize = sizeof(entry);
     std::vector<std::unique_ptr<ScopedHandle>> instances;
     BOOL found = Process32FirstW(snapshot.value, &entry);
     while (found) {
-        if (_wcsicmp(entry.szExeFile, kMainAppFile) == 0) {
+        if (_wcsicmp(entry.szExeFile, expected.filename().c_str()) == 0) {
             auto process = std::make_unique<ScopedHandle>(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE,
                 FALSE, entry.th32ProcessID));
-            checkWin32(process->value != nullptr, L"Pin main application instance");
+            checkWin32(process->value != nullptr, L"Pin installed process");
             std::array<wchar_t, 32768> image{};
             DWORD size = static_cast<DWORD>(image.size());
-            checkWin32(QueryFullProcessImageNameW(process->value, 0, image.data(), &size), L"Read main application image");
-            if (_wcsicmp(image.data(), expected.c_str()) == 0) instances.push_back(std::move(process));
+            checkWin32(QueryFullProcessImageNameW(process->value, 0, image.data(), &size), L"Read installed process image");
+            if (_wcsicmp(image.data(), expected.c_str()) == 0) {
+                DWORD processSession = 0;
+                checkWin32(ProcessIdToSessionId(entry.th32ProcessID, &processSession), L"Read installed process session");
+                if (session == MAXDWORD || processSession == session) instances.push_back(std::move(process));
+            }
         }
         found = Process32NextW(snapshot.value, &entry);
     }
-    if (GetLastError() != ERROR_NO_MORE_FILES) checkWin32(FALSE, L"Read main application process list");
+    if (GetLastError() != ERROR_NO_MORE_FILES) checkWin32(FALSE, L"Read installed process list");
     return instances;
 }
 BOOL CALLBACK visitTray(HWND window, LPARAM value) {
@@ -74,7 +80,7 @@ BOOL CALLBACK visitTray(HWND window, LPARAM value) {
         if (_wcsicmp(image.data(), search.expected.c_str()) != 0 || processSid(process.value) != search.sid)
             throw ComponentError(L"Bluetooth tray window does not match the installed image and target user.");
         if (session != search.session) {
-            throw ComponentError(L"Bluetooth tray is in a different console session. Operation paused.");
+            throw ComponentError(L"Bluetooth tray is in a different session from the exit host. Operation paused.");
         }
         DWORD confirmed = 0; GetWindowThreadProcessId(window, &confirmed);
         if (confirmed != pid || WaitForSingleObject(process.value, 0) != WAIT_TIMEOUT)
@@ -178,9 +184,10 @@ void registerUserStartup(const std::wstring& targetSid) {
     });
 }
 void stopTray(const std::wstring& targetSid) {
-
-    TraySearch search{productDirectory() / kMainAppFile, targetSid, WTSGetActiveConsoleSessionId()};
-    const auto instances = pinMainInstances(search.expected);
+    DWORD session = 0;
+    checkWin32(ProcessIdToSessionId(GetCurrentProcessId(), &session), L"Read normal-exit host session");
+    TraySearch search{productDirectory() / kMainAppFile, targetSid, session};
+    const auto instances = pinInstances(search.expected, session);
     EnumWindows(visitTray, reinterpret_cast<LPARAM>(&search));
     if (!search.error.empty()) throw ComponentError(search.error);
     for (const auto& process : instances) {
@@ -189,8 +196,27 @@ void stopTray(const std::wstring& targetSid) {
         if (waited != WAIT_OBJECT_0)
             throw ComponentError(L"An Unlock with iPhone operation is still running. Close its password or manual enrollment window, then continue maintenance. No process was killed.");
     }
-    if (!pinMainInstances(search.expected).empty())
+    if (!pinInstances(search.expected, session).empty())
         throw ComponentError(L"A main application instance started during maintenance. Close it before continuing. No process was killed.");
 }
-bool mainInstancesPresent() { return !pinMainInstances(productDirectory() / kMainAppFile).empty(); }
+bool mainInstancesPresent() { return !pinInstances(productDirectory() / kMainAppFile).empty(); }
+std::vector<DWORD> mainInstanceSessions(const std::wstring& sid) {
+    std::vector<DWORD> sessions;
+    for (const auto& process : pinInstances(productDirectory() / kMainAppFile)) {
+        if (processSid(process->value) != sid) fail(L"An installed app instance belongs to a different user. Close it before maintenance.");
+        DWORD session = 0;
+        checkWin32(ProcessIdToSessionId(GetProcessId(process->value), &session), L"Read target application session");
+        if (std::find(sessions.begin(), sessions.end(), session) == sessions.end()) sessions.push_back(session);
+    }
+    return sessions;
+}
+void waitForServiceExit() {
+    const auto image = productDirectory() / kSavedCredentialServiceFile;
+    for (const auto& process : pinInstances(image)) {
+        const auto waited = WaitForSingleObject(process->value, 30000);
+        if (waited == WAIT_FAILED) checkWin32(FALSE, L"Wait for credential service process exit");
+        if (waited != WAIT_OBJECT_0) fail(L"The credential service process did not exit. Uninstall was stopped before data deletion.");
+    }
+    if (!pinInstances(image).empty()) fail(L"The credential service restarted. Uninstall was stopped before data deletion.");
+}
 }

@@ -53,6 +53,8 @@ The Password page refreshes on entry, activation and operation completion; faile
 
 ## Removal and maintenance
 
-Active MSI uninstall requires `clearForRemoval` confirmation for password, binding, grant, snapshot and BLE-request deletion before stopping the service. A separate identity accepts only the native system-directory MSI process with matching SYSTEM process/pipe tokens; it can call only this operation and cannot bypass the unlocked configured-console requirement. Upgrade removal skips clearing. Deletion is irreversible if a later uninstall step fails.
+Active MSI uninstall stops the service and confirms process exit, then directly deletes the saved password and binding as SYSTEM. It does not use service IPC or require the configured user to be signed in or the console to be unlocked. Stop or deletion failures stop uninstall. Upgrade removal skips clearing. Deletion is irreversible if a later uninstall step fails.
 
 Keep identity checks, consume-before-decrypt ordering, caller separation and impersonation boundaries intact during maintenance. Logs must not include passwords, nonce bytes, credential plaintext or device identifiers in public reports. Verify caller, identity, replay and restart scenarios.
+
+Run `unlock_saved_credential_tests.exe --vault-removal` separately as LocalSystem on a test PC. This mode isolates deletion through a process-local `ProgramData` override pointing to a temporary fixture; the regular test run does not execute it.

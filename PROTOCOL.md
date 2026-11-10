@@ -53,7 +53,6 @@ Unlock, request cancellation/expiry and credential consumption keep a valid conn
 | Elevated administrator at the target's unlocked console | Existing password management, binding/replace/remove and threshold save. Full target identity remains service-verified. |
 | Verified SYSTEM LogonUI in the locked physical console | Provisioning/capture, eligibility, verification start/status/cancel, one-time offer and credential claim. |
 | Verified SYSTEM LogonUI completing its claim | Native result reporting before or after the same session unlocks; no new credential access. |
-| Native system-directory MSI process with matching SYSTEM process/pipe tokens | `clearForRemoval` only, with the configured console unlocked. No other management authority. |
 
 There is one saved-credential pipe. No phone pipe, signature submission, public-key reload, desktop approval operation or desktop credential claim exists. The service pins the client process and compares actual pipe/process tokens, sessions and expected LogonUI image. Client code checks SCM identity and server PID/session. Impersonation ends before LocalSystem DPAPI access.
 

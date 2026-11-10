@@ -22,6 +22,7 @@ namespace {
 constexpr std::uint32_t kDiskMagic = 0x31564347;
 constexpr std::uint32_t kPlainMagic = 0x31504347;
 constexpr std::size_t kMaxFileBytes = 32 * 1024;
+constexpr wchar_t kVaultFileName[] = L"credential.dat";
 
 #pragma pack(push, 1)
 struct DiskHeader final {
@@ -120,7 +121,7 @@ void assertNotReparse(const std::filesystem::path& path) {
     }
 }
 
-std::filesystem::path programData() {
+std::filesystem::path vaultDirectory() {
     const DWORD size = GetEnvironmentVariableW(L"ProgramData", nullptr, 0);
     if (size < 2 || size > 32768) fail("ProgramData path unavailable");
     std::wstring value(size, L'\0');
@@ -128,7 +129,7 @@ std::filesystem::path programData() {
         fail("ProgramData path changed");
     }
     value.resize(size - 1);
-    return value;
+    return std::filesystem::path(value) / unlock::components::kProductDataDirectoryName / kVaultDirectoryName;
 }
 
 void append(SensitiveBytes& target, const void* input, const std::size_t bytes) {
@@ -236,10 +237,9 @@ bool fileExists(const std::filesystem::path& file) {
 
 Vault::Vault() {
     requireSystemContext();
-    const auto root = programData() / unlock::components::kProductDataDirectoryName;
-    storage::ensureProtectedDirectory(root, true);
-    directory_ = root / kVaultDirectoryName;
-    file_ = directory_ / L"credential.dat";
+    directory_ = vaultDirectory();
+    storage::ensureProtectedDirectory(directory_.parent_path(), true);
+    file_ = directory_ / kVaultFileName;
     SecurityDescriptor security;
     auto attributes = security.attributes();
     if (!CreateDirectoryW(directory_.c_str(), &attributes) && GetLastError() != ERROR_ALREADY_EXISTS) {
@@ -333,15 +333,41 @@ SensitiveBytes Vault::release(const Identity& expected) const {
 }
 
 void Vault::clear() {
-    requireSystemContext();
-    assertNotReparse(directory_);
-    assertSystemOnly(directory_);
-    if (fileExists(file_)) {
-        assertSystemOnly(file_);
-        if (!DeleteFileW(file_.c_str())) fail("saved credential saved credential deletion failed");
+    clearDirectory(directory_);
+}
+
+void Vault::clearStored() {
+    const auto directory = vaultDirectory();
+    clearDirectory(directory);
+    if (!RemoveDirectoryW(directory.c_str())) {
+        const auto error = GetLastError();
+        if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND)
+            throw winrt::hresult_error(HRESULT_FROM_WIN32(error));
     }
-    for (const auto& entry : std::filesystem::directory_iterator(directory_)) {
+}
+
+void Vault::clearDirectory(const std::filesystem::path& directory) {
+    requireSystemContext();
+    for (const auto& path : {directory.parent_path(), directory}) {
+        if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
+            const auto error = GetLastError();
+            if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) return;
+            throw winrt::hresult_error(HRESULT_FROM_WIN32(error));
+        }
+        storage::verifyProtectedPath(path, true);
+    }
+    assertSystemOnly(directory);
+    const auto file = directory / kVaultFileName;
+    // Validate every entry before deleting any ciphertext.
+    std::vector<std::filesystem::path> files;
+    for (const auto& entry : std::filesystem::directory_iterator(directory)) {
+        files.push_back(entry.path());
         const auto name = entry.path().filename().wstring();
+        if (name == kVaultFileName) {
+            fileExists(entry.path());
+            assertSystemOnly(entry.path());
+            continue;
+        }
         bool temporary = name.size() == 46 && name.compare(0, 10, L"temporary-") == 0 &&
             name.compare(42, 4, L".dat") == 0;
         for (std::size_t index = 10; temporary && index < 42; ++index) {
@@ -350,13 +376,16 @@ void Vault::clear() {
                 (character >= L'a' && character <= L'f');
         }
         if (!temporary) fail("saved credential vault contains an unknown file; cleanup not confirmed");
-        assertNotReparse(entry.path());
+        fileExists(entry.path());
         assertSystemOnly(entry.path());
-        if (!DeleteFileW(entry.path().c_str())) {
-            fail("saved credential temporary ciphertext deletion failed");
+    }
+    for (const auto& path : files) {
+        if (!DeleteFileW(path.c_str())) {
+            throw winrt::hresult_error(HRESULT_FROM_WIN32(GetLastError()));
         }
     }
-    if (fileExists(file_)) fail("saved credential saved credential deletion unconfirmed");
+    if (fileExists(file) || !std::filesystem::is_empty(directory))
+        fail("saved credential deletion unconfirmed");
 }
 
 } // namespace unlock_windows::saved_credential

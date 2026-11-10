@@ -60,6 +60,7 @@ int main() {
             winrt::handle locked(CreateFileW(path.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, 0, nullptr));
             require(locked.get() != INVALID_HANDLE_VALUE, "Cannot create exclusive-read fixture");
             rejects([&] { static_cast<void>(store.load()); }, "Read failures must be errors, not absent bindings");
+            rejects([&] { store.remove(); }, "A locked binding must fail deletion");
         }
         {
             struct Descriptor final { PSECURITY_DESCRIPTOR value = nullptr; ~Descriptor() { LocalFree(value); } } original, unsafe;
@@ -77,6 +78,8 @@ int main() {
                 DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, unsafeAcl, nullptr) == ERROR_SUCCESS,
                 "Cannot apply unsafe fixture ACL");
             rejects([&] { static_cast<void>(store.load()); }, "Unsafe ACLs must be errors, not absent bindings");
+            rejects([&] { store.remove(); }, "Unsafe binding ACLs must block deletion");
+            require(std::filesystem::exists(path), "Rejected deletion must preserve the binding");
             require(SetNamedSecurityInfoW(const_cast<wchar_t*>(path.c_str()), SE_FILE_OBJECT,
                 DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, originalAcl, nullptr) == ERROR_SUCCESS,
                 "Cannot restore original fixture ACL");
@@ -107,6 +110,17 @@ int main() {
         }
         rejects([&] { static_cast<void>(store.load()); }, "Corrupt storage must be an error, not unregistered");
         store.remove();
+        store.remove();
+        ble::EnrollmentStore absent((directory / L"absent" / ble::kEnrollmentFileName).wstring());
+        absent.remove();
+        require(!std::filesystem::exists(directory / L"absent"), "Removal must not create a missing directory");
+        {
+            const auto link = directory / L"linked-binding";
+            std::filesystem::create_directory_symlink(directory, link);
+            ble::EnrollmentStore unsafe((link / ble::kEnrollmentFileName).wstring());
+            rejects([&] { unsafe.remove(); }, "Reparse-point directories must block deletion even if the binding is absent");
+            require(std::filesystem::remove(link), "Cannot remove test directory link");
+        }
         require(std::filesystem::remove(directory), "Test directory cleanup failed"); directory.clear();
         std::cout << "Binding storage tests passed\n";
         return 0;

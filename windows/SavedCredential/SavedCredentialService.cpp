@@ -9,7 +9,6 @@
 #include "../Bluetooth/PresenceAuthorization.h"
 #include "../ConsoleSession.h"
 #include "../ProductIdentity.h"
-#include "../Msi/ActionPolicy.h"
 
 #include <WtsApi32.h>
 #include <lm.h>
@@ -151,8 +150,6 @@ struct Client final {
     DWORD session = 0xffffffff;
     bool logonUi = false;
     bool admin = false;
-    bool msiMaintenance = false;
-    std::string msiIdentityFailure;
 };
 
 Client inspectClient(const HANDLE pipe) {
@@ -194,30 +191,6 @@ Client inspectClient(const HANDLE pipe) {
     client.logonUi = client.userSid == L"S-1-5-18" &&
         _wcsicmp(processImage(client.process.value).c_str(), expectedLogonUi().c_str()) == 0;
     client.admin = client.userSid != L"S-1-5-18" && elevatedAdmin(pipeToken.value);
-    // Only the native Windows Installer server may use the removal-only identity.
-    // Both process and pipe tokens have already been matched above.
-    // A SYSTEM custom-action host can run in the console session, not only session 0.
-    wchar_t nativeSystem[MAX_PATH]{};
-    const auto length = GetSystemDirectoryW(nativeSystem, MAX_PATH);
-    if (!length || length >= MAX_PATH) fail("native system directory unavailable");
-    const auto installer = std::wstring(nativeSystem) + L"\\msiexec.exe";
-    const auto attributes = GetFileAttributesW(installer.c_str());
-    if (client.userSid != L"S-1-5-18") {
-        client.msiIdentityFailure = "The process and pipe tokens are not SYSTEM.";
-    } else if (_wcsicmp(processImage(client.process.value).c_str(), installer.c_str()) != 0) {
-        client.msiIdentityFailure = "The SYSTEM caller image is not msiexec.exe in the native system directory.";
-    } else if (attributes == INVALID_FILE_ATTRIBUTES ||
-        (attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))) {
-        client.msiIdentityFailure = "The native system-directory msiexec.exe is missing or has disallowed file attributes.";
-    } else {
-        USHORT processMachine = 0, nativeMachine = 0;
-        if (!IsWow64Process2(client.process.value, &processMachine, &nativeMachine))
-            fail("MSI maintenance process architecture unavailable");
-        client.msiMaintenance = processMachine == IMAGE_FILE_MACHINE_UNKNOWN;
-        if (!client.msiMaintenance)
-            client.msiIdentityFailure = "The MSI caller is not a native-architecture process (processMachine=" +
-                std::to_string(processMachine) + ", nativeMachine=" + std::to_string(nativeMachine) + ").";
-    }
     return client;
 }
 
@@ -383,16 +356,13 @@ public:
         response.result = Result::rejected;
         try {
             auto client = inspectClient(pipe);
-            const bool maintenance = unlock::components::msi::maintenanceAllowed(
-                client.userSid == L"S-1-5-18", client.msiMaintenance, request.operation);
-            if (client.msiMaintenance && !maintenance) return response;
             if (requiresLogonUi(request.operation) && !client.logonUi) {
                 if (request.operation == Operation::reportUnlockResult) appendDiagnostic("unlock result rejected: caller is not LogonUI");
                 return response;
             }
             if (request.operation == Operation::captureProvisioningIdentity) {
                 const DWORD session = WTSGetActiveConsoleSessionId();
-                if (!client.logonUi || session == 0xffffffff || client.session != session || removing_)
+                if (!client.logonUi || session == 0xffffffff || client.session != session)
                     return response;
                 Identity identity;
                 std::wstring targetSid;
@@ -420,13 +390,7 @@ public:
             if (unlockHistory_.pending() || unlockHistory_.summary())
                 refreshUnlockHistory(console, bindingSummary(), vault_.storedIdentity());
             expireRequest(console);
-            if (client.session != console.session && !maintenance) {
-                if (request.operation == Operation::clearForRemoval)
-                    setText(response.payload, "The removal caller is outside the physical console session and was not recognized as authorized native Windows Installer maintenance. " +
-                        client.msiIdentityFailure);
-                return response;
-            }
-            if (removing_ && request.operation != Operation::clearForRemoval) return response;
+            if (client.session != console.session) return response;
             if (request.operation == Operation::reportUnlockResult) {
                 UnlockResult result;
                 if (!decodeUnlockResult(request.payload.value.data(), request.payload.value.size(), result)) {
@@ -663,41 +627,6 @@ public:
                 wake_.notify_one();
                 grant_.reset();
                 rejectTask(AuthenticationFailure::bindingChanged);
-            } else if (request.operation == Operation::clearForRemoval) {
-                std::wstring targetSid;
-                if (!client.admin && !maintenance) {
-                    setText(response.payload, "The removal caller is neither an elevated administrator nor authorized native Windows Installer maintenance. " +
-                        client.msiIdentityFailure);
-                    return response;
-                }
-                if (console.locked) {
-                    setText(response.payload, "The physical console is locked. Unlock it as the configured Windows user and retry uninstall.");
-                    return response;
-                }
-                if (!request.payload.value.empty()) {
-                    setText(response.payload, "The removal request contains an unexpected payload.");
-                    return response;
-                }
-                const auto targetResult = unlock::components::readSetupTargetSid(targetSid);
-                if (FAILED(targetResult)) {
-                    setText(response.payload, "The configured Windows user could not be read (HRESULT=" +
-                        std::to_string(static_cast<unsigned long>(targetResult)) + ").");
-                    return response;
-                }
-                if (targetSid != console.sid) {
-                    setText(response.payload, "The physical console user differs from the configured Windows user. Sign in at the physical console as the configured user and retry uninstall.");
-                    return response;
-                }
-                vault_.clear();
-                enrollmentStore_.remove();
-                clearUnlockHistory();
-                grant_.reset();
-                snapshot_.reset();
-                provisioning_.reset();
-                rejectTask(AuthenticationFailure::bindingChanged);
-                removing_ = true;
-                ++gConnectionGeneration;
-                wake_.notify_one();
             } else if (request.operation == Operation::takeAutoSubmitOffer) {
                 if (!client.logonUi || !console.locked) return response;
                 Identity identity;
@@ -767,7 +696,7 @@ public:
             response.payload.clear();
             if (request.operation == Operation::beginBinding || request.operation == Operation::saveThreshold ||
                 request.operation == Operation::removeBinding || request.operation == Operation::bindingStatus ||
-                request.operation == Operation::bindingTaskStatus || request.operation == Operation::clearForRemoval)
+                request.operation == Operation::bindingTaskStatus)
                 setText(response.payload, winrt::to_string(message));
         }
         return response;
@@ -950,7 +879,7 @@ private:
                     try {
                         {
                             std::lock_guard lock(mutex_);
-                            if (!removing_ && !gSuspended) {
+                            if (!gSuspended) {
                                 const auto binding = bindingSummary();
                                 const auto stored = vault_.storedIdentity();
                                 if (binding.state == unlock_windows::system_ble::BindingState::bound && stored) {
@@ -1205,7 +1134,6 @@ private:
     std::optional<Identity> authenticationIdentity_;
     AuthenticationStatus authenticationStatus_;
     std::mutex mutex_;
-    bool removing_ = false;
     bool stopping_ = false;
     std::condition_variable wake_;
     std::thread worker_;

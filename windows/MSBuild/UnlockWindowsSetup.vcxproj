@@ -35,16 +35,20 @@
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <AdditionalDependencies>msi.lib;userenv.lib;advapi32.lib;ole32.lib;shell32.lib;uuid.lib;wtsapi32.lib;user32.lib;windowsapp.lib;$(UnlockLibraryDirectory)\unlock_saved_credential_ipc.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>msi.lib;userenv.lib;advapi32.lib;ole32.lib;shell32.lib;uuid.lib;wtsapi32.lib;user32.lib;crypt32.lib;bcrypt.lib;windowsapp.lib;$(UnlockLibraryDirectory)\unlock_saved_credential_ipc.lib;$(UnlockLibraryDirectory)\unlock_enrollment_store.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/MANIFEST:NO %(AdditionalOptions)</AdditionalOptions>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\Msi\CustomActions.cpp" />
     <ClCompile Include="..\Msi\UserIntegration.cpp" />
+    <ClCompile Include="..\SavedCredential\SavedCredentialVault.cpp" />
     <ResourceCompile Include="$(UnlockGeneratedDirectory)\$(UnlockInstallerBaseName)-version.rc" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="UnlockEnrollmentStore.vcxproj">
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
     <ProjectReference Include="UnlockSavedCredentialIpc.vcxproj">
       <Project>{8CBDEB42-8B4B-4F2B-9D52-0BF1A9824D02}</Project>
       <ReferenceOutputAssembly>false</ReferenceOutputAssembly>

@@ -211,7 +211,13 @@ function Test-MsiPackage([string]$Path, [string]$Architecture, [string]$Director
     $actions = @{}
     foreach ($row in (Read-MsiRows $database 'SELECT `Action`,`Type`,`Source`,`Target` FROM `CustomAction`' 4)) { $actions[$row[0]]=$row }
     $authoring = [xml][IO.File]::ReadAllText((Join-Path $PSScriptRoot 'Package.wxs'))
-    $authoredClearCondition = $authoring.SelectSingleNode('//*[local-name()="InstallExecuteSequence"]/*[@Action="ClearForRemoval"]').Condition
+    $authoredRemovalCondition = $authoring.SelectSingleNode('//*[local-name()="InstallExecuteSequence"]/*[@Action="RemoveProductData"]').Condition
+    if ($authoredRemovalCondition -cne 'REMOVE~="ALL" AND NOT UPGRADINGPRODUCTCODE') { throw 'Data removal must be limited to active full uninstall.' }
+    $ipc = Get-HeaderStrings (Join-Path $PSScriptRoot '..\SavedCredential\SavedCredentialIpc.h')
+    $serviceControls = @(Read-MsiRows $database 'SELECT `Name`,`Event`,`Wait` FROM `ServiceControl`' 3)
+    $serviceControl = @($serviceControls | Where-Object { $_[0] -ceq $ipc.kServiceName })
+    if ($serviceControl.Count -ne 1 -or ([int]$serviceControl[0][1] -band 0xa0) -ne 0xa0 -or
+        $serviceControl[0][2] -ne '1') { throw 'Uninstall must stop and wait for the credential service before removing it.' }
     $sequence = @{}
     foreach ($row in (Read-MsiRows $database 'SELECT `Action`,`Condition`,`Sequence` FROM `InstallExecuteSequence`' 3)) { $sequence[$row[0]]=$row }
     $uiSequence = @{}
@@ -238,9 +244,11 @@ function Test-MsiPackage([string]$Path, [string]$Architecture, [string]$Director
         [int]$sequence.CompleteDeployment[2] -le [int]$sequence.RemoveExistingProducts[2] -or
         [int]$sequence.CompleteDeployment[2] -ge [int]$sequence.CommitDeployment[2] -or
         [int]$sequence.CommitDeployment[2] -ge [int]$sequence.InstallFinalize[2] -or
-        $sequence.ClearForRemoval[1] -cne $authoredClearCondition -or
-        [int]$sequence.ClearForRemoval[2] -ge [int]$sequence.StopServices[2]) { throw 'Unsafe MSI lifecycle action ordering or conditions.' }
-    foreach ($name in @('PrepareDeployment','CompleteDeployment','ClearForRemoval')) {
+        $sequence.RemoveProductData[1] -cne $authoredRemovalCondition -or
+        [int]$sequence.RemoveProductData[2] -le [int]$sequence.StopServices[2] -or
+        [int]$sequence.RemoveProductData[2] -ge [int]$sequence.DeleteServices[2] -or
+        [int]$sequence.RemoveProductData[2] -ge [int]$sequence.RemoveFiles[2]) { throw 'Unsafe MSI lifecycle action ordering or conditions.' }
+    foreach ($name in @('PrepareDeployment','CompleteDeployment','RemoveProductData')) {
         if (([int]$actions[$name][1] -band 0xc00) -ne 0xc00) { throw "Native deferred action must run as installer server: $name" }
     }
     $files = @(Read-MsiRows $database 'SELECT `File`,`FileName`,`Version`,`Component_`,`Language` FROM `File`' 5)

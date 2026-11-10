@@ -44,6 +44,7 @@
     <CustomAction Id="CheckExeInstallation" BinaryRef="NativeActions" DllEntry="CheckExeInstallation" Execute="immediate" Return="check" />
     <CustomAction Id="ValidateDeployment" BinaryRef="NativeActions" DllEntry="ValidateDeployment" Execute="immediate" Return="check" />
     <CustomAction Id="CloseApplication" BinaryRef="NativeActions" DllEntry="CloseApplication" Execute="immediate" Return="check" />
+    <CustomAction Id="InitializeDeployment" BinaryRef="NativeActions" DllEntry="InitializeDeployment" Execute="immediate" Return="check" />
     <CustomAction Id="PrepareDeployment" BinaryRef="NativeActions" DllEntry="PrepareDeployment" Execute="deferred" Impersonate="no" Return="check" HideTarget="yes" />
     <CustomAction Id="RollbackDeployment" BinaryRef="NativeActions" DllEntry="RollbackDeployment" Execute="rollback" Impersonate="no" Return="check" HideTarget="yes" />
     <CustomAction Id="RemoveProductData" BinaryRef="NativeActions" DllEntry="RemoveProductData" Execute="deferred" Impersonate="no" Return="check" HideTarget="yes" />
@@ -56,6 +57,7 @@
       <Custom Action="CheckExeInstallation" After="LaunchConditions" Condition="NOT UPGRADINGPRODUCTCODE" />
       <Custom Action="ValidateDeployment" Before="CloseApplication" />
       <Custom Action="CloseApplication" Before="InstallValidate" Condition="UILevel &gt;= 4 AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="InitializeDeployment" After="InstallValidate" Condition="NOT UPGRADINGPRODUCTCODE" />
       <Custom Action="RollbackDeployment" After="InstallInitialize" Condition="NOT UPGRADINGPRODUCTCODE" />
       <Custom Action="PrepareDeployment" After="RollbackDeployment" Condition="NOT UPGRADINGPRODUCTCODE" />
       <Custom Action="RemoveProductData" After="StopServices" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />

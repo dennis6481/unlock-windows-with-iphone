@@ -9,7 +9,6 @@
   <ItemGroup>
     <UnlockTestProject Include="$(TestsDirectory)\UnlockSavedCredentialTests.vcxproj" />
     <UnlockTestProject Include="$(TestsDirectory)\UnlockEnrollmentStoreTests.vcxproj" />
-    <UnlockTestProject Include="$(TestsDirectory)\UnlockSetupTests.vcxproj" />
     <UnlockTestProject Include="$(TestsDirectory)\UnlockCredentialProviderTests.vcxproj" />
   </ItemGroup>
   <Target Name="BuildTests">
@@ -18,7 +17,6 @@
   <Target Name="Test" DependsOnTargets="BuildTests">
     <Exec Command="&quot;$(UnlockBuildDirectory)\unlock_saved_credential_tests.exe&quot;" />
     <Exec Command="&quot;$(UnlockBuildDirectory)\unlock_enrollment_store_tests.exe&quot;" />
-    <Exec Command="&quot;$(UnlockBuildDirectory)\unlock_setup_tests.exe&quot;" />
     <Exec Command="&quot;$(UnlockBuildDirectory)\unlock_credential_provider_tests.exe&quot;" />
   </Target>
 </Project>

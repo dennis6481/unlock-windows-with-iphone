@@ -25,6 +25,7 @@
       <Property Id="DefaultUIFont" Value="WixUI_Font_Normal" />
       <Property Id="ARPNOMODIFY" Value="1" />
       <UIRef Id="WixUI_Common" />
+      <UIRef Id="WixUI_ErrorProgressText" />
       <DialogRef Id="ErrorDlg" />
       <DialogRef Id="FatalError" />
       <DialogRef Id="FilesInUse" />
@@ -36,14 +37,13 @@
       <DialogRef Id="MaintenanceWelcomeDlg" />
       <DialogRef Id="MaintenanceTypeDlg" />
       <DialogRef Id="VerifyReadyDlg" />
-      <Publish Dialog="WelcomeDlg" Control="Next" Event="EndDialog" Value="Return" Condition="NOT Installed" />
-      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Condition="Installed AND PATCH" />
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Condition="NOT Installed OR PATCH" />
       <Publish Dialog="MaintenanceWelcomeDlg" Control="Next" Event="NewDialog" Value="MaintenanceTypeDlg" />
       <Publish Dialog="MaintenanceTypeDlg" Control="RepairButton" Event="NewDialog" Value="VerifyReadyDlg" />
       <Publish Dialog="MaintenanceTypeDlg" Control="RemoveButton" Event="NewDialog" Value="VerifyReadyDlg" />
       <Publish Dialog="MaintenanceTypeDlg" Control="Back" Event="NewDialog" Value="MaintenanceWelcomeDlg" />
-      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="MaintenanceTypeDlg" />
-      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Order="2" Condition="Installed AND PATCH" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="MaintenanceTypeDlg" Condition="Installed AND NOT PATCH" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Order="2" Condition="NOT Installed OR PATCH" />
       <Publish Dialog="ExitDialog" Control="Finish" Event="EndDialog" Value="Return" Order="999" />
       <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchApplication" Order="1"
                Condition="WixUnelevatedShellExecTarget AND (NOT Installed OR WixUI_InstallMode=&quot;Repair&quot;)" />
@@ -91,7 +91,7 @@
       <MigrateFeatureStates Suppress="yes" />
       <Custom Action="CheckExeInstallation" After="LaunchConditions" Condition="NOT UPGRADINGPRODUCTCODE" />
       <Custom Action="ValidateDeployment" Before="CloseApplication" />
-      <Custom Action="CloseApplication" Before="InstallValidate" Condition="UILevel &gt;= 4 AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="CloseApplication" Before="InstallValidate" Condition="NOT UPGRADINGPRODUCTCODE" />
       <Custom Action="InitializeDeployment" After="InstallValidate" Condition="NOT UPGRADINGPRODUCTCODE" />
       <Custom Action="RollbackDeployment" After="InstallInitialize" Condition="NOT UPGRADINGPRODUCTCODE" />
       <Custom Action="PrepareDeployment" After="RollbackDeployment" Condition="NOT UPGRADINGPRODUCTCODE" />

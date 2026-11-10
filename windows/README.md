@@ -48,7 +48,7 @@ The desktop build follows make → MSBuild Solution/.vcxproj. Native libraries, 
 
 For installation and setup, see the [main guide](../README.md#installation).
 
-The standard welcome page identifies the product and its full four-part version. Click **Next** to install; no license-acceptance page is shown. After installation, update or Repair, clicking **Finish** on the standard completion page launches the app with ordinary user privileges; uninstall does not launch it. When a restart is required, launch the app after restarting. Silent installation does not launch it. Open **Unlock with iPhone** from the Start Menu at any time. Install/update creates the all-users shortcut; uninstall removes it.
+The standard welcome page identifies the product and its full four-part version. Click **Next**, then **Install** to install; no license-acceptance page is shown. After installation, update or Repair, clicking **Finish** on the standard completion page launches the app with ordinary user privileges; uninstall does not launch it. When a restart is required, launch the app after restarting. Silent installation does not launch it. Open **Unlock with iPhone** from the Start Menu at any time. Install/update creates the all-users shortcut; uninstall removes it.
 
 - Save your Windows account password (MSA or local), not your PIN. Empty passwords are unsupported. Update the saved copy whenever the password or complete account identity changes; see [password management](SavedCredential/README.md#password-management).
 - Remove the paired iPhone on **Status**, or delete the saved password on **Password**; these are separate actions.

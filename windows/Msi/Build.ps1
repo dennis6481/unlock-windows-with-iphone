@@ -142,7 +142,7 @@ function Write-MsiSources([string]$Directory, [string]$Architecture) {
         }
         if ($entry.Name -ceq $metadata.SavedCredentialServiceFile) {
             $lines.Add(('<ServiceInstall Id="CredentialService" Name="{0}" DisplayName="{1}" Type="ownProcess" Start="auto" ErrorControl="normal" Account="LocalSystem" Vital="yes" />' -f $ipc.kServiceName,(ConvertTo-Xml $ipc.kServiceDisplayName)))
-            $lines.Add(('<ServiceControl Id="CredentialServiceControl" Name="{0}" Stop="both" Remove="uninstall" Wait="yes" />' -f $ipc.kServiceName))
+            $lines.Add(('<ServiceControl Id="CredentialServiceControl" Name="{0}" Start="install" Stop="both" Remove="uninstall" Wait="yes" />' -f $ipc.kServiceName))
         }
         $lines.Add('</Component>')
         $lines.Add('</DirectoryRef>')
@@ -151,9 +151,6 @@ function Write-MsiSources([string]$Directory, [string]$Architecture) {
     foreach ($id in $components) { $lines.Add(('<ComponentRef Id="{0}" />' -f $id)) }
     $lines.Add('</ComponentGroup></Fragment></Wix>')
     [IO.File]::WriteAllLines((Join-Path $generated 'Payload.wxs'),$lines,[Text.UTF8Encoding]::new($false))
-    $license = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '..\..\LICENSE.md'))
-    $rtf = '{\rtf1\ansi ' + $license.Replace('\','\\').Replace('{','\{').Replace('}','\}').Replace("`r",'').Replace("`n",'\par ') + '}'
-    [IO.File]::WriteAllText((Join-Path $generated 'License.rtf'),$rtf,[Text.Encoding]::ASCII)
 }
 
 function Read-MsiRows($Database, [string]$Query, [int]$Columns) {
@@ -216,8 +213,8 @@ function Test-MsiPackage([string]$Path, [string]$Architecture, [string]$Director
     $ipc = Get-HeaderStrings (Join-Path $PSScriptRoot '..\SavedCredential\SavedCredentialIpc.h')
     $serviceControls = @(Read-MsiRows $database 'SELECT `Name`,`Event`,`Wait` FROM `ServiceControl`' 3)
     $serviceControl = @($serviceControls | Where-Object { $_[0] -ceq $ipc.kServiceName })
-    if ($serviceControl.Count -ne 1 -or ([int]$serviceControl[0][1] -band 0xa0) -ne 0xa0 -or
-        $serviceControl[0][2] -ne '1') { throw 'Uninstall must stop and wait for the credential service before removing it.' }
+    if ($serviceControl.Count -ne 1 -or ([int]$serviceControl[0][1] -band 0xa3) -ne 0xa3 -or
+        $serviceControl[0][2] -ne '1') { throw 'MSI must start, stop and remove the credential service, waiting for completion.' }
     $sequence = @{}
     foreach ($row in (Read-MsiRows $database 'SELECT `Action`,`Condition`,`Sequence` FROM `InstallExecuteSequence`' 3)) { $sequence[$row[0]]=$row }
     $uiSequence = @{}
@@ -244,7 +241,14 @@ function Test-MsiPackage([string]$Path, [string]$Architecture, [string]$Director
         [int]$sequence.RollbackDeployment[2] -le [int]$sequence.InstallInitialize[2] -or
         [int]$sequence.PrepareDeployment[2] -le [int]$sequence.RollbackDeployment[2] -or
         [int]$sequence.PrepareDeployment[2] -ge [int]$sequence.StopServices[2] -or
-        [int]$sequence.CompleteDeployment[2] -le [int]$sequence.RemoveExistingProducts[2] -or
+        !$sequence.ContainsKey('StartServices') -or
+        !$sequence.ContainsKey('CaptureRebootState') -or
+        $sequence.InstallExecute[1] -cne '1' -or
+        [int]$sequence.StopServices[2] -ge [int]$sequence.InstallFiles[2] -or
+        [int]$sequence.InstallServices[2] -ge [int]$sequence.StartServices[2] -or
+        [int]$sequence.StartServices[2] -le [int]$sequence.RemoveExistingProducts[2] -or
+        [int]$sequence.CaptureRebootState[2] -le [int]$sequence.StartServices[2] -or
+        [int]$sequence.CompleteDeployment[2] -le [int]$sequence.CaptureRebootState[2] -or
         [int]$sequence.CompleteDeployment[2] -ge [int]$sequence.CommitDeployment[2] -or
         [int]$sequence.CommitDeployment[2] -ge [int]$sequence.InstallFinalize[2] -or
         $sequence.RemoveProductData[1] -cne $authoredRemovalCondition -or

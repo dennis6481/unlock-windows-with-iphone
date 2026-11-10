@@ -11,7 +11,6 @@
 #include <msiquery.h>
 #include <wtsapi32.h>
 #include <userenv.h>
-#include <cwctype>
 #include <utility>
 
 using namespace unlock::components;
@@ -99,12 +98,6 @@ void snapshotUser(const std::wstring& sid) {
     writeRegistryString(HKEY_LOCAL_MACHINE, backupKey().c_str(), kTargetSidValueName, sid);
     writeRegistryDword(HKEY_LOCAL_MACHINE, backupKey().c_str(), L"UserReady", 1);
 }
-void restoreStartup(const std::wstring& sid) {
-    const auto value = readRegistryValue(HKEY_LOCAL_MACHINE, backupKey().c_str(), kDesktopDirectoryName);
-    if (value) withUserHive(sid, [&](HKEY hive) {
-        writeRegistryValue(hive, kStartupRegistryPath, kDesktopDirectoryName, value->type, value->bytes);
-    });
-}
 void restoreUser() {
     if (readRegistryDword(HKEY_LOCAL_MACHINE, backupKey().c_str(), L"UserReady") != 1) return;
     const auto sid = readRegistryString(HKEY_LOCAL_MACHINE, backupKey().c_str(), kTargetSidValueName).value_or(L"");
@@ -137,49 +130,10 @@ DWORD serviceState() {
     if (error || !queried) fail(L"Cannot inspect the credential service.");
     return state.dwCurrentState;
 }
-bool serviceRunning() { return serviceState() == SERVICE_RUNNING; }
-void startService() {
-    auto manager = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
-    if (!manager) fail(L"Cannot open service manager.");
-    auto service = OpenServiceW(manager, unlock_windows::saved_credential::kServiceName, SERVICE_START | SERVICE_QUERY_STATUS);
-    const auto opened = service ? ERROR_SUCCESS : GetLastError();
-    const bool started = service && StartServiceW(service, 0, nullptr);
-    const auto error = started ? ERROR_SUCCESS : GetLastError();
-    if (service) CloseServiceHandle(service); CloseServiceHandle(manager);
-    if (opened || (error && error != ERROR_SERVICE_ALREADY_RUNNING)) fail(L"Cannot start the credential service.");
-    for (int i = 0; i < 100; ++i) { if (serviceRunning()) return; Sleep(100); }
-    fail(L"The credential service did not reach Running.");
-}
-void stopServiceNormally() {
-    if (serviceState() == SERVICE_STOPPED) return;
-    auto manager = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
-    if (!manager) fail(L"Cannot reopen service manager during rollback.");
-    auto service = OpenServiceW(manager, unlock_windows::saved_credential::kServiceName, SERVICE_STOP);
-    SERVICE_STATUS status{};
-    const bool stopped = service && ControlService(service, SERVICE_CONTROL_STOP, &status);
-    const auto error = stopped ? ERROR_SUCCESS : GetLastError();
-    if (service) CloseServiceHandle(service); CloseServiceHandle(manager);
-    if (!stopped && error != ERROR_SERVICE_NOT_ACTIVE) fail(L"Cannot restore service stop state during rollback.");
-    for (int i = 0; i < 100; ++i) { if (serviceState() == SERVICE_STOPPED) return; Sleep(100); }
-    fail(L"Service did not stop during rollback; restart Windows before configuring credentials again.");
-}
-void markReboot(MSIHANDLE install) {
+void establishRebootBoundary() {
     ScopedRegistryKey key;
     checkRegistry(RegCreateKeyExW(HKEY_LOCAL_MACHINE, kRebootKey, 0, nullptr, REG_OPTION_VOLATILE,
         KEY_WRITE | KEY_WOW64_64KEY, nullptr, &key.value, nullptr), L"Establish reboot boundary");
-    msiCheck(MsiSetMode(install, MSIRUNMODE_REBOOTATEND, TRUE), L"Report required reboot");
-}
-bool pendingReplacement() {
-    // MSI schedules locked files here. The guard prevents a subsequent app launch before reboot.
-    const auto raw = readRegistryValue(HKEY_LOCAL_MACHINE,
-        L"SYSTEM\\CurrentControlSet\\Control\\Session Manager", L"PendingFileRenameOperations");
-    if (!raw) return registryKeyExists(kRebootKey);
-    if (raw->type != REG_MULTI_SZ || raw->bytes.size() % sizeof(wchar_t)) fail(L"Invalid pending file rename list.");
-    std::wstring list(reinterpret_cast<const wchar_t*>(raw->bytes.data()), raw->bytes.size() / sizeof(wchar_t));
-    for (auto& c : list) c = towlower(c);
-    auto directory = productDirectory().wstring();
-    for (auto& c : directory) c = towlower(c);
-    return list.find(directory + L"\\") != std::wstring::npos || registryKeyExists(kRebootKey);
 }
 void clearBackup() {
     if (std::filesystem::exists(backupRoot())) {
@@ -190,18 +144,12 @@ void clearBackup() {
     }
     deleteRegistryTree(HKEY_LOCAL_MACHINE, backupKey().c_str());
 }
-void restoreServiceState() {
-    // MSI rolls its own service controls back. Undo a native post-install start.
-    const bool wasRunning = readRegistryDword(HKEY_LOCAL_MACHINE, backupKey().c_str(), L"WasRunning") == 1;
-    if (!wasRunning && readRegistryDword(HKEY_LOCAL_MACHINE, backupKey().c_str(), L"StartedService") == 1)
-        stopServiceNormally();
-}
 std::wstring deferredSid(MSIHANDLE install) {
     const auto sid = actionData(install)[1];
     validateTargetSid(sid); return sid;
 }
 bool launchAsTarget(const std::wstring& sid, const std::filesystem::path& executable,
-    const std::wstring& arguments, bool wait, DWORD session = WTSGetActiveConsoleSessionId()) {
+    const std::wstring& arguments, DWORD session) {
     if (session == 0xffffffff) return false;
     ScopedHandle token;
     if (!WTSQueryUserToken(session, &token.value)) {
@@ -231,13 +179,11 @@ bool launchAsTarget(const std::wstring& sid, const std::filesystem::path& execut
     const auto error = started ? ERROR_SUCCESS : GetLastError(); DestroyEnvironmentBlock(environment);
     if (!started) { SetLastError(error); checkWin32(FALSE, L"Start ordinary target-user process"); }
     ScopedHandle thread(process.hThread), owner(process.hProcess);
-    if (wait) {
-        // The normal-exit implementation has bounded waits for each retained app process.
-        checkWin32(WaitForSingleObject(owner.value, INFINITE) == WAIT_OBJECT_0, L"Wait for target-user normal exit");
-        DWORD result = 0; checkWin32(GetExitCodeProcess(owner.value, &result), L"Read normal-exit result");
-        if (result != ERROR_SUCCESS) fail(L"Target-user normal exit failed (code=" + std::to_wstring(result) +
-            L"). Close any password or enrollment window and retry. No process was killed.");
-    }
+    // The normal-exit implementation has bounded waits for each retained app process.
+    checkWin32(WaitForSingleObject(owner.value, INFINITE) == WAIT_OBJECT_0, L"Wait for target-user normal exit");
+    DWORD result = 0; checkWin32(GetExitCodeProcess(owner.value, &result), L"Read normal-exit result");
+    if (result != ERROR_SUCCESS) fail(L"Target-user normal exit failed (code=" + std::to_wstring(result) +
+        L"). Close any password or enrollment window and retry. No process was killed.");
     return true;
 }
 void stopTargetTray(const std::wstring& sid) {
@@ -255,7 +201,7 @@ void stopTargetTray(const std::wstring& sid) {
     checkWin32(CopyFileW(path.c_str(), helper.c_str(), TRUE), L"Stage normal-exit module");
     const auto arguments = L"\"" + helper.wstring() + L"\",RequestUserExit " + sid;
     for (const auto session : mainInstanceSessions(sid)) {
-        if (!launchAsTarget(sid, system32Directory() / L"rundll32.exe", arguments, true, session))
+        if (!launchAsTarget(sid, system32Directory() / L"rundll32.exe", arguments, session))
             fail(L"The app session has no target-user token. Close the app before maintenance.");
     }
     checkWin32(DeleteFileW(helper.c_str()), L"Release normal-exit module");
@@ -351,7 +297,7 @@ extern "C" __declspec(dllexport) UINT __stdcall InitializeDeployment(MSIHANDLE i
             if (!version || version->text() != text || packageAction(kProductVersion, *version) == PackageAction::rejectDowngrade)
                 fail(L"The installed four-part version is newer or invalid. No changes were made.");
         }
-        const auto data = std::to_wstring(static_cast<unsigned>(op)) + L"|" + sid + (serviceRunning() ? L"|1" : L"|0");
+        const auto data = std::to_wstring(static_cast<unsigned>(op)) + L"|" + sid + L"|0";
         for (const auto name : {L"PrepareDeployment", L"RollbackDeployment", L"CompleteDeployment", L"CommitDeployment", L"RemoveProductData"}) set(install, name, data);
     });
 }
@@ -365,7 +311,6 @@ extern "C" __declspec(dllexport) UINT __stdcall CloseApplication(MSIHANDLE insta
 extern "C" __declspec(dllexport) UINT __stdcall PrepareDeployment(MSIHANDLE install) {
     return action(install, [&] {
         const auto sid = deferredSid(install);
-        const auto data = actionData(install);
         if (deferredOperation(install) == Operation::firstInstall && consoleUserSid() != sid) fail(L"Physical console user changed during installation.");
         if (deferredOperation(install) == Operation::firstInstall) {
             const auto vault = productDataDirectory() / unlock_windows::saved_credential::kVaultDirectoryName;
@@ -385,12 +330,11 @@ extern "C" __declspec(dllexport) UINT __stdcall PrepareDeployment(MSIHANDLE inst
         }
         unlock_windows::storage::ensureProtectedDirectory(productDataDirectory(), true);
         unlock_windows::storage::ensureProtectedDirectory(backupRoot(), true);
-        writeRegistryDword(HKEY_LOCAL_MACHINE, backupKey().c_str(), L"WasRunning", data[2] == L"1");
-        snapshotUser(sid);
+        if (deferredOperation(install) != Operation::maintain) snapshotUser(sid);
         ScopedRegistryKey maintenance;
         checkRegistry(RegCreateKeyExW(HKEY_LOCAL_MACHINE, kMaintenanceKey, 0, nullptr, REG_OPTION_VOLATILE,
             KEY_WRITE | KEY_WOW64_64KEY, nullptr, &maintenance.value, nullptr), L"Block app startup during maintenance");
-        removeUserStartup(sid);
+        if (deferredOperation(install) == Operation::remove) removeUserStartup(sid);
         stopTargetTray(sid);
     });
 }
@@ -402,7 +346,7 @@ extern "C" __declspec(dllexport) UINT __stdcall RollbackDeployment(MSIHANDLE ins
             message(install, confirmed ? L"Removal failed after password and binding deletion. Deployment rollback cannot restore the deleted credentials."
                 : L"Removal failed during data deletion. Password or binding data may have been deleted; deployment rollback cannot restore them. Configure the product again before use.", INSTALLMESSAGE_WARNING);
         }
-        restoreUser(); restoreServiceState();
+        restoreUser();
         clearBackup();
         deleteRegistryTree(HKEY_LOCAL_MACHINE, kMaintenanceKey);
     });
@@ -432,6 +376,16 @@ extern "C" __declspec(dllexport) UINT __stdcall RemoveProductData(MSIHANDLE inst
         message(install, L"Password and binding deletion confirmed. Later MSI rollback cannot restore these data.");
     });
 }
+extern "C" __declspec(dllexport) UINT __stdcall CaptureRebootState(MSIHANDLE install) {
+    return action(install, [&] {
+        // File work has executed at InstallExecute; deferred/commit actions cannot query this mode.
+        const bool rebootRequired = MsiGetMode(install, MSIRUNMODE_REBOOTATEND) ||
+            !property(install, L"ReplacedInUseFiles").empty();
+        auto data = property(install, L"CommitDeployment");
+        data.back() = rebootRequired ? L'1' : L'0';
+        set(install, L"CommitDeployment", data);
+    });
+}
 extern "C" __declspec(dllexport) UINT __stdcall CompleteDeployment(MSIHANDLE install) {
     return action(install, [&] {
         const auto sid = deferredSid(install);
@@ -439,24 +393,23 @@ extern "C" __declspec(dllexport) UINT __stdcall CompleteDeployment(MSIHANDLE ins
         if (deferredOperation(install) == Operation::firstInstall) {
             withUserHive(sid, [](HKEY hive) { writeRegistryDword(hive, kProductRegistryPath, kSetupPromptValueName, 1); });
             registerUserStartup(sid);
-        } else restoreStartup(sid);
-        if (pendingReplacement()) { markReboot(install); return; }
-        writeRegistryDword(HKEY_LOCAL_MACHINE, backupKey().c_str(), L"StartedService", 1);
-        startService();
+        }
     });
 }
 extern "C" __declspec(dllexport) UINT __stdcall CommitDeployment(MSIHANDLE install) {
-    // Commit/launch failures are reported separately: machine deployment has already succeeded.
+    // Commit cleanup failures are reported separately: machine deployment has already succeeded.
     const auto result = action(install, [&] {
-        if (pendingReplacement()) markReboot(install);
+        const bool rebootRequired = actionData(install)[2] == L"1";
+        if (rebootRequired) establishRebootBoundary();
         deleteRegistryTree(HKEY_LOCAL_MACHINE, kMaintenanceKey);
         clearBackup();
-        const auto op = deferredOperation(install);
-        if (op != Operation::remove && !pendingReplacement())
-            (void)launchAsTarget(deferredSid(install), productDirectory() / kMainAppFile,
-                op == Operation::firstInstall ? unlock_windows::desktop_app::kBackgroundRole
-                    : unlock_windows::desktop_app::kRestoreTrayRole, false);
     });
-    if (result != ERROR_SUCCESS) message(install, L"Machine deployment committed. Post-install cleanup or app launch needs attention; see the preceding error.", INSTALLMESSAGE_WARNING);
+    if (result != ERROR_SUCCESS) message(install, L"Machine deployment committed. Post-install cleanup needs attention; see the preceding error.", INSTALLMESSAGE_WARNING);
     return ERROR_SUCCESS;
+}
+extern "C" __declspec(dllexport) UINT __stdcall ConfigureApplicationLaunch(MSIHANDLE install) {
+    return action(install, [&] {
+        if (registryKeyExists(kRebootKey) || registryKeyExists(kMaintenanceKey))
+            set(install, L"WixUnelevatedShellExecTarget", L"");
+    });
 }

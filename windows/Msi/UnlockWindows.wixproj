@@ -6,6 +6,7 @@
          Build.ps1 verifies extracted hashes, checks File.Language in the source MUI layout and validates the IDs; other ICEs remain enabled. -->
     <SuppressIces>$(SuppressIces);ICE03</SuppressIces>
     <OutputType>Package</OutputType>
+    <Cultures>neutral,en-US</Cultures>
     <InstallerPlatform>$(UnlockArchitecture)</InstallerPlatform>
     <OutputName>$(UnlockSetupBaseName)</OutputName>
     <OutputPath>$(MSBuildThisFileDirectory)..\..\dist\</OutputPath>
@@ -14,6 +15,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="WixToolset.UI.wixext" Version="7.0.1" />
+    <PackageReference Include="WixToolset.Util.wixext" Version="7.0.1" />
     <Compile Include="$(UnlockBuildDirectory)\generated\Payload.wxs" />
   </ItemGroup>
 </Project>

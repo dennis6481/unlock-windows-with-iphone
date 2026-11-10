@@ -48,14 +48,14 @@ The desktop build follows make → MSBuild Solution/.vcxproj. Native libraries, 
 
 For installation and setup, see the [main guide](../README.md#installation).
 
-Open **Unlock with iPhone** from the Start Menu to show the main window. Install/update creates the all-users shortcut; uninstall removes it.
+The standard welcome page identifies the product and its full four-part version. Click **Next** to install; no license-acceptance page is shown. After installation, update or Repair, clicking **Finish** on the standard completion page launches the app with ordinary user privileges; uninstall does not launch it. When a restart is required, launch the app after restarting. Silent installation does not launch it. Open **Unlock with iPhone** from the Start Menu at any time. Install/update creates the all-users shortcut; uninstall removes it.
 
 - Save your Windows account password (MSA or local), not your PIN. Empty passwords are unsupported. Update the saved copy whenever the password or complete account identity changes; see [password management](SavedCredential/README.md#password-management).
 - Remove the paired iPhone on **Status**, or delete the saved password on **Password**; these are separate actions.
 
 ## Update and uninstall
 
-Run a newer installer to **Update**, or the same version to **Reinstall**. All four version parts participate in this comparison, including the fourth-part check in the execute sequence. Running the same MSI opens maintenance; Repair replaces equal-version files. Downgrades are rejected. MSI updates and repairs preserve your saved password, binding and configured SID. EXE installations must first be uninstalled with their original installer; installing MSI afterward requires saving your password and binding your iPhone again.
+Run a newer installer to **Update**, or the same version to **Reinstall**. All four version parts participate in this comparison, including the fourth-part check in the execute sequence. Running the same MSI opens maintenance; Repair replaces equal-version files. Downgrades are rejected. MSI manages service stop/start and file replacement; updates and repairs preserve your saved password, binding, configured SID and existing login startup setting. EXE installations must first be uninstalled with their original installer; installing MSI afterward requires saving your password and binding your iPhone again.
 
 For uninstall instructions, see the [main guide](../README.md#uninstall).
 
@@ -92,7 +92,6 @@ Module guides: [SavedCredential](SavedCredential/README.md) and [CredentialProvi
 | `--saved-password --save`, `--saved-password --update` | Internal operation-specific elevated WinUI password window. |
 | `--saved-password --remove` | Internal elevated removal without UI; returns `ERROR_SUCCESS` or `ERROR_GEN_FAILURE`. |
 | `--setup` | Ordinary-user setup request handled by the existing single-instance tray. |
-| `--restore-tray` | MSI maintenance startup without showing or consuming the first-install prompt. |
 | `--saved-password --setup --cancel-event <event>` | Internal elevated password step with a per-setup cancellation event; an explicit readiness result permits the ordinary tray to continue on Status. |
 | `--binding-helper <operation> <encoded-request>` | Internal temporary elevated service-management helper; not a public command. |
 

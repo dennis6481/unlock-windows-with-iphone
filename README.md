@@ -56,7 +56,7 @@ Phone unlock requires an existing, locked Windows session. Windows Automatic Res
 > [!IMPORTANT]
 > If a version earlier than **1.0.0-rc3** is installed, uninstall it in Windows **Settings → Apps** first, then run this installer. You will have to re-bind your iPhone and re-save your Windows account password.
 
-1. Sign in as the Windows user you want to configure, then get the native x64 or ARM64 [Windows installer](https://github.com/dennis6481/unlock-windows-with-iphone/releases) and follow its steps. After restarting, sign back in as that user and choose **Start setup**.
+1. Sign in as the Windows user you want to configure, then get the native x64 or ARM64 [Windows installer](https://github.com/dennis6481/unlock-windows-with-iphone/releases) and follow its steps. Click **Finish** on the completion page to open the app, then choose **Start setup**. If the installer requests a restart, restart first and open the app from the Start Menu.
 2. Save your **Microsoft account password** or **local Windows account password**, not your PIN. The encrypted copy stays on this PC and is never sent to the phone.
 3. On **Status**, use **Open Bluetooth settings** to pair your iPhone. Compare the Bluetooth numbers on both devices and accept only a match. Skip this step if Windows already shows the phone as paired.
 4. Return to **Status**, select your iPhone from the updated paired BLE list and click **Bind selected device**. Each BLE endpoint has its own entry; names do not select identity. Devices are never bound automatically.

@@ -14,7 +14,6 @@ inline constexpr wchar_t kSetupRole[] = L"--setup";
 inline constexpr wchar_t kSetupCancelArgument[] = L"--cancel-event";
 inline constexpr wchar_t kSetupCancelPrefix[] = L"Global\\UnlockWithIPhone-Setup-";
 inline constexpr wchar_t kBackgroundRole[] = L"--background";
-inline constexpr wchar_t kRestoreTrayRole[] = L"--restore-tray";
 inline constexpr wchar_t kTrayWindowClass[] = L"UnlockWithIPhoneDesktopHost";
 inline constexpr UINT kSetupMessage = WM_APP + 3;
 inline constexpr UINT kShowMainWindowMessage = WM_APP + 4;
@@ -26,7 +25,6 @@ struct Launch final {
     bool background = false;
     saved_credential::Operation passwordOperation = saved_credential::Operation::status;
     std::wstring setupCancelEvent;
-    bool suppressSetupPrompt = false;
 };
 
 inline bool validSetupCancelEvent(std::wstring_view name) {
@@ -53,11 +51,6 @@ inline Launch parseLaunch(int argc, wchar_t* const argv[]) {
     if (argc < 1) throw std::invalid_argument("Missing application arguments");
     const std::wstring_view command(argv[1]);
     if (command == kBackgroundRole && argc == 2) return {Role::tray, false, true};
-    if (command == kRestoreTrayRole && argc == 2) {
-        Launch launch{Role::tray, false, true};
-        launch.suppressSetupPrompt = true;
-        return launch;
-    }
     if (command == kSetupRole && argc == 2) return {Role::setup};
     if (command == kSavedPasswordRole && argc == 2) return {Role::savedPassword};
     if (command == kSavedPasswordRole && argc == 5 && std::wstring_view(argv[2]) == kSetupRole &&
@@ -80,7 +73,7 @@ inline Launch parseLaunch(int argc, wchar_t* const argv[]) {
     throw std::invalid_argument("Unknown or conflicting application arguments");
 }
 
-int runTray(HINSTANCE instance, bool setup = false, bool background = false, bool suppressPrompt = false);
+int runTray(HINSTANCE instance, bool setup = false, bool background = false);
 int runSavedPassword(HINSTANCE instance, int show, bool setup = false,
     saved_credential::Operation operation = saved_credential::Operation::status,
     const std::wstring& setupCancelEvent = {});

@@ -63,7 +63,7 @@ constexpr ULONGLONG kShutdownReportDelayMs = 10000;
 
 class DesktopHost final : public std::enable_shared_from_this<DesktopHost> {
 public:
-    DesktopHost(HINSTANCE instance, bool setup, bool background, bool suppressPrompt) : instance_(instance), setup_(setup), background_(background), suppressPrompt_(suppressPrompt),
+    DesktopHost(HINSTANCE instance, bool setup, bool background) : instance_(instance), setup_(setup), background_(background),
         tray_([this](TrayCommand command) {
                 switch (command) {
                 case TrayCommand::showWindow: show(); break;
@@ -86,7 +86,7 @@ public:
         singleton_ = CreateMutexW(nullptr, FALSE, L"Local\\UnlockWithIPhone-DesktopHost");
         desktop_ui::require(singleton_ != nullptr, "CreateMutexW");
         if (GetLastError() != ERROR_ALREADY_EXISTS) {
-            if (!suppressPrompt_ && firstSetupPrompt()) setup_ = true;
+            if (firstSetupPrompt()) setup_ = true;
             return true;
         }
         if (setup_ || !background_) {
@@ -304,7 +304,7 @@ private:
     }
 
     HINSTANCE instance_;
-    bool setup_, background_, suppressPrompt_;
+    bool setup_, background_;
     HANDLE singleton_ = nullptr;
     DWORD session_ = 0;
     HWND window_ = nullptr;
@@ -327,11 +327,11 @@ private:
 };
 }
 
-int runTray(HINSTANCE instance, bool setup, bool background, bool suppressPrompt) {
+int runTray(HINSTANCE instance, bool setup, bool background) {
     std::shared_ptr<DesktopHost> host;
     bool uiStarted = false;
     try {
-        host = std::make_shared<DesktopHost>(instance, setup, background, suppressPrompt);
+        host = std::make_shared<DesktopHost>(instance, setup, background);
         if (!host->prepare()) return 0;
         init_apartment(apartment_type::single_threaded);
         struct Apartment final { ~Apartment() { uninit_apartment(); } } apartment;

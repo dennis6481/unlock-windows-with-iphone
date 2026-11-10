@@ -2,7 +2,7 @@
   <?include $(var.GeneratedDirectory)\Product.wxi ?>
   <Package Name="$(var.ProductName)" Manufacturer="Rui MA" Version="$(var.MsiVersion)"
            UpgradeCode="$(var.UpgradeCode)" Scope="perMachine" InstallerVersion="500" Compressed="yes">
-    <MajorUpgrade AllowSameVersionUpgrades="yes" Schedule="afterInstallExecute"
+    <MajorUpgrade AllowSameVersionUpgrades="yes" MigrateFeatures="no" Schedule="afterInstallExecute"
                   DowngradeErrorMessage="A newer version is already installed." />
     <MediaTemplate EmbedCab="yes" />
     <Property Id="WINDOWSBUILDNUMBER" Secure="yes">
@@ -29,7 +29,6 @@
       <DialogRef Id="FatalError" />
       <DialogRef Id="FilesInUse" />
       <DialogRef Id="MsiRMFilesInUse" />
-      <DialogRef Id="PrepareDlg" />
       <DialogRef Id="ProgressDlg" />
       <DialogRef Id="ResumeDlg" />
       <DialogRef Id="UserExit" />
@@ -84,10 +83,12 @@
     <CustomAction Id="CompleteDeployment" BinaryRef="NativeActions" DllEntry="CompleteDeployment" Execute="deferred" Impersonate="no" Return="check" HideTarget="yes" />
     <CustomAction Id="CommitDeployment" BinaryRef="NativeActions" DllEntry="CommitDeployment" Execute="commit" Impersonate="no" Return="check" HideTarget="yes" />
     <InstallUISequence>
+      <MigrateFeatureStates Suppress="yes" />
       <Custom Action="CheckExeInstallation" After="LaunchConditions" Condition="NOT UPGRADINGPRODUCTCODE" />
       <Custom Action="ConfigureApplicationLaunch" After="ExecuteAction" />
     </InstallUISequence>
     <InstallExecuteSequence>
+      <MigrateFeatureStates Suppress="yes" />
       <Custom Action="CheckExeInstallation" After="LaunchConditions" Condition="NOT UPGRADINGPRODUCTCODE" />
       <Custom Action="ValidateDeployment" Before="CloseApplication" />
       <Custom Action="CloseApplication" Before="InstallValidate" Condition="UILevel &gt;= 4 AND NOT UPGRADINGPRODUCTCODE" />

@@ -1,21 +1,23 @@
 <Project Sdk="WixToolset.Sdk/7.0.1">
-  <Import Project="$(UnlockBuildDirectory)\generated\UnlockBuild.props" />
+  <Import Project="..\MSBuild\WindowsBuild.props" />
+  <Import Project="..\MSBuild\WindowsBuild.targets" />
+  <Import Project="Msi.targets" />
   <PropertyGroup>
     <AcceptEula>wix7</AcceptEula>
     <!-- ICE03 rejects WinUI MUI language IDs recognized by Windows and its 430-character DLL language lists.
-         Build.ps1 verifies extracted hashes, checks File.Language in the source MUI layout and validates the IDs; other ICEs remain enabled. -->
+         ValidateMsi verifies extracted hashes, checks File.Language in the source MUI layout and validates the IDs; other ICEs remain enabled. -->
     <SuppressIces>$(SuppressIces);ICE03</SuppressIces>
     <OutputType>Package</OutputType>
     <Cultures>neutral,en-US</Cultures>
     <InstallerPlatform>$(UnlockArchitecture)</InstallerPlatform>
     <OutputName>$(UnlockSetupBaseName)</OutputName>
     <OutputPath>$(MSBuildThisFileDirectory)..\..\dist\</OutputPath>
-    <IntermediateOutputPath>$(UnlockBuildDirectory)\obj\$(Platform)\$(Configuration)\Msi\</IntermediateOutputPath>
-    <DefineConstants>GeneratedDirectory=$(UnlockBuildDirectory)\generated;ActionsPath=$(UnlockBuildDirectory)\$(UnlockInstallerFile)</DefineConstants>
+    <IntermediateOutputPath>$(UnlockBuildRoot)\obj\$(Platform)\$(Configuration)\Msi\</IntermediateOutputPath>
+    <DefineConstants>GeneratedDirectory=$(UnlockBuildRoot)\generated;ActionsPath=$(UnlockBuildRoot)\$(UnlockInstallerFile)</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="WixToolset.UI.wixext" Version="7.0.1" />
     <PackageReference Include="WixToolset.Util.wixext" Version="7.0.1" />
-    <Compile Include="$(UnlockBuildDirectory)\generated\Payload.wxs" />
+    <Compile Include="$(UnlockBuildRoot)\generated\Payload.wxs" />
   </ItemGroup>
 </Project>

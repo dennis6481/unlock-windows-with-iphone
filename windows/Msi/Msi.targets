@@ -1,0 +1,19 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <UsingTask TaskName="UnlockMsiTask" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <Task>
+      <Code Type="Class" Language="cs" Source="$(MSBuildThisFileDirectory)UnlockMsiTask.cs" />
+    </Task>
+  </UsingTask>
+  <Target Name="GenerateMsiSources" BeforeTargets="BeforeBuild" DependsOnTargets="ValidateBuildContracts">
+    <UnlockMsiTask Operation="Generate" WindowsDirectory="$(UnlockWindowsDirectory)" BuildDirectory="$(UnlockBuildRoot)" Architecture="$(UnlockArchitecture)"
+      ProductVersion="$(UnlockProductVersion)" ReleaseVersion="$(UnlockReleaseVersion)" MinimumWindowsBuild="$(UnlockMinimumWindowsBuild)"
+      MainAppFile="$(UnlockMainAppFile)" CredentialProviderFile="$(UnlockCredentialProviderFile)" SavedCredentialServiceFile="$(UnlockSavedCredentialServiceFile)"
+      InstallerFile="$(UnlockInstallerFile)" PackagePath="$(UnlockPackagePath)" SetupFile="$(UnlockSetupFile)" />
+  </Target>
+  <Target Name="ValidateMsi" DependsOnTargets="ValidateBuildContracts">
+    <UnlockMsiTask Operation="Validate" WindowsDirectory="$(UnlockWindowsDirectory)" BuildDirectory="$(UnlockBuildRoot)" Architecture="$(UnlockArchitecture)"
+      ProductVersion="$(UnlockProductVersion)" ReleaseVersion="$(UnlockReleaseVersion)" MinimumWindowsBuild="$(UnlockMinimumWindowsBuild)"
+      MainAppFile="$(UnlockMainAppFile)" CredentialProviderFile="$(UnlockCredentialProviderFile)" SavedCredentialServiceFile="$(UnlockSavedCredentialServiceFile)"
+      InstallerFile="$(UnlockInstallerFile)" PackagePath="$(UnlockPackagePath)" SetupFile="$(UnlockSetupFile)" />
+  </Target>
+</Project>

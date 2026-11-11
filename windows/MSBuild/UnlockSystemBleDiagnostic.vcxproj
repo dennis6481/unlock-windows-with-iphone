@@ -1,5 +1,6 @@
 <!-- Created by Rui MA on 10 Oct 2026 -->
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="WindowsBuild.props" />
   <PropertyGroup Label="Globals">
     <ProjectGuid>25161154-3719-459A-9E6C-308F63210222</ProjectGuid>
     <ProjectName>UnlockSystemBleDiagnostic</ProjectName>
@@ -20,11 +21,11 @@
   </PropertyGroup>
   <Import Project="$(MSBuildThisFileDirectory)..\UnlockToolset.props" />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
-  <Import Project="$(MSBuildThisFileDirectory)..\UnlockNative.props" />
+  <Import Project="$(MSBuildThisFileDirectory)..\UnlockCpp.props" />
   <PropertyGroup>
     <TargetName>unlock_system_ble_diagnostic</TargetName>
-    <OutDir>$(UnlockBuildDirectory)\</OutDir>
-    <IntDir>$(UnlockBuildDirectory)\obj\$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+    <OutDir>$(UnlockBuildRoot)\</OutDir>
+    <IntDir>$(UnlockBuildRoot)\obj\$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
   </PropertyGroup>
   <ItemDefinitionGroup>
     <Link>

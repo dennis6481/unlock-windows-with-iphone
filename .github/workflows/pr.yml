@@ -29,36 +29,35 @@ jobs:
       run:
         working-directory: windows
     env:
-      UNLOCK_TARGET_ARCH: ${{ matrix.architecture }}
-      UNLOCK_VS_DEV_CMD: auto
+      Platform: ${{ matrix.architecture }}
     steps:
       - name: Check out PR merge revision
         uses: actions/checkout@v7
         with:
           persist-credentials: false
 
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-architecture: ${{ matrix.architecture }}
+
       - name: Build Release solution
         shell: cmd
         run: |
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File WindowsBuild.ps1 -Prepare -OutputDirectory build
-          if errorlevel 1 exit /b %errorlevel%
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File WindowsBuild.ps1 -InvokeMSBuild "UnlockWindows.sln" /restore /m /nologo "/p:Configuration=Release" "/p:UnlockBuildDirectory=%CD%\build" "/p:BuildTesting=OFF"
+          msbuild UnlockWindows.sln /restore /m /nologo /p:Platform=%Platform% /p:Configuration=Release "/p:UnlockBuildDirectory=%CD%\build" /p:BuildTesting=OFF
           if errorlevel 1 exit /b %errorlevel%
 
       - name: Verify MSI database and embedded payload
-        shell: pwsh
+        shell: cmd
         run: |
-          . .\WindowsBuild.ps1
-          $metadata = Get-ProductBuildMetadata -Architecture $env:UNLOCK_TARGET_ARCH
-          .\Msi\Build.ps1 -Validate -PackagePath "..\dist\$($metadata.SetupFile)" -BuildDirectory build -Architecture $env:UNLOCK_TARGET_ARCH
+          msbuild UnlockWindows.sln /t:ValidateMsi /nologo /p:Platform=%Platform% /p:Configuration=Release "/p:UnlockBuildDirectory=%CD%\build"
+          if errorlevel 1 exit /b %errorlevel%
       - name: Determine snapshot artifact name
         id: snapshot
-        shell: pwsh
+        shell: cmd
         run: |
-          . .\WindowsBuild.ps1
-          $metadata = Get-ProductBuildMetadata -Architecture $env:UNLOCK_TARGET_ARCH
-          "name=$([IO.Path]::GetFileNameWithoutExtension($metadata.SetupFile))-SNAPSHOT($($metadata.Build))" >> $env:GITHUB_OUTPUT
-          "path=dist/$($metadata.SetupFile)" >> $env:GITHUB_OUTPUT
+          msbuild UnlockWindows.sln /t:ExportBuildMetadata /nologo /p:Platform=%Platform% "/p:MetadataOutputFile=%GITHUB_OUTPUT%"
+          if errorlevel 1 exit /b %errorlevel%
 
       - name: Upload snapshot installer
         uses: actions/upload-artifact@v7

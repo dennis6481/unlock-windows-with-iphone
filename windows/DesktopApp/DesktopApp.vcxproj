@@ -1,16 +1,10 @@
 <!-- Created by Rui MA on 10 Oct 2026 -->
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-  <PropertyGroup>
-    <UnlockBuildDirectory Condition="'$(UnlockBuildDirectory)' == ''">$(MSBuildProjectDirectory)\..\build</UnlockBuildDirectory>
-    <UnlockWindowsSdkVersion>$([System.String]::Copy('$(WindowsSDKVersion)').TrimEnd('\'))</UnlockWindowsSdkVersion>
-    <UnlockBuildResourcesImported>true</UnlockBuildResourcesImported>
-  </PropertyGroup>
-  <Import Project="$(UnlockBuildDirectory)\generated\UnlockBuild.props" Condition="Exists('$(UnlockBuildDirectory)\generated\UnlockBuild.props')" />
+  <Import Project="..\MSBuild\WindowsBuild.props" />
   <PropertyGroup Label="Globals">
     <ProjectGuid>{A952BE06-DB40-4984-B6B1-7C8907D74E6A}</ProjectGuid>
     <ProjectName>UnlockDesktop</ProjectName>
     <RootNamespace>UnlockDesktop</RootNamespace>
-    <WindowsTargetPlatformVersion>$(UnlockWindowsSdkVersion)</WindowsTargetPlatformVersion>
     <TargetPlatformVersion>$(WindowsTargetPlatformVersion)</TargetPlatformVersion>
     <WindowsTargetPlatformMinVersion>10.0.$(UnlockMinimumWindowsBuild).0</WindowsTargetPlatformMinVersion>
     <AppContainerApplication>false</AppContainerApplication>
@@ -30,9 +24,8 @@
     <NuGetTargetPlatformIdentifier>Windows</NuGetTargetPlatformIdentifier>
     <NuGetTargetPlatformVersion>$(WindowsTargetPlatformVersion)</NuGetTargetPlatformVersion>
     <RestorePackagesPath>$(MSBuildProjectDirectory)\packages</RestorePackagesPath>
-    <BaseIntermediateOutputPath>$(UnlockBuildDirectory)\obj\$(Platform)\$(Configuration)\$(ProjectName)\</BaseIntermediateOutputPath>
+    <BaseIntermediateOutputPath>$(UnlockBuildRoot)\obj\$(Platform)\$(Configuration)\$(ProjectName)\</BaseIntermediateOutputPath>
     <CppWinRTOptimized>true</CppWinRTOptimized>
-    <CppWinRTPath>"$([System.String]::Copy('$(WindowsSdkDir)').TrimEnd('\'))\bin\$(UnlockWindowsSdkVersion)\x64/"</CppWinRTPath>
   </PropertyGroup>
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|x64"><Configuration>Debug</Configuration><Platform>x64</Platform></ProjectConfiguration>
@@ -54,14 +47,16 @@
   </PropertyGroup>
   <Import Project="$(MSBuildThisFileDirectory)..\UnlockToolset.props" />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
-  <Import Project="..\UnlockNative.props" />
+  <Import Project="..\UnlockCpp.props" />
   <PropertyGroup>
     <TargetName>$(UnlockMainAppBaseName)</TargetName>
-    <OutDir>$(UnlockBuildDirectory)\</OutDir>
-    <IntDir>$(UnlockBuildDirectory)\obj\$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+    <OutDir>$(UnlockBuildRoot)\</OutDir>
+    <IntDir>$(UnlockBuildRoot)\obj\$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
     <GeneratedFilesDir>$(IntDir)Generated Files\</GeneratedFilesDir>
     <XamlGeneratedOutputPath>$(IntDir)Generated Xaml\</XamlGeneratedOutputPath>
     <GenerateManifest>true</GenerateManifest>
+    <!-- Match the SDK C++/WinRT headers used by the native libraries. -->
+    <CppWinRTPath>&quot;$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\&quot;</CppWinRTPath>
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
@@ -130,6 +125,9 @@
     <Page Include="UI\Pages\AboutPage.xaml" />
     <Page Include="UI\Pages\SharedResources.xaml" />
     <ResourceCompile Include="$(UnlockGeneratedDirectory)\UnlockWithIPhone-version.rc" />
+    <UnlockVersionResource Include="$(UnlockGeneratedDirectory)\UnlockWithIPhone-version.rc">
+      <OriginalFilename>$(UnlockMainAppFile)</OriginalFilename><ResourceType>VFT_APP</ResourceType>
+    </UnlockVersionResource>
     <ResourceCompile Include="..\Resources\AppIcon.rc" />
     <Manifest Include="..\Resources/DesktopUi.manifest" />
   </ItemGroup>

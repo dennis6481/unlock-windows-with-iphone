@@ -1,0 +1,3 @@
+<Project>
+  <Import Project="MSBuild\WindowsBuild.props" />
+</Project>

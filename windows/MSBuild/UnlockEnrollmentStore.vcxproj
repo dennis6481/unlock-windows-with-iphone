@@ -1,5 +1,6 @@
 <!-- Created by Rui MA on 10 Oct 2026 -->
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="WindowsBuild.props" />
   <PropertyGroup Label="Globals">
     <ProjectGuid>E0C2F02C-3EAC-4649-BE0C-DBE4A3C18DE3</ProjectGuid>
     <ProjectName>UnlockEnrollmentStore</ProjectName>
@@ -21,11 +22,11 @@
   </PropertyGroup>
   <Import Project="$(MSBuildThisFileDirectory)..\UnlockToolset.props" />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
-  <Import Project="$(MSBuildThisFileDirectory)..\UnlockNative.props" />
+  <Import Project="$(MSBuildThisFileDirectory)..\UnlockCpp.props" />
   <PropertyGroup>
     <TargetName>unlock_enrollment_store</TargetName>
     <OutDir>$(UnlockLibraryDirectory)\</OutDir>
-    <IntDir>$(UnlockBuildDirectory)\obj\$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+    <IntDir>$(UnlockBuildRoot)\obj\$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>

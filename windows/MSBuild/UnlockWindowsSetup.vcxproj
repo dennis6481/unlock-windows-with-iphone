@@ -1,5 +1,6 @@
 <!-- Created by Rui MA on 10 Oct 2026 -->
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="WindowsBuild.props" />
   <PropertyGroup Label="Globals">
     <ProjectGuid>{1EBD0A80-803E-4A5E-9D15-7F4495D95845}</ProjectGuid>
     <ProjectName>UnlockWindowsSetup</ProjectName>
@@ -20,11 +21,11 @@
   </PropertyGroup>
   <Import Project="$(MSBuildThisFileDirectory)..\UnlockToolset.props" />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
-  <Import Project="$(MSBuildThisFileDirectory)..\UnlockNative.props" />
+  <Import Project="$(MSBuildThisFileDirectory)..\UnlockCpp.props" />
   <PropertyGroup>
     <TargetName>$(UnlockInstallerBaseName)</TargetName>
-    <OutDir>$(UnlockBuildDirectory)\</OutDir>
-    <IntDir>$(UnlockBuildDirectory)\obj\$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+    <OutDir>$(UnlockBuildRoot)\</OutDir>
+    <IntDir>$(UnlockBuildRoot)\obj\$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
     <GenerateManifest>false</GenerateManifest>
   </PropertyGroup>
   <ItemDefinitionGroup>
@@ -44,6 +45,9 @@
     <ClCompile Include="..\Msi\UserIntegration.cpp" />
     <ClCompile Include="..\SavedCredential\SavedCredentialVault.cpp" />
     <ResourceCompile Include="$(UnlockGeneratedDirectory)\$(UnlockInstallerBaseName)-version.rc" />
+    <UnlockVersionResource Include="$(UnlockGeneratedDirectory)\$(UnlockInstallerBaseName)-version.rc">
+      <OriginalFilename>$(UnlockInstallerFile)</OriginalFilename><ResourceType>VFT_DLL</ResourceType>
+    </UnlockVersionResource>
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="UnlockEnrollmentStore.vcxproj">
@@ -72,8 +76,8 @@
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <Target Name="BuildMsi" AfterTargets="Build">
-    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\Msi\Build.ps1&quot; -Generate -BuildDirectory &quot;$(UnlockBuildDirectory)&quot; -Architecture &quot;$(UnlockArchitecture)&quot;" />
-    <!-- /restore reevaluates the project after NuGet writes the extension imports. -->
-    <Exec Command="&quot;$(MSBuildBinPath)\MSBuild.exe&quot; &quot;$(MSBuildThisFileDirectory)..\Msi\UnlockWindows.wixproj&quot; /restore /nologo &quot;/p:Configuration=$(Configuration)&quot; &quot;/p:Platform=$(Platform)&quot; &quot;/p:UnlockBuildDirectory=$(UnlockBuildDirectory)&quot;" StdOutEncoding="UTF-8" StdErrEncoding="UTF-8" />
+    <MSBuild Projects="$(UnlockWindowsDirectory)Msi\UnlockWindows.wixproj" Targets="Restore" Properties="Configuration=$(Configuration);Platform=$(Platform);UnlockBuildDirectory=$(UnlockBuildRoot)" />
+    <!-- A distinct evaluation after restore picks up the generated NuGet extension imports. -->
+    <MSBuild Projects="$(UnlockWindowsDirectory)Msi\UnlockWindows.wixproj" Targets="Build" Properties="Configuration=$(Configuration);Platform=$(Platform);UnlockBuildDirectory=$(UnlockBuildRoot);UnlockMsiRestored=true" />
   </Target>
 </Project>

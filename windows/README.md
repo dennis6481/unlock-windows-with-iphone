@@ -13,10 +13,10 @@ The Windows side contains three installed components: the desktop app, LocalSyst
 ## Build prerequisites
 
 - Windows and Visual Studio 2022 / 2026 or matching Build Tools with **Desktop development with C++**, **C++ WinUI app development tools**, MSVC C++20 support and the target architecture's tools. The WinUI tools supply native XAML MSBuild targets. ARM64 requires the ARM64 C++ tools component.
-- Windows SDK **10.0.22621.0 or newer** with C++/WinRT headers and `cppwinrt.exe`; a recent SDK is recommended. The C++/WinRT NuGet package supplies the MSBuild integration.
-- **GNU Make** available on `PATH`, plus the Visual Studio `MSBuild.exe` and Windows SDK tools supplied by the installation above. `make` remains the public entry point; it invokes the checked-in MSBuild solution and projects directly.
+- Windows SDK **10.0.22621.0 or newer** with C++/WinRT headers and `cppwinrt.exe`; a recent SDK is recommended. The desktop generator and native libraries use the same SDK's C++/WinRT version; the NuGet package supplies the MSBuild integration.
+- Visual Studio's **MSBuild.exe** and the Windows SDK tools supplied by the installation above. **GNU Make** on `PATH` is optional for the shortcut commands below.
 - WiX SDK and UI extension **7.0.1**, restored by the MSI project. Review the [WiX EULA and build prerequisites](https://docs.firegiant.com/wix/). No .NET runtime is required on target PCs by the native custom actions.
-- Run from a native Windows PowerShell or command prompt. The Makefile uses Windows commands and is not a WSL build workflow.
+- Run Make from a Windows terminal; it uses `vswhere.exe` to locate Visual Studio with the target C++ tools. Direct `msbuild` commands require MSBuild on `PATH` or its full executable path. This is not a WSL build workflow.
 
 From the repository root:
 
@@ -26,9 +26,20 @@ make -C windows test
 make -C windows build-release
 ```
 
-`test` builds first and then runs the three native test programs in their existing order. `make -C windows` builds and runs tests; `build-release` builds Release targets without executing them. The shared [WindowsBuild.ps1](WindowsBuild.ps1) helper finds Visual Studio with `vswhere`, selects native `x64` or `arm64`, initializes the MSBuild environment and validates the Windows SDK tools.
+`test` builds first and then runs the three native test programs in their existing order. `make -C windows` builds and runs tests; `build-release` builds Release targets without executing them. Make only locates MSBuild and passes options; shared MSBuild properties and targets select the SDK and generate resources directly from the source contracts. Use `MSBUILD="C:\path\to\MSBuild.exe"` to override discovery.
 
-Product versions use `major.minor.patch.build` from [ProductVersion.h](ProductVersion.h); About displays `Version X.Y.Z (Build B)`. A complete local solution Build/Rebuild uses one fixed version, then advances the header's build once for the next invocation after success. `make` and `make test` wait for tests to pass too.
+From `windows`, the equivalent direct commands are:
+
+```text
+msbuild UnlockWindows.sln /restore /m /p:Platform=x64
+msbuild UnlockWindows.sln /restore /m /p:Platform=x64 /p:RunTests=true
+msbuild UnlockWindows.sln /restore /m /p:Platform=x64 /p:Configuration=Release
+msbuild UnlockWindows.sln /t:ValidateMsi /p:Platform=x64 /p:Configuration=Release
+```
+
+Use `Platform=ARM64` for ARM64. Visual Studio can open and build `UnlockWindows.sln` without a preparation script; IDE builds do not run tests or advance the build number. `ValidateMsi` checks an existing package without installing it; CI requires this check before upload.
+
+Product versions use `major.minor.patch.build` from [ProductVersion.h](ProductVersion.h); About displays `Version X.Y.Z (Build B)`. A complete local command-line solution Build/Rebuild uses one fixed version, then advances the header's build once for the next invocation after success. `make` and `make test` wait for tests to pass too.
 
 Failed/cancelled builds, configure, clean, standalone tests and subprojects do not advance it. CI keeps the committed version. MSI major/minor range from 0 to 255; patch/build range from 0 to 65535. Out-of-range fields are rejected without truncation; set the next release/build manually before incrementing would overflow. Build one invocation at a time per checkout.
 
@@ -42,7 +53,7 @@ make -C windows build-release TARGET_ARCH=arm64 BUILD_DIR=build/arm64-release
 
 The installer is generated at `dist/UnlockWithIPhone_<version>_<architecture>_setup.msi` in the repository root, with `x64` or `arm64` matching the compiler target and the first three version parts read from [ProductVersion.h](ProductVersion.h). Distribute only the **Release** MSI; it embeds the desktop app and its runtime files, service and Credential Provider. Static libraries are isolated under `lib/<architecture>/<configuration>` to prevent Debug/Release runtime mixing. Use separate build directories per architecture/configuration; the active desktop EXE remains at the build root for existing make commands.
 
-The desktop build follows make → MSBuild Solution/.vcxproj. Native libraries, the service, Credential Provider, desktop WinUI app and installer are separate projects with explicit dependencies and outputs. Pinned Windows App SDK packages and Hybrid CRT remain in use; local NuGet caches and Visual Studio user settings are ignored by Git. XAML generation and `DesktopApp.files` preserve the pages' relative directories. `DesktopApp.files` comes from the WinUI project; MSI payload authoring is generated from `ComponentFiles.h` and `DesktopApp.files`. CI extracts embedded cabinets without installation and checks payload hashes, PE architectures and four-part product versions. Third-party files retain their versions.
+Visual Studio, direct MSBuild and the optional Make shortcuts use the same MSBuild projects and targets. Native libraries, the service, Credential Provider, desktop WinUI app and installer are separate projects with explicit dependencies and outputs. Pinned Windows App SDK packages and Hybrid CRT remain in use; local NuGet caches and Visual Studio user settings are ignored by Git. XAML generation and `DesktopApp.files` preserve the pages' relative directories. `DesktopApp.files` comes from the WinUI project; MSI payload authoring is generated from `ComponentFiles.h` and `DesktopApp.files`. CI extracts embedded cabinets without installation and checks payload hashes, PE architectures and four-part product versions. Third-party files retain their versions.
 
 ## Install and configure
 
@@ -110,7 +121,7 @@ The main window uses Mica and system theme colors; Windows 10 uses the framework
 
 Pushing `v1.0.0` publishes a Release; `v1.0.0-rc` or numbered RC tags such as `v1.0.0-rc1` publish a Pre-release without marking it Latest. The numeric tag must match the first three parts in [ProductVersion.h](ProductVersion.h); installer versions retain all four committed parts, while Release download filenames use three parts. About checks public updates using the first three parts only. The RC suffix is GitHub release metadata only, so RC and final installers with the same four-part version use Reinstall.
 
-CI uses `WindowsBuild.ps1` without GNU Make. [PR builds](../.github/workflows/pr.yml) compile the Release solution for x64 and ARM64 when targeting `dev` or `main`, without running native tests or publishing a release; MSI structure and extracted payload checks run before upload. Each uploads an installer with a three-part version filename in an artifact named `UnlockWithIPhone_<version>_<architecture>_setup-SNAPSHOT(<build>)`, using the product version's fourth part in parentheses; require **Build x64** and **Build arm64** in the target branch ruleset to block failed builds from merging. [Release CI](../.github/workflows/release.yml) runs all three native test programs on both architectures before building and verifying installers; any failure blocks publication.
+CI calls MSBuild directly without GNU Make or PowerShell build scripts. [PR builds](../.github/workflows/pr.yml) compile the Release solution for x64 and ARM64 when targeting `dev` or `main`, without running native tests or publishing a release; MSI structure and extracted payload checks run before upload. Each uploads an installer with a three-part version filename in an artifact named `UnlockWithIPhone_<version>_<architecture>_setup-SNAPSHOT(<build>)`, using the product version's fourth part in parentheses; require **Build x64** and **Build arm64** in the target branch ruleset to block failed builds from merging. [Release CI](../.github/workflows/release.yml) runs all three native test programs on both architectures before building and verifying installers; any failure blocks publication.
 
 ## Local-account validation
 

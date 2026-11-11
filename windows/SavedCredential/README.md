@@ -53,7 +53,7 @@ The Password page refreshes on entry, activation and operation completion; faile
 
 ## Removal and maintenance
 
-Active MSI uninstall stops the service and confirms process exit, then directly deletes the saved password and binding as SYSTEM. It does not use service IPC or require the configured user to be signed in or the console to be unlocked. Stop or deletion failures stop uninstall. Upgrade removal skips clearing. Deletion is irreversible if a later uninstall step fails.
+Active MSI uninstall stops the service and confirms process exit, then directly deletes the saved password, binding and recognized pending binding files as SYSTEM. It does not use service IPC or require the configured user to be signed in or the console to be unlocked. Stop or deletion failures stop uninstall. Upgrade removal skips clearing. Deletion is irreversible if a later uninstall step fails.
 
 Keep identity checks, consume-before-decrypt ordering, caller separation and impersonation boundaries intact during maintenance. Logs must not include passwords, nonce bytes, credential plaintext or device identifiers in public reports. Verify caller, identity, replay and restart scenarios.
 

@@ -92,7 +92,21 @@ int main() {
             require(!file.bad() && unsupported.size() > 8, "Current-format fixture must contain encrypted data");
         }
         unsupported[4] ^= 0x80;
-        store.remove(); require(!store.load(), "Product removal must remove only the stored binding");
+        {
+            const auto pending = std::filesystem::path(path.wstring() + ble::kEnrollmentPendingSuffix +
+                L"0123456789abcdef0123456789abcdef");
+            const auto otherPending = std::filesystem::path(path.wstring() + ble::kEnrollmentPendingSuffix +
+                L"fedcba9876543210fedcba9876543210");
+            const auto unknown = std::filesystem::path(pending.wstring() + L"x");
+            std::filesystem::copy_file(path, pending);
+            std::filesystem::copy_file(path, otherPending);
+            std::filesystem::copy_file(path, unknown);
+            store.remove();
+            require(!store.load() && !std::filesystem::exists(pending) && !std::filesystem::exists(otherPending),
+                "Removal must delete the stored binding and all known pending files");
+            require(std::filesystem::exists(unknown), "Removal must preserve unknown filenames");
+            require(std::filesystem::remove(unknown), "Cannot remove unknown-name fixture");
+        }
         {
             std::ofstream file(path, std::ios::binary);
             file.write(reinterpret_cast<const char*>(unsupported.data()), static_cast<std::streamsize>(unsupported.size()));
@@ -111,6 +125,22 @@ int main() {
         rejects([&] { static_cast<void>(store.load()); }, "Corrupt storage must be an error, not unregistered");
         store.remove();
         store.remove();
+        {
+            const auto pending = std::filesystem::path(path.wstring() + ble::kEnrollmentPendingSuffix +
+                L"0123456789abcdef0123456789abcdef");
+            store.save(first);
+            std::filesystem::rename(path, pending);
+            {
+                winrt::handle locked(CreateFileW(pending.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, 0, nullptr));
+                require(locked.get() != INVALID_HANDLE_VALUE, "Cannot lock orphaned pending fixture");
+                rejects([&] { store.remove(); }, "Locked pending files must fail deletion even without a binding");
+            }
+            store.remove();
+            require(!std::filesystem::exists(pending), "Removal must delete pending files without a stored binding");
+            std::filesystem::create_directory(pending);
+            rejects([&] { store.remove(); }, "Known pending names with the wrong file type must block deletion");
+            require(std::filesystem::remove(pending), "Cannot remove wrong-type fixture");
+        }
         ble::EnrollmentStore absent((directory / L"absent" / ble::kEnrollmentFileName).wstring());
         absent.remove();
         require(!std::filesystem::exists(directory / L"absent"), "Removal must not create a missing directory");

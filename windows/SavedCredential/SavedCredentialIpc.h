@@ -17,13 +17,14 @@ namespace unlock_windows::saved_credential {
 
 inline constexpr wchar_t kPipeName[] = L"\\\\.\\pipe\\unlock-windows-saved-credential-v1";
 inline constexpr wchar_t kServiceName[] = L"UnlockWindowsSavedCredentialService";
+inline constexpr wchar_t kServiceDisplayName[] = L"Unlock Windows saved credential";
 inline constexpr std::size_t kMaxPacket = 16 * 1024;
 inline constexpr std::size_t kMaxPasswordChars = 1024;
 inline constexpr std::size_t kMaxQualifiedUserNameChars = 1024;
 inline constexpr std::size_t kNonceSize = 16;
 inline constexpr std::uint16_t kProtocolVersion = 3;
 inline constexpr DWORD kPipeTransferLifetimeMs = 2000;
-inline constexpr wchar_t kBindingCancelPrefix[] = L"Global\\UnlockWindowsWithIPhone-Pairing-";
+inline constexpr wchar_t kBindingCancelPrefix[] = L"Global\\UnlockWithIPhone-Pairing-";
 
 enum class Operation : std::uint16_t {
     captureIdentity = 1,
@@ -32,7 +33,6 @@ enum class Operation : std::uint16_t {
     updateCredential = 4,
     clearCredential = 5,
     claimCredential = 7,
-    clearForRemoval = 8,
     beginVerification = 9,
     takeAutoSubmitOffer = 12,
     verificationStatus = 15,
@@ -52,7 +52,6 @@ inline constexpr bool isKnownOperation(const std::uint16_t value) noexcept {
     case Operation::updateCredential:
     case Operation::clearCredential:
     case Operation::claimCredential:
-    case Operation::clearForRemoval:
     case Operation::beginVerification:
     case Operation::takeAutoSubmitOffer:
     case Operation::verificationStatus:

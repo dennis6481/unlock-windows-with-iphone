@@ -54,9 +54,9 @@ Phone unlock requires an existing, locked Windows session. Windows Automatic Res
 ### Installation
 
 > [!IMPORTANT]
-> If a version earlier than **1.0.0** is installed, uninstall it in Windows **Settings → Apps** first, then run this installer. 
+> If a version earlier than **1.0.0-rc3** is installed, uninstall it in Windows **Settings → Apps** first, then run this installer. You will have to re-bind your iPhone and re-save your Windows account password.
 
-1. Sign in as the Windows user you want to configure, then get the native x64 or ARM64 [Windows installer](https://github.com/dennis6481/unlock-windows-with-iphone/releases) and follow its steps. After restarting, sign back in as that user and choose **Start setup**.
+1. Sign in as the Windows user you want to configure, then get the native x64 or ARM64 [Windows installer](https://github.com/dennis6481/unlock-windows-with-iphone/releases) and follow its steps. Click **Finish** on the completion page to open the app, then choose **Start setup**. If the installer requests a restart, restart first and open the app from the Start Menu.
 2. Save your **Microsoft account password** or **local Windows account password**, not your PIN. The encrypted copy stays on this PC and is never sent to the phone.
 3. On **Status**, use **Open Bluetooth settings** to pair your iPhone. Compare the Bluetooth numbers on both devices and accept only a match. Skip this step if Windows already shows the phone as paired.
 4. Return to **Status**, select your iPhone from the updated paired BLE list and click **Bind selected device**. Each BLE endpoint has its own entry; names do not select identity. Devices are never bound automatically.
@@ -88,7 +88,7 @@ Your iPhone can stay locked. The Windows app does not need to remain open.
 
 Open Windows **Settings → Apps**, find *Unlock with iPhone* and select **Uninstall**. Follow the uninstaller's instructions, including restarting if prompted.
 
-Uninstalling removes the Windows components, the Start Menu shortcut, the saved password copy and the product binding stored on your PC. It does not change your Windows account password. If you reinstall, you will need to set up the app again.
+Uninstalling removes the Windows components, the Start Menu shortcut, the saved password copy and the product binding stored on your PC. It does not change your Windows account password. Deletion is irreversible even if later removal fails. After uninstalling, a fresh installation requires setup again.
 
 Windows system Bluetooth pairing is kept. Remove it separately in Windows Bluetooth settings if desired.
 
@@ -110,7 +110,7 @@ The [Windows module index](windows/README.md#module-index) explains the source d
 
 Do not mix service, Credential Provider and desktop binaries from different builds.
 
-Windows distribution is a single `dist/UnlockWithIPhone_<version>_<architecture>_setup.exe` with the desktop app, service and Credential Provider embedded. The product version uses `major.minor.patch.build`; installer filenames omit build. Existing three-part versions are read with build `0`.
+Windows distribution consists of self-contained x64 and ARM64 `dist/UnlockWithIPhone_<version>_<architecture>_setup.msi` packages. The product version uses `major.minor.patch.build`; filenames omit build. Higher fourth parts update, identical four-part versions reinstall and lower versions are rejected. Updates and repairs within this installation layout preserve credentials and binding.
 
 
 ## Known limitations
@@ -124,7 +124,7 @@ Windows distribution is a single `dist/UnlockWithIPhone_<version>_<architecture>
 - [ ] Support multiple Windows users. [#24](https://github.com/dennis6481/unlock-windows-with-iphone/issues/24).
 - [ ] Add support for Apple Watch. [#23](https://github.com/dennis6481/unlock-windows-with-iphone/issues/23).
 - [ ] Investigate LSA-based Windows authentication to replace the current implementation that stores a local Windows password copy. [#22](https://github.com/dennis6481/unlock-windows-with-iphone/issues/22).
-- [ ] Evaluate Windows Installer (MSI) to simplify installation, upgrades and maintenance. [#25](https://github.com/dennis6481/unlock-windows-with-iphone/issues/25).
+- [x] ~~Evaluate Windows Installer (MSI) to simplify installation, upgrades and maintenance. [#25](https://github.com/dennis6481/unlock-windows-with-iphone/issues/25).~~
 
 ## Security
 

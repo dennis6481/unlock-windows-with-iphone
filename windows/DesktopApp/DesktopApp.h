@@ -12,9 +12,9 @@ namespace unlock_windows::desktop_app {
 inline constexpr wchar_t kSavedPasswordRole[] = L"--saved-password";
 inline constexpr wchar_t kSetupRole[] = L"--setup";
 inline constexpr wchar_t kSetupCancelArgument[] = L"--cancel-event";
-inline constexpr wchar_t kSetupCancelPrefix[] = L"Global\\UnlockWindowsWithIPhone-Setup-";
+inline constexpr wchar_t kSetupCancelPrefix[] = L"Global\\UnlockWithIPhone-Setup-";
 inline constexpr wchar_t kBackgroundRole[] = L"--background";
-inline constexpr wchar_t kTrayWindowClass[] = L"UnlockWindowsWithIPhoneDesktopHost";
+inline constexpr wchar_t kTrayWindowClass[] = L"UnlockWithIPhoneDesktopHost";
 inline constexpr UINT kSetupMessage = WM_APP + 3;
 inline constexpr UINT kShowMainWindowMessage = WM_APP + 4;
 enum class SetupResult : DWORD { cancelled = 0, error = 1, credentialReady = 2 };

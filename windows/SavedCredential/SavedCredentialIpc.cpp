@@ -4,6 +4,7 @@
 #include "../Resources/resource.h"
 #include "SavedCredentialIpc.h"
 #include "../ComponentFiles.h"
+#include "../ProductIdentity.h"
 
 #include <sddl.h>
 #include <winsvc.h>
@@ -179,12 +180,14 @@ bool isExpectedServer(const HANDLE pipe, CallDiagnostics* const diagnostics) {
     step(L"scm-config");
     if (!QueryServiceConfigW(service.value, config, configBytes, &configBytes)) return false;
 
-    step(L"system-directory");
-    wchar_t systemDirectory[MAX_PATH]{};
-    const UINT systemSize = GetSystemDirectoryW(systemDirectory, MAX_PATH);
-    if (systemSize == 0) return false;
-    if (systemSize >= MAX_PATH) return mismatch();
-    const auto expectedImage = std::wstring(systemDirectory) + L"\\" + unlock::components::kSavedCredentialServiceFile;
+    step(L"product-directory");
+    std::filesystem::path directory;
+    const HRESULT resolved = unlock::components::readProductDirectory(directory);
+    if (FAILED(resolved)) {
+        SetLastError(HRESULT_FACILITY(resolved) == FACILITY_WIN32 ? HRESULT_CODE(resolved) : ERROR_GEN_FAILURE);
+        return false;
+    }
+    const auto expectedImage = (directory / unlock::components::kSavedCredentialServiceFile).wstring();
     const auto expectedCommand = L"\"" + expectedImage + L"\"";
     step(L"scm-service-identity");
     if (config->dwServiceType != SERVICE_WIN32_OWN_PROCESS ||

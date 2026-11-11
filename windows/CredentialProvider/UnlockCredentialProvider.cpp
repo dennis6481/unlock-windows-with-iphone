@@ -4,7 +4,7 @@
 #include "UnlockCredentialProvider.h"
 #include "CredentialSerialization.h"
 #include "SavedCredentialIpc.h"
-#include "../Setup/SetupIdentity.h"
+#include "../ProductIdentity.h"
 #include "../Resources/resource.h"
 #include <algorithm>
 #include <array>
@@ -1322,17 +1322,16 @@ public:
             sidValue, qualifiedName, providerId, usageScenario_, consoleSessionId
         );
         if (SUCCEEDED(result)) {
-            const bool sameUser = previousSession == consoleSessionId &&
-                previousIdentity.sid == sidValue && previousIdentity.qualifiedUserName == qualifiedName &&
-                IsEqualGUID(previousIdentity.providerId, providerId);
-            if (!sameUser) credential_->resetAttempt();
-            hasUserSid_ = true;
             try {
                 identity_ = {sidValue, qualifiedName, providerId};
             } catch (const std::bad_alloc&) {
                 hasUserSid_ = false;
                 return E_OUTOFMEMORY;
             }
+            const bool sameUser = previousSession == consoleSessionId &&
+                unlock_windows::saved_credential::sameIdentity(previousIdentity, identity_);
+            if (!sameUser) credential_->resetAttempt();
+            hasUserSid_ = true;
             consoleSessionId_ = SUCCEEDED(consoleStatus) && consoleSid == sidValue
                 ? consoleSessionId : 0xffffffff;
             result = startWatching();
@@ -1481,9 +1480,8 @@ private:
 
     HRESULT startWatching() {
         if (events_ == nullptr || !hasUserSid_ || consoleSessionId_ == 0xffffffff) return S_OK;
-        if (watch_ && watch_->session == consoleSessionId_ && watch_->identity.sid == identity_.sid &&
-            watch_->identity.qualifiedUserName == identity_.qualifiedUserName &&
-            IsEqualGUID(watch_->identity.providerId, identity_.providerId)) return S_OK;
+        if (watch_ && watch_->session == consoleSessionId_ &&
+            unlock_windows::saved_credential::sameIdentity(watch_->identity, identity_)) return S_OK;
         stopWatching();
         try {
             auto watch = std::make_unique<ApprovalWatch>();

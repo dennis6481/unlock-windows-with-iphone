@@ -8,7 +8,7 @@
 #include "../Bluetooth/SystemBleSession.h"
 #include "../Bluetooth/PresenceAuthorization.h"
 #include "../ConsoleSession.h"
-#include "../Setup/SetupIdentity.h"
+#include "../ProductIdentity.h"
 
 #include <WtsApi32.h>
 #include <lm.h>
@@ -362,7 +362,7 @@ public:
             }
             if (request.operation == Operation::captureProvisioningIdentity) {
                 const DWORD session = WTSGetActiveConsoleSessionId();
-                if (!client.logonUi || session == 0xffffffff || client.session != session || removing_)
+                if (!client.logonUi || session == 0xffffffff || client.session != session)
                     return response;
                 Identity identity;
                 std::wstring targetSid;
@@ -391,7 +391,6 @@ public:
                 refreshUnlockHistory(console, bindingSummary(), vault_.storedIdentity());
             expireRequest(console);
             if (client.session != console.session) return response;
-            if (removing_ && request.operation != Operation::clearForRemoval) return response;
             if (request.operation == Operation::reportUnlockResult) {
                 UnlockResult result;
                 if (!decodeUnlockResult(request.payload.value.data(), request.payload.value.size(), result)) {
@@ -628,17 +627,6 @@ public:
                 wake_.notify_one();
                 grant_.reset();
                 rejectTask(AuthenticationFailure::bindingChanged);
-            } else if (request.operation == Operation::clearForRemoval) {
-                if (!client.admin || console.locked || !request.payload.value.empty()) return response;
-                vault_.clear();
-                clearUnlockHistory();
-                grant_.reset();
-                snapshot_.reset();
-                provisioning_.reset();
-                rejectTask(AuthenticationFailure::bindingChanged);
-                removing_ = true;
-                ++gConnectionGeneration;
-                wake_.notify_one();
             } else if (request.operation == Operation::takeAutoSubmitOffer) {
                 if (!client.logonUi || !console.locked) return response;
                 Identity identity;
@@ -708,7 +696,8 @@ public:
             response.payload.clear();
             if (request.operation == Operation::beginBinding || request.operation == Operation::saveThreshold ||
                 request.operation == Operation::removeBinding || request.operation == Operation::bindingStatus ||
-                request.operation == Operation::bindingTaskStatus) setText(response.payload, winrt::to_string(message));
+                request.operation == Operation::bindingTaskStatus)
+                setText(response.payload, winrt::to_string(message));
         }
         return response;
     }
@@ -890,7 +879,7 @@ private:
                     try {
                         {
                             std::lock_guard lock(mutex_);
-                            if (!removing_ && !gSuspended) {
+                            if (!gSuspended) {
                                 const auto binding = bindingSummary();
                                 const auto stored = vault_.storedIdentity();
                                 if (binding.state == unlock_windows::system_ble::BindingState::bound && stored) {
@@ -1145,7 +1134,6 @@ private:
     std::optional<Identity> authenticationIdentity_;
     AuthenticationStatus authenticationStatus_;
     std::mutex mutex_;
-    bool removing_ = false;
     bool stopping_ = false;
     std::condition_variable wake_;
     std::thread worker_;

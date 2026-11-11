@@ -1,20 +1,24 @@
-// Created by Rui MA on 04 Oct 2026
-// Internal Windows primitives and installation paths shared by setup modules.
-
 #pragma once
-
-#include "WindowsAdapter.h"
+#include "../ProductIdentity.h"
+#include "../ProductVersion.h"
+#include "../ComponentFiles.h"
 #include "../Resources/resource.h"
 #include "../Enrollment/EnrollmentStore.h"
 #include <Windows.h>
 #include <shlobj.h>
 #include <sddl.h>
-#include <cstddef>
+#include <filesystem>
 #include <optional>
+#include <stdexcept>
 #include <cstring>
 #include <vector>
-
 namespace unlock::components {
+class ComponentError : public std::runtime_error {
+    std::wstring text_;
+public:
+    explicit ComponentError(std::wstring text) : std::runtime_error("MSI deployment failed"), text_(std::move(text)) {}
+    const std::wstring& wideWhat() const { return text_; }
+};
 inline void fail(const std::wstring& message) { throw ComponentError(message); }
 class ScopedHandle final {
 public:
@@ -41,15 +45,6 @@ inline void checkHresult(HRESULT value, const std::wstring& text) {
 inline void checkRegistry(LSTATUS status, const std::wstring& operation) {
     if (status != ERROR_SUCCESS) throw ComponentError(operation + L" (Win32=" + std::to_wstring(status) + L")");
 }
-struct ScopedComApartment final {
-    HRESULT value = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    ScopedComApartment() {
-        if (FAILED(value) && value != RPC_E_CHANGED_MODE) checkHresult(value, L"Initialize COM");
-    }
-    ~ScopedComApartment() { if (SUCCEEDED(value)) CoUninitialize(); }
-    ScopedComApartment(const ScopedComApartment&) = delete;
-    ScopedComApartment& operator=(const ScopedComApartment&) = delete;
-};
 inline std::wstring setupErrorText(const std::exception& error) {
     if (const auto* component = dynamic_cast<const ComponentError*>(&error)) return component->wideWhat();
     const std::string text(error.what());
@@ -81,11 +76,8 @@ inline void checkWin32(const BOOL result, const std::wstring& action) {
 }
 
 inline void validateTargetSid(const std::wstring& sid) {
-    PSID binary = nullptr;
-    checkWin32(ConvertStringSidToSidW(sid.c_str(), &binary), L"Validate target SID");
-    const bool valid = IsValidSid(binary) != FALSE;
-    LocalFree(binary);
-    if (!valid || sid == L"S-1-5-18") throw ComponentError(L"A real console user is required.");
+    std::wstring normalized;
+    checkHresult(normalizeTargetSid(sid.c_str(), normalized), L"Validate target SID");
 }
 
 struct RegistryValue final {
@@ -280,16 +272,15 @@ inline bool fileExists(const std::filesystem::path& path) {
     CoTaskMemFree(raw);
     return path;
 }
-[[nodiscard]] inline std::filesystem::path desktopDirectory() {
-    return setupKnownFolder(FOLDERID_ProgramFiles) / kDesktopDirectoryName;
+[[nodiscard]] inline std::filesystem::path productDirectory() {
+    std::filesystem::path directory;
+    checkHresult(readProductDirectory(directory), L"Resolve product installation directory");
+    return directory;
 }
 [[nodiscard]] inline std::filesystem::path startMenuShortcut() {
     return setupKnownFolder(FOLDERID_CommonPrograms) / (std::wstring(UNLOCK_PRODUCT_DISPLAY_NAME) + L".lnk");
 }
 [[nodiscard]] inline std::filesystem::path productDataDirectory() {
-    return setupKnownFolder(FOLDERID_ProgramData) / unlock_windows::system_ble::kEnrollmentDataDirectoryName;
-}
-[[nodiscard]] inline std::filesystem::path transactionRoot() {
-    return productDataDirectory() / kSetupDirectoryName / kTransactionsDirectoryName;
+    return setupKnownFolder(FOLDERID_ProgramData) / kProductDataDirectoryName;
 }
 }

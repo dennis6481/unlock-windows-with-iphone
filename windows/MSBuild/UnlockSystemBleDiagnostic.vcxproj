@@ -24,8 +24,6 @@
   <Import Project="$(MSBuildThisFileDirectory)..\UnlockCpp.props" />
   <PropertyGroup>
     <TargetName>unlock_system_ble_diagnostic</TargetName>
-    <OutDir>$(UnlockBuildRoot)\</OutDir>
-    <IntDir>$(UnlockBuildRoot)\obj\$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
   </PropertyGroup>
   <ItemDefinitionGroup>
     <Link>

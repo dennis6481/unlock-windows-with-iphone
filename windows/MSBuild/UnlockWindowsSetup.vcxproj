@@ -24,15 +24,12 @@
   <Import Project="$(MSBuildThisFileDirectory)..\UnlockCpp.props" />
   <PropertyGroup>
     <TargetName>$(UnlockInstallerBaseName)</TargetName>
-    <OutDir>$(UnlockBuildRoot)\</OutDir>
-    <IntDir>$(UnlockBuildRoot)\obj\$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
     <GenerateManifest>false</GenerateManifest>
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
       <AdditionalIncludeDirectories>..\Msi;..\SavedCredential;..;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>

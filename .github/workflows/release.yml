@@ -60,7 +60,7 @@ jobs:
       - name: Validate product release version
         shell: cmd
         run: |
-          msbuild UnlockWindows.sln /t:ExportBuildMetadata /nologo /p:Platform=%Platform% "/p:ExpectedReleaseVersion=%RELEASE_VERSION%" "/p:MetadataOutputFile=%GITHUB_OUTPUT%"
+          msbuild UnlockWindows.sln /t:ValidateBuildContracts /nologo /p:Platform=%Platform% "/p:ExpectedReleaseVersion=%RELEASE_VERSION%"
           if errorlevel 1 exit /b %errorlevel%
 
       - name: Run all Release tests

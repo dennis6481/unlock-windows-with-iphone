@@ -50,8 +50,6 @@
   <Import Project="..\UnlockCpp.props" />
   <PropertyGroup>
     <TargetName>$(UnlockMainAppBaseName)</TargetName>
-    <OutDir>$(UnlockBuildRoot)\</OutDir>
-    <IntDir>$(UnlockBuildRoot)\obj\$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
     <GeneratedFilesDir>$(IntDir)Generated Files\</GeneratedFilesDir>
     <XamlGeneratedOutputPath>$(IntDir)Generated Xaml\</XamlGeneratedOutputPath>
     <GenerateManifest>true</GenerateManifest>
@@ -62,10 +60,7 @@
     <ClCompile>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile />
-      <LanguageStandard>stdcpp20</LanguageStandard>
-      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
-      <ProgramDataBaseFileName>$(IntDir)$(ProjectName).pdb</ProgramDataBaseFileName>
-      <AdditionalOptions>/utf-8 /bigobj %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
       <AdditionalIncludeDirectories>$(GeneratedFilesDir)UI\Pages;..;..\DesktopApp\UI\Pages;..\Protocol;..\Enrollment;..\SavedCredential;UI\Pages;UI\ViewModels;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>UNICODE;_UNICODE;WIN32_LEAN_AND_MEAN;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>

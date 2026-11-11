@@ -3,8 +3,9 @@
   <PropertyGroup>
     <UnlockLibraryDirectory>$(UnlockBuildRoot)\lib\$(Platform)\$(Configuration)</UnlockLibraryDirectory>
     <LibraryPath Condition="!Exists('$(VCToolsInstallDir)atlmfc\lib\$(Platform)')">$([System.String]::Copy('$(LibraryPath)').Replace('$(VCToolsInstallDir)atlmfc\lib\$(Platform);', ''))</LibraryPath>
-    <OutDir Condition="'$(OutDir)' == ''">$(UnlockBuildRoot)\</OutDir>
-    <IntDir Condition="'$(IntDir)' == ''">$(UnlockBuildRoot)\obj\$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+    <OutDir>$(UnlockBuildRoot)\</OutDir>
+    <OutDir Condition="'$(ConfigurationType)' == 'StaticLibrary'">$(UnlockLibraryDirectory)\</OutDir>
+    <IntDir>$(UnlockBuildRoot)\obj\$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
     <UseDebugLibraries Condition="'$(Configuration)' == 'Debug'">true</UseDebugLibraries>
     <UseDebugLibraries Condition="'$(Configuration)' == 'Release'">false</UseDebugLibraries>
   </PropertyGroup>

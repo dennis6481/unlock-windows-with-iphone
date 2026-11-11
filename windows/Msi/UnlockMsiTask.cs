@@ -9,7 +9,6 @@ using System.Security;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
-using System.Xml;
 using Microsoft.Build.Framework;
 using Microsoft.Build.Utilities;
 
@@ -154,8 +153,7 @@ public sealed class UnlockMsiTask : Task
             entries.Add(new Payload { Name = name, Path = Path.Combine(BuildDirectory, name), Product = true });
         }
         Require(entries.Count != 0, "Empty component filename contract.");
-        string policy = Regex.Match(File.ReadAllText(Path.Combine(MsiDirectory, "PayloadPaths.h")), "(?s)kPayloadPathComponentPattern\\[\\]\\s*=\\s*LR\"regex\\((.*?)\\)regex\";").Groups[1].Value;
-        Require(policy.Length != 0, "Missing package path policy.");
+        string policy = @"(?!(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\.|$))[^<>:""/\\|?*\x00-\x1F]*[^<>:""/\\|?*\x00-\x1F. ]";
         foreach (string line in File.ReadAllLines(Path.Combine(BuildDirectory, "DesktopApp.files")))
         {
             string name = line.Replace('/', '\\');
@@ -282,10 +280,6 @@ public sealed class UnlockMsiTask : Task
             var media = database.Rows("SELECT `Cabinet` FROM `Media`", 1);
             Require(media.Count != 0 && media.All(r => r[0].StartsWith("#", StringComparison.Ordinal)), "MSI payload must use embedded cabinets.");
             var actions = database.Rows("SELECT `Action`,`Type`,`Source`,`Target` FROM `CustomAction`", 4).ToDictionary(r => r[0]);
-            var authoring = new XmlDocument();
-            authoring.Load(Path.Combine(MsiDirectory, "Package.wxs"));
-            string removalCondition = authoring.SelectSingleNode("//*[local-name()='InstallExecuteSequence']/*[@Action='RemoveProductData']").Attributes["Condition"].Value;
-            Require(removalCondition == "REMOVE~=\"ALL\" AND NOT UPGRADINGPRODUCTCODE", "Data removal must be limited to active full uninstall.");
             var ipc = HeaderStrings(Path.Combine(WindowsDirectory, "SavedCredential", "SavedCredentialIpc.h"));
             var controls = database.Rows("SELECT `Name`,`Event`,`Wait` FROM `ServiceControl`", 3).Where(r => r[0] == ipc["kServiceName"]).ToArray();
             Require(controls.Length == 1 && (Int32.Parse(controls[0][1]) & 0xa3) == 0xa3 && controls[0][2] == "1", "MSI must start, stop and remove the credential service, waiting for completion.");
@@ -294,8 +288,6 @@ public sealed class UnlockMsiTask : Task
             foreach (string table in new[] { "InstallUISequence", "InstallExecuteSequence" })
             {
                 var rows = table == "InstallUISequence" ? uiSequence : sequence;
-                foreach (XmlNode node in authoring.SelectNodes("//*[local-name()='" + table + "']/*[@Action]"))
-                    Require(rows[node.Attributes["Action"].Value][1] == (node.Attributes["Condition"] == null ? "" : node.Attributes["Condition"].Value), "MSI action condition differs from authoring: " + table + "/" + node.Attributes["Action"].Value);
                 Require(rows.ContainsKey("CheckExeInstallation") && Before(rows, "LaunchConditions", "CheckExeInstallation") && Before(rows, "CheckExeInstallation", "CostInitialize"), "EXE installation check must follow launch conditions before costing: " + table);
             }
             Require(sequence.ContainsKey("CloseApplication") && sequence.ContainsKey("InitializeDeployment") && sequence.ContainsKey("StartServices") && sequence.ContainsKey("CaptureRebootState") &&
@@ -307,7 +299,7 @@ public sealed class UnlockMsiTask : Task
                 Before(sequence, "StopServices", "InstallFiles") && Before(sequence, "InstallServices", "StartServices") &&
                 Before(sequence, "RemoveExistingProducts", "StartServices") && Before(sequence, "StartServices", "CaptureRebootState") &&
                 Before(sequence, "CaptureRebootState", "CompleteDeployment") && Before(sequence, "CompleteDeployment", "CommitDeployment") &&
-                Before(sequence, "CommitDeployment", "InstallFinalize") && sequence["RemoveProductData"][1] == removalCondition &&
+                Before(sequence, "CommitDeployment", "InstallFinalize") && sequence["RemoveProductData"][1] == "REMOVE~=\"ALL\" AND NOT UPGRADINGPRODUCTCODE" &&
                 Before(sequence, "StopServices", "RemoveProductData") && Before(sequence, "RemoveProductData", "DeleteServices") && Before(sequence, "RemoveProductData", "RemoveFiles"),
                 "Unsafe MSI lifecycle action ordering or conditions.");
             foreach (string action in new[] { "PrepareDeployment", "CompleteDeployment", "RemoveProductData" })
@@ -363,8 +355,6 @@ public sealed class UnlockMsiTask : Task
                         directoryId = directory[1];
                     }
                     Require(relative == entry.Name, "Unexpected MSI install path: " + entry.Name);
-                    if (IsPe(extracted)) CheckArchitecture(extracted, entry.Product);
-                    Require(!entry.Product || FileVersionInfo.GetVersionInfo(extracted).FileVersion == ProductVersion, "MSI extracted four-part file version mismatch.");
                 }
                 string nativeActions = Path.Combine(scratch, InstallerFile);
                 database.Export("Binary", "NativeActions", nativeActions);

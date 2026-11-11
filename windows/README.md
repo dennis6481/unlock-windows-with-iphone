@@ -41,7 +41,7 @@ Use `Platform=ARM64` for ARM64. Visual Studio can open and build `UnlockWindows.
 
 Product versions use `major.minor.patch.build` from [ProductVersion.h](ProductVersion.h); About displays `Version X.Y.Z (Build B)`. A complete local command-line solution Build/Rebuild uses one fixed version, then advances the header's build once for the next invocation after success. `make` and `make test` wait for tests to pass too.
 
-Failed/cancelled builds, configure, clean, standalone tests and subprojects do not advance it. CI keeps the committed version. MSI major/minor range from 0 to 255; patch/build range from 0 to 65535. Out-of-range fields are rejected without truncation; set the next release/build manually before incrementing would overflow. Build one invocation at a time per checkout.
+Failed/cancelled builds, clean, standalone tests and subprojects do not advance it. CI keeps the committed version. MSI major/minor range from 0 to 255; patch/build range from 0 to 65535. Out-of-range fields are rejected without truncation; set the next release/build manually before incrementing would overflow. Build one invocation at a time per checkout.
 
 To select a target and separate build directories explicitly:
 

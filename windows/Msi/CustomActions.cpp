@@ -55,13 +55,24 @@ template<class Work> UINT action(MSIHANDLE install, Work work) noexcept {
     }
 }
 void validateNoExeInstallation(bool existing) {
-    if (registryKeyExists(L"SOFTWARE\\UnlockWithIPhone\\ComponentsWizard") ||
-        registryKeyExists(L"SOFTWARE\\UnlockWithIPhone\\ComponentResult") ||
-        registryKeyExists(L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\UnlockWithIPhone") ||
+    // These are the original EXE installer's keys; keep them independent of the MSI identity.
+    if (registryKeyExists(L"SOFTWARE\\UnlockWindowsWithIPhone\\ComponentsWizard") ||
+        registryKeyExists(L"SOFTWARE\\UnlockWindowsWithIPhone\\ComponentResult") ||
+        registryKeyExists(L"SOFTWARE\\UnlockWindowsWithIPhone\\InstalledProduct") ||
+        registryKeyExists(L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\UnlockWindowsWithIPhone") ||
         (existing && readRegistryString(HKEY_LOCAL_MACHINE, kInstalledProductRegistryPath, kDeploymentKindValueName) != L"MSI") ||
         fileExists(productDirectory() / L"setup.exe"))
         fail(L"This package cannot upgrade the currently installed version. Uninstall Unlock with iPhone in Windows Settings > Apps, "
             L"then run this package again.\n\nYou will need to save your Windows password and bind your iPhone again.");
+}
+void validateProductVersion() {
+    const auto text = readRegistryString(HKEY_LOCAL_MACHINE, kInstalledProductRegistryPath, kInstalledVersionValueName).value_or(L"");
+    const auto version = parseProductVersion(text);
+    if (!version || version->text() != text)
+        fail(L"The installed four-part version is invalid. No changes were made.");
+    if (packageAction(kProductVersion, *version) == PackageAction::rejectDowngrade)
+        fail(L"Version " + version->text() + L" is already installed. This package is version " +
+            kProductVersion.text() + L". Downgrades are not allowed.");
 }
 std::filesystem::path backupRoot() { return productDataDirectory() / L"MsiRollback"; }
 std::wstring backupKey() { return std::wstring(kProductRegistryPath) + L"\\MsiRollback"; }
@@ -228,7 +239,9 @@ extern "C" __declspec(dllexport) void CALLBACK RequestUserExit(HWND, HINSTANCE, 
 
 extern "C" __declspec(dllexport) UINT __stdcall CheckExeInstallation(MSIHANDLE install) {
     return action(install, [&] {
-        validateNoExeInstallation(registryKeyExists(kInstalledProductRegistryPath));
+        const bool existing = registryKeyExists(kInstalledProductRegistryPath);
+        validateNoExeInstallation(existing);
+        if (existing && property(install, L"Installed").empty()) validateProductVersion();
     });
 }
 
@@ -291,12 +304,7 @@ extern "C" __declspec(dllexport) UINT __stdcall InitializeDeployment(MSIHANDLE i
         const bool existing = registryKeyExists(kInstalledProductRegistryPath);
         const auto op = operation(installed, removing, existing);
         const auto sid = property(install, L"TARGETSID");
-        if (!removing && existing) {
-            const auto text = readRegistryString(HKEY_LOCAL_MACHINE, kInstalledProductRegistryPath, kInstalledVersionValueName).value_or(L"");
-            const auto version = parseProductVersion(text);
-            if (!version || version->text() != text || packageAction(kProductVersion, *version) == PackageAction::rejectDowngrade)
-                fail(L"The installed four-part version is newer or invalid. No changes were made.");
-        }
+        if (!removing && existing) validateProductVersion();
         const auto data = std::to_wstring(static_cast<unsigned>(op)) + L"|" + sid + L"|0";
         for (const auto name : {L"PrepareDeployment", L"RollbackDeployment", L"CompleteDeployment", L"CommitDeployment", L"RemoveProductData"}) set(install, name, data);
     });

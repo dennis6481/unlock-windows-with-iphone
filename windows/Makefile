@@ -1,56 +1,46 @@
 # Created by Rui MA on 26 Sep 2026
 
 SHELL = cmd.exe
-CONFIG = Debug
-BUILD_DIR = build
-VS_DEV_CMD = auto
 TARGET_ARCH = auto
-BUILD_TESTING = OFF
-WINDOWS_BUILD_SCRIPT = $(CURDIR)\WindowsBuild.ps1
 SOLUTION = $(CURDIR)\UnlockWindows.sln
-ABS_BUILD_DIR = $(abspath $(BUILD_DIR))
+NATIVE_ARCH = $(if $(PROCESSOR_ARCHITEW6432),$(PROCESSOR_ARCHITEW6432),$(PROCESSOR_ARCHITECTURE))
+SELECTED_ARCH = $(if $(filter auto,$(TARGET_ARCH)),$(if $(filter AMD64,$(NATIVE_ARCH)),x64,$(if $(filter ARM64 ARM64EC,$(NATIVE_ARCH)),arm64,unsupported)),$(TARGET_ARCH))
+VS_COMPONENT = $(if $(filter arm64,$(SELECTED_ARCH)),Microsoft.VisualStudio.Component.VC.Tools.ARM64,Microsoft.VisualStudio.Component.VC.Tools.x86.x64)
+ifeq ($(strip $(MSBUILD)),)
+VS_INSTALL := $(shell "${ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -prerelease -products * -requires Microsoft.Component.MSBuild $(VS_COMPONENT) -property installationPath)
+override MSBUILD := $(VS_INSTALL)\MSBuild\Current\Bin\MSBuild.exe
+endif
+BUILD_ARGUMENTS = /nologo /p:Platform=$(SELECTED_ARCH) $(if $(CONFIG),/p:Configuration=$(CONFIG)) $(if $(BUILD_DIR),"/p:UnlockBuildDirectory=$(BUILD_DIR)") $(if $(BUILD_TESTING),/p:BuildTesting=$(BUILD_TESTING))
 
 unexport MAKEFLAGS
 
 all: test
 
-.PHONY: all help configure build configure-release build-release release test clean run-app
+.PHONY: all help check-msbuild build build-release release test clean run-app
 
 help:
-	@echo "make                 configure, build and run all tests"
-	@echo "make build           configure and build the Windows Solution"
-	@echo "make build-release   configure and build Release targets"
-	@echo "make release         alias for make build-release"
-	@echo "make test            build and run the MSBuild test project"
-	@echo "make clean           run MSBuild Clean and remove generated resources"
-	@echo "make run-app         build and start Unlock with iPhone"
-	@echo "make CONFIG=Release  use a different MSBuild configuration"
-	@echo "make TARGET_ARCH=x64  override automatic native architecture detection"
-	@echo "make TARGET_ARCH=arm64 override automatic native architecture detection"
-	@echo "make VS_DEV_CMD=C:\path\to\VsDevCmd.bat override Visual Studio discovery"
-	@echo "make BUILD_TESTING=OFF skip test projects during the solution build"
+	@echo make build / build-release / test / clean / run-app
+	@echo make defaults to building and running all tests
+	@echo CONFIG=Release TARGET_ARCH=auto/x64/arm64 BUILD_DIR=path BUILD_TESTING=ON/OFF
+	@echo MSBUILD=C:\path\to\MSBuild.exe overrides Visual Studio discovery
 
-configure:
-	set "UNLOCK_VS_DEV_CMD=$(VS_DEV_CMD)" && set "UNLOCK_TARGET_ARCH=$(TARGET_ARCH)" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(WINDOWS_BUILD_SCRIPT)" -Prepare -OutputDirectory "$(BUILD_DIR)"
-	if not exist "$(SOLUTION)" (echo Missing MSBuild solution: $(SOLUTION) 1>&2 && exit /b 2)
+check-msbuild:
+	@if "$(SELECTED_ARCH)"=="unsupported" (echo Unsupported native Windows architecture. Use x64 or arm64. 1>&2 && exit /b 2)
+	@if not exist "$(MSBUILD)" (echo MSBuild with the target C++ tools was not found. Install Visual Studio or set MSBUILD. 1>&2 && exit /b 2)
 
-build: configure
-	set "UNLOCK_VS_DEV_CMD=$(VS_DEV_CMD)" && set "UNLOCK_TARGET_ARCH=$(TARGET_ARCH)" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(WINDOWS_BUILD_SCRIPT)" -InvokeMSBuild "$(SOLUTION)" /restore /m /nologo "/p:Configuration=$(CONFIG)" "/p:UnlockBuildDirectory=$(ABS_BUILD_DIR)" "/p:BuildTesting=$(BUILD_TESTING)"
+build: check-msbuild
+	"$(MSBUILD)" "$(SOLUTION)" /restore /m $(BUILD_ARGUMENTS)
 
-configure-release:
-	$(MAKE) CONFIG=Release BUILD_DIR="$(BUILD_DIR)" TARGET_ARCH=$(TARGET_ARCH) VS_DEV_CMD="$(VS_DEV_CMD)" BUILD_TESTING=$(BUILD_TESTING) configure
-
-build-release: configure-release
-	set "UNLOCK_VS_DEV_CMD=$(VS_DEV_CMD)" && set "UNLOCK_TARGET_ARCH=$(TARGET_ARCH)" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(WINDOWS_BUILD_SCRIPT)" -InvokeMSBuild "$(SOLUTION)" /restore /m /nologo "/p:Configuration=Release" "/p:UnlockBuildDirectory=$(ABS_BUILD_DIR)" "/p:BuildTesting=$(BUILD_TESTING)"
+build-release: check-msbuild
+	"$(MSBUILD)" "$(SOLUTION)" /restore /m $(BUILD_ARGUMENTS) /p:Configuration=Release
 
 release: build-release
 
-test: configure
-	set "UNLOCK_VS_DEV_CMD=$(VS_DEV_CMD)" && set "UNLOCK_TARGET_ARCH=$(TARGET_ARCH)" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(WINDOWS_BUILD_SCRIPT)" -InvokeMSBuild "$(SOLUTION)" -RunTests /restore /m /nologo "/p:Configuration=$(CONFIG)" "/p:UnlockBuildDirectory=$(ABS_BUILD_DIR)" "/p:BuildTesting=$(BUILD_TESTING)"
+test: check-msbuild
+	"$(MSBUILD)" "$(SOLUTION)" /restore /m $(BUILD_ARGUMENTS) /p:RunTests=true
 
-clean:
-	set "UNLOCK_VS_DEV_CMD=$(VS_DEV_CMD)" && set "UNLOCK_TARGET_ARCH=$(TARGET_ARCH)" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(WINDOWS_BUILD_SCRIPT)" -InvokeMSBuild "$(SOLUTION)" /t:Clean /m /nologo "/p:Configuration=$(CONFIG)" "/p:UnlockBuildDirectory=$(ABS_BUILD_DIR)"
-	if exist "$(BUILD_DIR)\generated" rmdir /s /q "$(BUILD_DIR)\generated"
+clean: check-msbuild
+	"$(MSBUILD)" "$(SOLUTION)" /t:Clean /m $(BUILD_ARGUMENTS)
 
 run-app: build
-	"$(BUILD_DIR)\UnlockWithIPhone.exe"
+	"$(MSBUILD)" "$(SOLUTION)" /t:RunApp $(BUILD_ARGUMENTS)

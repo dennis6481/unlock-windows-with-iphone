@@ -1,0 +1,38 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- Read contracts during evaluation, before WinUI/NuGet and output names need them. -->
+  <PropertyGroup>
+    <UnlockWindowsDirectory>$(MSBuildThisFileDirectory)..\</UnlockWindowsDirectory>
+    <Configuration Condition="'$(Configuration)' == ''">Debug</Configuration>
+    <_UnlockNativeArchitecture>$(PROCESSOR_ARCHITECTURE)</_UnlockNativeArchitecture>
+    <_UnlockNativeArchitecture Condition="'$(PROCESSOR_ARCHITEW6432)' != ''">$(PROCESSOR_ARCHITEW6432)</_UnlockNativeArchitecture>
+    <Platform Condition="'$(Platform)' == '' and '$(_UnlockNativeArchitecture)' == 'AMD64'">x64</Platform>
+    <Platform Condition="'$(Platform)' == '' and ('$(_UnlockNativeArchitecture)' == 'ARM64' or '$(_UnlockNativeArchitecture)' == 'ARM64EC')">ARM64</Platform>
+    <BuildTesting Condition="'$(BuildTesting)' == ''">OFF</BuildTesting>
+    <UnlockBuildDirectory Condition="'$(UnlockBuildDirectory)' == ''">$(UnlockWindowsDirectory)build</UnlockBuildDirectory>
+    <!-- Command-line global properties are immutable; normalize into an internal property. -->
+    <UnlockBuildRoot>$(UnlockBuildDirectory)</UnlockBuildRoot>
+    <UnlockBuildRoot Condition="!$([System.IO.Path]::IsPathRooted('$(UnlockBuildRoot)'))">$(MSBuildStartupDirectory)\$(UnlockBuildRoot)</UnlockBuildRoot>
+    <UnlockBuildRoot>$([System.IO.Path]::GetFullPath('$(UnlockBuildRoot)'))</UnlockBuildRoot>
+    <UnlockGeneratedDirectory>$(UnlockBuildRoot)\generated</UnlockGeneratedDirectory>
+    <UnlockArchitecture>$(Platform.ToLowerInvariant())</UnlockArchitecture>
+    <_UnlockVersionHeader>$([System.IO.File]::ReadAllText('$(UnlockWindowsDirectory)ProductVersion.h'))</_UnlockVersionHeader>
+    <_UnlockVersionPattern>kProductVersion\{(\d+),\s*(\d+),\s*(\d+),\s*(\d+)\}</_UnlockVersionPattern>
+    <UnlockVersionDefinition>$([System.Text.RegularExpressions.Regex]::Match('$(_UnlockVersionHeader)', '$(_UnlockVersionPattern)').Value)</UnlockVersionDefinition>
+    <UnlockProductVersion>$([System.Text.RegularExpressions.Regex]::Replace('$(UnlockVersionDefinition)', '$(_UnlockVersionPattern)', '$1.$2.$3.$4'))</UnlockProductVersion>
+    <UnlockReleaseVersion>$([System.Text.RegularExpressions.Regex]::Replace('$(UnlockProductVersion)', '\.\d+$', ''))</UnlockReleaseVersion>
+    <UnlockBuildNumber>$([System.Text.RegularExpressions.Regex]::Match('$(UnlockProductVersion)', '\d+$').Value)</UnlockBuildNumber>
+    <_UnlockComponentHeader>$([System.IO.File]::ReadAllText('$(UnlockWindowsDirectory)ComponentFiles.h'))</_UnlockComponentHeader>
+    <UnlockMinimumWindowsBuild>$([System.Text.RegularExpressions.Regex]::Match('$(_UnlockComponentHeader)', '(?&lt;=kMinimumWindowsBuild = )\d+').Value)</UnlockMinimumWindowsBuild>
+    <UnlockCredentialProviderFile>$([System.Text.RegularExpressions.Regex]::Match('$(_UnlockComponentHeader)', '(?&lt;=kCredentialProviderFile\[\] = L&quot;)[^&quot;]+').Value)</UnlockCredentialProviderFile>
+    <UnlockSavedCredentialServiceFile>$([System.Text.RegularExpressions.Regex]::Match('$(_UnlockComponentHeader)', '(?&lt;=kSavedCredentialServiceFile\[\] = L&quot;)[^&quot;]+').Value)</UnlockSavedCredentialServiceFile>
+    <UnlockMainAppFile>$([System.Text.RegularExpressions.Regex]::Match('$(_UnlockComponentHeader)', '(?&lt;=kMainAppFile\[\] = L&quot;)[^&quot;]+').Value)</UnlockMainAppFile>
+    <_UnlockMsiHeader>$([System.IO.File]::ReadAllText('$(UnlockWindowsDirectory)Msi\MsiContract.h'))</_UnlockMsiHeader>
+    <UnlockInstallerFile>$([System.Text.RegularExpressions.Regex]::Match('$(_UnlockMsiHeader)', '(?&lt;=kCustomActionFile\[\] = L&quot;)[^&quot;]+').Value)</UnlockInstallerFile>
+    <UnlockMainAppBaseName>$([System.IO.Path]::GetFileNameWithoutExtension('$(UnlockMainAppFile)'))</UnlockMainAppBaseName>
+    <UnlockInstallerBaseName>$([System.IO.Path]::GetFileNameWithoutExtension('$(UnlockInstallerFile)'))</UnlockInstallerBaseName>
+    <UnlockSetupBaseName>UnlockWithIPhone_$(UnlockReleaseVersion)_$(UnlockArchitecture)_setup</UnlockSetupBaseName>
+    <UnlockSetupFile>$(UnlockSetupBaseName).msi</UnlockSetupFile>
+    <UnlockPackagePath>$(UnlockWindowsDirectory)..\dist\$(UnlockSetupFile)</UnlockPackagePath>
+    <WindowsTargetPlatformVersion Condition="'$(WindowsTargetPlatformVersion)' == '' or '$(WindowsTargetPlatformVersion)' == '10.0'">$([Microsoft.Build.Utilities.ToolLocationHelper]::GetLatestSDKTargetPlatformVersion('Windows', '10.0'))</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+</Project>

@@ -6,6 +6,8 @@ Open pull requests against `main`. Discuss substantial changes in an issue befor
 
 Keep each pull request focused on one objective. Include a description of the change, validation results and any checks not performed.
 
+Pin GitHub Actions to full commit SHAs with version comments. Dependabot checks for updates weekly; review its pull requests and CI results before merging.
+
 ## Code and architecture
 
 - Reuse suitable existing implementations. Keep each shared contract and decision rule in one authoritative source; cross-language consumers must read it or use generated definitions.

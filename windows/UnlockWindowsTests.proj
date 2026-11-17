@@ -1,9 +1,7 @@
 <!-- Created by Rui MA on 10 Oct 2026 -->
 <Project DefaultTargets="Test" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="MSBuild\WindowsBuild.props" />
   <PropertyGroup>
-    <UnlockBuildDirectory Condition="'$(UnlockBuildDirectory)' == ''">$(MSBuildThisFileDirectory)build</UnlockBuildDirectory>
-    <Configuration Condition="'$(Configuration)' == ''">Debug</Configuration>
-    <Platform Condition="'$(Platform)' == ''">x64</Platform>
     <TestsDirectory>$(MSBuildThisFileDirectory)MSBuild</TestsDirectory>
   </PropertyGroup>
   <ItemGroup>
@@ -12,11 +10,11 @@
     <UnlockTestProject Include="$(TestsDirectory)\UnlockCredentialProviderTests.vcxproj" />
   </ItemGroup>
   <Target Name="BuildTests">
-    <MSBuild Projects="@(UnlockTestProject)" Targets="Build" BuildInParallel="false" Properties="Configuration=$(Configuration);Platform=$(Platform);UnlockBuildDirectory=$(UnlockBuildDirectory);BuildTesting=ON" />
+    <MSBuild Projects="@(UnlockTestProject)" Targets="Build" BuildInParallel="false" Properties="Configuration=$(Configuration);Platform=$(Platform);UnlockBuildDirectory=$(UnlockBuildRoot);BuildTesting=ON" />
   </Target>
   <Target Name="Test" DependsOnTargets="BuildTests">
-    <Exec Command="&quot;$(UnlockBuildDirectory)\unlock_saved_credential_tests.exe&quot;" />
-    <Exec Command="&quot;$(UnlockBuildDirectory)\unlock_enrollment_store_tests.exe&quot;" />
-    <Exec Command="&quot;$(UnlockBuildDirectory)\unlock_credential_provider_tests.exe&quot;" />
+    <Exec Command="&quot;$(UnlockBuildRoot)\unlock_saved_credential_tests.exe&quot;" />
+    <Exec Command="&quot;$(UnlockBuildRoot)\unlock_enrollment_store_tests.exe&quot;" />
+    <Exec Command="&quot;$(UnlockBuildRoot)\unlock_credential_provider_tests.exe&quot;" />
   </Target>
 </Project>

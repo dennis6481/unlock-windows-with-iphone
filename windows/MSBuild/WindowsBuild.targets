@@ -1,0 +1,20 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <UsingTask TaskName="UnlockBuildTask" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <Task><Code Type="Class" Language="cs" Source="$(MSBuildThisFileDirectory)UnlockBuildTask.cs" /></Task>
+  </UsingTask>
+  <Target Name="ValidateBuildContracts">
+    <Error Condition="'$(ExpectedReleaseVersion)' != '' and '$(ExpectedReleaseVersion)' != '$(UnlockReleaseVersion)'" Text="Product release version does not match the release tag." />
+    <Error Condition="'$(UnlockMinimumWindowsBuild)' == '' or '$(UnlockCredentialProviderFile)' == '' or '$(UnlockSavedCredentialServiceFile)' == '' or '$(UnlockMainAppFile)' == '' or '$(UnlockInstallerFile)' == ''" Text="Missing shared Windows build contract." />
+    <UnlockBuildTask Operation="Validate" WindowsDirectory="$(UnlockWindowsDirectory)" ProductVersion="$(UnlockProductVersion)" Architecture="$(UnlockArchitecture)" />
+  </Target>
+  <Target Name="GenerateUnlockBuildResources" BeforeTargets="PrepareForBuild" DependsOnTargets="ValidateBuildContracts" Condition="'$(MSBuildProjectExtension)' == '.vcxproj' and '$(DesignTimeBuild)' != 'true'">
+    <Error Condition="'$(TargetPlatformVersion)' == '' or $([MSBuild]::VersionLessThan('$(TargetPlatformVersion)', '10.0.22621.0'))" Text="Windows SDK 10.0.22621.0 or newer must be selected by Visual Studio/MSBuild." />
+    <UnlockBuildTask Operation="Resource" WindowsDirectory="$(UnlockWindowsDirectory)" ProductVersion="$(UnlockProductVersion)" Architecture="$(UnlockArchitecture)"
+      OutputFile="%(UnlockVersionResource.Identity)" OriginalFilename="%(UnlockVersionResource.OriginalFilename)" ResourceType="%(UnlockVersionResource.ResourceType)" Condition="'@(UnlockVersionResource)' != ''" />
+    <ItemGroup><FileWrites Include="@(UnlockVersionResource)" /></ItemGroup>
+  </Target>
+  <Target Name="ExportBuildMetadata" DependsOnTargets="ValidateBuildContracts">
+    <Error Condition="'$(MetadataOutputFile)' == ''" Text="MetadataOutputFile is required." />
+    <WriteLinesToFile File="$(MetadataOutputFile)" Lines="name=$(UnlockSetupBaseName)-SNAPSHOT($(UnlockBuildNumber));path=dist/$(UnlockSetupFile)" Overwrite="false" Encoding="UTF-8" />
+  </Target>
+</Project>

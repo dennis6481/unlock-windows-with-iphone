@@ -1,0 +1,22 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="MSBuild\WindowsBuild.targets" />
+  <PropertyGroup>
+    <_UnlockIncrement Condition="'$(CI)' != 'true' and '$(GITHUB_ACTIONS)' != 'true'">true</_UnlockIncrement>
+  </PropertyGroup>
+  <Target Name="CheckLocalBuildNumber" BeforeTargets="Build;Rebuild" DependsOnTargets="ValidateBuildContracts" Condition="'$(_UnlockIncrement)' == 'true'">
+    <UnlockBuildTask Operation="CheckIncrement" WindowsDirectory="$(UnlockWindowsDirectory)" ProductVersion="$(UnlockProductVersion)" Architecture="$(UnlockArchitecture)" />
+  </Target>
+  <Target Name="CompleteLocalBuild" AfterTargets="Build;Rebuild">
+    <MSBuild Projects="$(UnlockWindowsDirectory)UnlockWindowsTests.proj" Targets="Test" BuildInParallel="false" Properties="Configuration=$(Configuration);Platform=$(Platform);UnlockBuildDirectory=$(UnlockBuildRoot);BuildTesting=ON" Condition="'$(RunTests)' == 'true'" />
+    <UnlockBuildTask Operation="Advance" WindowsDirectory="$(UnlockWindowsDirectory)" ProductVersion="$(UnlockProductVersion)" Architecture="$(UnlockArchitecture)" VersionDefinition="$(UnlockVersionDefinition)" Condition="'$(_UnlockIncrement)' == 'true'" />
+  </Target>
+  <Target Name="ValidateMsi">
+    <MSBuild Projects="$(UnlockWindowsDirectory)Msi\UnlockWindows.wixproj" Targets="ValidateMsi" Properties="Configuration=$(Configuration);Platform=$(Platform);UnlockBuildDirectory=$(UnlockBuildRoot)" />
+  </Target>
+  <Target Name="CleanUnlockGeneratedFiles" AfterTargets="Clean">
+    <RemoveDir Directories="$(UnlockGeneratedDirectory)" />
+  </Target>
+  <Target Name="RunApp" DependsOnTargets="ValidateBuildContracts">
+    <Exec Command="&quot;$(UnlockBuildRoot)\$(UnlockMainAppFile)&quot;" />
+  </Target>
+</Project>

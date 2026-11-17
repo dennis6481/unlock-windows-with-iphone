@@ -1,18 +1,16 @@
 <!-- Created by Rui MA on 10 Oct 2026 -->
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <PropertyGroup>
-    <UnlockBuildDirectory Condition="'$(UnlockBuildDirectory)' == ''">$(MSBuildThisFileDirectory)build</UnlockBuildDirectory>
-    <UnlockGeneratedDirectory>$(UnlockBuildDirectory)\generated</UnlockGeneratedDirectory>
-    <UnlockLibraryDirectory>$(UnlockBuildDirectory)\lib\$(Platform)\$(Configuration)</UnlockLibraryDirectory>
+    <UnlockLibraryDirectory>$(UnlockBuildRoot)\lib\$(Platform)\$(Configuration)</UnlockLibraryDirectory>
     <LibraryPath Condition="!Exists('$(VCToolsInstallDir)atlmfc\lib\$(Platform)')">$([System.String]::Copy('$(LibraryPath)').Replace('$(VCToolsInstallDir)atlmfc\lib\$(Platform);', ''))</LibraryPath>
-    <OutDir Condition="'$(OutDir)' == ''">$(UnlockBuildDirectory)\</OutDir>
-    <IntDir Condition="'$(IntDir)' == ''">$(UnlockBuildDirectory)\obj\$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
-    <WindowsTargetPlatformVersion Condition="'$(WindowsTargetPlatformVersion)' == ''">$(WindowsSDKVersion)</WindowsTargetPlatformVersion>
+    <OutDir>$(UnlockBuildRoot)\</OutDir>
+    <OutDir Condition="'$(ConfigurationType)' == 'StaticLibrary'">$(UnlockLibraryDirectory)\</OutDir>
+    <IntDir>$(UnlockBuildRoot)\obj\$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
     <UseDebugLibraries Condition="'$(Configuration)' == 'Debug'">true</UseDebugLibraries>
     <UseDebugLibraries Condition="'$(Configuration)' == 'Release'">false</UseDebugLibraries>
   </PropertyGroup>
 
-  <Import Project="$(UnlockGeneratedDirectory)\UnlockBuild.props" Condition="Exists('$(UnlockGeneratedDirectory)\UnlockBuild.props') and '$(UnlockBuildResourcesImported)' != 'true'" />
+  <Import Project="MSBuild\WindowsBuild.targets" />
 
   <ItemDefinitionGroup>
     <ClCompile>
@@ -33,8 +31,4 @@
     </Link>
   </ItemDefinitionGroup>
 
-  <Target Name="GenerateUnlockBuildResources" BeforeTargets="PrepareForBuild" Condition="'$(DesignTimeBuild)' != 'true' and !Exists('$(UnlockGeneratedDirectory)\UnlockBuild.props')">
-    <MakeDir Directories="$(UnlockGeneratedDirectory)" />
-    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)WindowsBuild.ps1&quot; -WriteBuildResources -OutputDirectory &quot;$(UnlockGeneratedDirectory)&quot; -TargetArchitecture &quot;$(Platform)&quot;" />
-  </Target>
 </Project>

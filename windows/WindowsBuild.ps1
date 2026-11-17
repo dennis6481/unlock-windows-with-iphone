@@ -1,13 +1,8 @@
 # Created by Rui MA on 28 Sep 2026
 
-[CmdletBinding(DefaultParameterSetName = 'Package')]
+[CmdletBinding(DefaultParameterSetName = 'Resources')]
 param(
-    [Parameter(ParameterSetName = 'Package', Position = 0)][string]$PackageVersion,
-    [Parameter(ParameterSetName = 'Package', Position = 1)][string]$PackageResourcePath,
-    [Parameter(ParameterSetName = 'Package', Position = 2)][string]$PackageManifestPath,
-    [Parameter(ParameterSetName = 'Package', Position = 3)][string]$DesktopFileList,
-    [Parameter(ParameterSetName = 'Package', Position = 4, ValueFromRemainingArguments)][string[]]$PackageFiles,
-    [Parameter(ParameterSetName = 'Resources', Mandatory)][switch]$WriteBuildResources,
+    [Parameter(ParameterSetName = 'Resources')][switch]$WriteBuildResources,
     [Parameter(ParameterSetName = 'Prepare', Mandatory)][switch]$Prepare,
     [Parameter(ParameterSetName = 'MSBuild', Mandatory)][switch]$InvokeMSBuild,
     [Parameter(ParameterSetName = 'MSBuild', Position = 0, Mandatory)][string]$ProjectPath,
@@ -44,7 +39,8 @@ function Get-PortableExecutableArchitecture {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
-        [string]$Path
+        [string]$Path,
+        [switch]$ClassifyPayload
     )
 
     $resolvedPath = (Resolve-Path -LiteralPath $Path -ErrorAction Stop).Path
@@ -84,7 +80,58 @@ function Get-PortableExecutableArchitecture {
             throw "'$resolvedPath' does not have a PE signature."
         }
 
-        switch ([BitConverter]::ToUInt16($coffHeader, 4)) {
+        $machine = [BitConverter]::ToUInt16($coffHeader, 4)
+        if ($ClassifyPayload) {
+            $data = [IO.File]::ReadAllBytes($resolvedPath)
+            if ($peHeaderOffset -gt $data.Length - 24) { throw "Truncated PE file header: $resolvedPath" }
+            $sectionCount = [BitConverter]::ToUInt16($data,$peHeaderOffset+6)
+            $optionalSize = [BitConverter]::ToUInt16($data,$peHeaderOffset+20)
+            $optional = $peHeaderOffset+24
+            $sectionTable = $optional+$optionalSize
+            if ($optionalSize -lt 20 -or $sectionTable -gt $data.Length - 40*$sectionCount) { throw "Truncated PE optional header or sections: $resolvedPath" }
+            $magic = [BitConverter]::ToUInt16($data,$optional)
+            if ($magic -notin @(0x10b,0x20b)) { throw "Unsupported PE optional header: $resolvedPath" }
+            $nativeCode = [BitConverter]::ToUInt32($data,$optional+16) -ne 0
+            for ($i=0; $i -lt $sectionCount; $i++) {
+                if ([BitConverter]::ToUInt32($data,$sectionTable+40*$i+36) -band 0x20000000) { $nativeCode=$true }
+            }
+            # MUI resources and WinMD metadata are PE containers without native executable sections.
+            if (!$nativeCode) { return 'neutral' }
+            # ARM64X identifies its hybrid fixups with IMAGE_DYNAMIC_RELOCATION_ARM64X (6).
+            # Read the PE32+ load configuration and version-1 dynamic relocation table;
+            # do not infer hybrid code from a filename or an arbitrary section name.
+            if ($machine -eq 0xaa64 -and $optionalSize -ge 200 -and $magic -eq 0x20b) {
+                $configRva = [BitConverter]::ToUInt32($data,$optional+192)
+                for ($i=0; $configRva -and $i -lt $sectionCount; $i++) {
+                    $section=$sectionTable+40*$i
+                    $va=[BitConverter]::ToUInt32($data,$section+12)
+                    $rawSize=[BitConverter]::ToUInt32($data,$section+16)
+                    $raw=[BitConverter]::ToUInt32($data,$section+20)
+                    if ($configRva -lt $va -or $configRva-$va -gt [long]$rawSize-232) { continue }
+                    $config=[long]$raw+$configRva-$va
+                    if ($config -gt $data.Length-232 -or [BitConverter]::ToUInt32($data,$config) -lt 232) { break }
+                    $relocOffset=[BitConverter]::ToUInt32($data,$config+224)
+                    $relocSection=[BitConverter]::ToUInt16($data,$config+228)
+                    if (!$relocSection -or $relocSection -gt $sectionCount) { break }
+                    $relocHeader=$sectionTable+40*($relocSection-1)
+                    $table=[long][BitConverter]::ToUInt32($data,$relocHeader+20)+$relocOffset
+                    $available=[long][BitConverter]::ToUInt32($data,$relocHeader+16)-$relocOffset
+                    if ($available -lt 8 -or $table -gt $data.Length-8) { break }
+                    $tableSize=[BitConverter]::ToUInt32($data,$table+4)
+                    if ([BitConverter]::ToUInt32($data,$table) -ne 1 -or $tableSize -gt $available-8 -or $tableSize -gt $data.Length-$table-8) { break }
+                    $cursor=$table+8; $end=$cursor+$tableSize
+                    while ($cursor -le $end-12) {
+                        $symbol=[BitConverter]::ToUInt64($data,$cursor)
+                        $fixups=[BitConverter]::ToUInt32($data,$cursor+8)
+                        if ($fixups -gt $end-$cursor-12) { throw "Truncated hybrid PE fixups: $resolvedPath" }
+                        if ($symbol -eq 6) { return 'arm64x' }
+                        $cursor+=12+$fixups
+                    }
+                    break
+                }
+            }
+        }
+        switch ($machine) {
             0x8664 { return 'x64' }
             0xAA64 { return 'arm64' }
             default {
@@ -116,23 +163,28 @@ function Get-ProductBuildMetadata {
     $versionMatch = [regex]::Match($productHeader, 'kProductVersion\{(\d+),\s*(\d+),\s*(\d+),\s*(\d+)\}')
     if (!$versionMatch.Success) { throw 'Missing Windows product version.' }
     $parts = @(1..4 | ForEach-Object { [uint16]::Parse($versionMatch.Groups[$_].Value) })
+    if ($parts[0] -gt 255 -or $parts[1] -gt 255) { throw 'MSI ProductVersion fields require major/minor <= 255 and patch <= 65535; versions are never truncated.' }
     $version = $parts -join '.'
     $releaseVersion = $parts[0..2] -join '.'
     $names = @{}
     foreach ($match in [regex]::Matches($componentHeader, 'wchar_t\s+(\w+)\[\]\s*=\s*L"([^"]+)";')) {
         $names[$match.Groups[1].Value] = $match.Groups[2].Value
     }
-    foreach ($required in @('kCredentialProviderFile', 'kSavedCredentialServiceFile', 'kMainAppFile', 'kInstallerFile')) {
+    foreach ($required in @('kCredentialProviderFile', 'kSavedCredentialServiceFile', 'kMainAppFile')) {
         if (!$names.ContainsKey($required)) { throw "Missing shared component filename: $required" }
     }
     $minimumBuildMatch = [regex]::Match($componentHeader, 'kMinimumWindowsBuild\s*=\s*(\d+)')
     if (!$minimumBuildMatch.Success) { throw 'Missing minimum Windows build.' }
     $normalizedArchitecture = $Architecture.ToLowerInvariant()
+    $msiContract = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'Msi/MsiContract.h'))
+    $installerMatch = [regex]::Match($msiContract, 'kCustomActionFile\[\]\s*=\s*L"([^"]+)";')
+    if (!$installerMatch.Success) { throw 'Missing MSI custom-action filename.' }
+    $installerFile = $installerMatch.Groups[1].Value
     $versionFiles = @{
         CredentialProvider = "unlock_credential_provider-version.rc"
         SavedCredentialService = "unlock_saved_credential_service-version.rc"
         MainApp = "UnlockWithIPhone-version.rc"
-        Installer = "setup-version.rc"
+        Installer = "$([IO.Path]::GetFileNameWithoutExtension($installerFile))-version.rc"
     }
     [pscustomobject]@{
         Architecture = $normalizedArchitecture
@@ -147,8 +199,8 @@ function Get-ProductBuildMetadata {
         CredentialProviderFile = $names.kCredentialProviderFile
         SavedCredentialServiceFile = $names.kSavedCredentialServiceFile
         MainAppFile = $names.kMainAppFile
-        InstallerFile = $names.kInstallerFile
-        SetupFile = "UnlockWithIPhone_${releaseVersion}_${normalizedArchitecture}_setup.exe"
+        InstallerFile = $installerFile
+        SetupFile = "UnlockWithIPhone_${releaseVersion}_${normalizedArchitecture}_setup.msi"
         VersionFiles = $versionFiles
     }
 }
@@ -177,7 +229,9 @@ function Write-BuildResources {
         "    <UnlockMainAppFile>$($metadata.MainAppFile)</UnlockMainAppFile>",
         "    <UnlockMainAppBaseName>$([IO.Path]::GetFileNameWithoutExtension($metadata.MainAppFile))</UnlockMainAppBaseName>",
         "    <UnlockInstallerFile>$($metadata.InstallerFile)</UnlockInstallerFile>",
+        "    <UnlockInstallerBaseName>$([IO.Path]::GetFileNameWithoutExtension($metadata.InstallerFile))</UnlockInstallerBaseName>",
         "    <UnlockSetupFile>$($metadata.SetupFile)</UnlockSetupFile>",
+        "    <UnlockSetupBaseName>$([IO.Path]::GetFileNameWithoutExtension($metadata.SetupFile))</UnlockSetupBaseName>",
         '  </PropertyGroup>',
         '</Project>'
     )
@@ -188,7 +242,7 @@ function Write-BuildResources {
         CredentialProvider = @{ Type = 'VFT_DLL'; Filename = $metadata.CredentialProviderFile }
         SavedCredentialService = @{ Type = 'VFT_APP'; Filename = $metadata.SavedCredentialServiceFile }
         MainApp = @{ Type = 'VFT_APP'; Filename = $metadata.MainAppFile }
-        Installer = @{ Type = 'VFT_APP'; Filename = $metadata.InstallerFile }
+        Installer = @{ Type = 'VFT_DLL'; Filename = $metadata.InstallerFile }
     }
     foreach ($name in $resourceDefinitions.Keys) {
         $definition = $resourceDefinitions[$name]
@@ -228,159 +282,6 @@ function Write-BuildResources {
         [IO.File]::WriteAllLines((Join-Path $Directory $metadata.VersionFiles[$name]), $content, [Text.UTF8Encoding]::new($false))
     }
 }
-
-function Write-EmbeddedPackage {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][string]$Version,
-        [Parameter(Mandatory)][string]$ResourcePath,
-        [Parameter(Mandatory)][string]$ManifestPath,
-        [Parameter(Mandatory)][string]$DesktopFileList,
-        [Parameter(Mandatory)][string[]]$Files
-    )
-
-    $ErrorActionPreference = 'Stop'
-    $contract = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'ComponentFiles.h'))
-    $names = @{}
-    foreach ($match in [regex]::Matches($contract, 'wchar_t\s+(\w+)\[\] = L"([^"]+)";')) {
-        $names[$match.Groups[1].Value] = $match.Groups[2].Value
-    }
-    $components = @([regex]::Matches($contract, '\{(k\w+File), (true|false)\}') | ForEach-Object {
-        [pscustomobject]@{ Name=$names[$_.Groups[1].Value]; Desktop=$_.Groups[2].Value -eq 'true' }
-    })
-    if (!$components.Count) { throw 'Component contract is empty.' }
-    $parts = $Version.Split('.')
-    if ($parts.Count -ne 4) { throw "Invalid product version: $Version" }
-    $entries = [Collections.Generic.List[object]]::new()
-    $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-    $architecture = $null
-    foreach ($component in $components) {
-        $matches = @($Files | Where-Object { [IO.Path]::GetFileName($_) -ceq $component.Name })
-        if ($component.Name -ceq $names.kInstallerFile) { continue }
-        if ($matches.Count -ne 1) { throw "Expected one product component: $($component.Name)" }
-        $path = (Resolve-Path -LiteralPath $matches[0]).Path
-        $info = [Diagnostics.FileVersionInfo]::GetVersionInfo($path)
-        if ($info.ProductVersion -cne $Version -or $info.FileVersion -cne $Version -or
-            $info.ProductPrivatePart -ne [int]$parts[3] -or $info.FilePrivatePart -ne [int]$parts[3] -or
-            $info.ProductMajorPart -ne [int]$parts[0] -or $info.FileMajorPart -ne [int]$parts[0] -or
-            $info.ProductMinorPart -ne [int]$parts[1] -or $info.FileMinorPart -ne [int]$parts[1] -or
-            $info.ProductBuildPart -ne [int]$parts[2] -or $info.FileBuildPart -ne [int]$parts[2]) {
-            throw "Mixed or missing product/file version: $path"
-        }
-        $arch = Get-PortableExecutableArchitecture -Path $path
-        if ($architecture -and $arch -cne $architecture) { throw "Mixed product architecture: $path" }
-        $architecture = $arch
-        if (!$seen.Add($component.Name)) { throw "Duplicate product filename: $($component.Name)" }
-        $entries.Add([pscustomobject]@{Name=$component.Name;Path=$path;Desktop=$component.Desktop;Product=$true})
-    }
-    if ($Files.Count -ne $entries.Count) { throw 'Unexpected product component input.' }
-    $schema = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'Setup/PackageManifest.h'))
-    $pathPattern = [regex]::Match($schema, '(?s)kPackagePathComponentPattern\[\]\s*=\s*LR"regex\((.*?)\)regex";').Groups[1].Value
-    if (!$pathPattern) { throw 'Missing package relative path policy.' }
-    $desktopRoot = [IO.Path]::GetDirectoryName((Resolve-Path -LiteralPath $DesktopFileList).Path)
-    foreach ($name in [IO.File]::ReadAllLines($DesktopFileList)) {
-        if ([IO.Path]::IsPathRooted($name) -or
-            @($name -split '[/\\]' | Where-Object { $_ -notmatch ('\A(?:'+$pathPattern+')\z') }).Count) {
-            throw "Unsafe desktop relative path: $name"
-        }
-        if ($name -ceq $names.kMainAppFile) { continue }
-        if (!$seen.Add($name)) { throw "Duplicate desktop relative path: $name" }
-        $entries.Add([pscustomobject]@{Name=$name;Path=(Join-Path $desktopRoot $name);Desktop=$true;Product=$false})
-    }
-    $constants = @{}
-    foreach ($match in [regex]::Matches($schema, 'uint32_t (kPackage\w+) = (\d+);')) {
-        $constants[$match.Groups[1].Value] = [uint32]$match.Groups[2].Value
-    }
-    $readFields = {
-        param([string]$Type)
-        $declarations = [regex]::Matches($schema, ('(?s)struct '+$Type+' final \{(.*?)\};'))
-        if ($declarations.Count -ne 1) { throw "Missing or ambiguous package schema: $Type" }
-        $body = $declarations[0].Groups[1].Value
-        $offset = 0
-        while ($body.Substring($offset).Trim()) {
-            $field = [regex]::Match($body.Substring($offset),
-                '\A\s*(std::uint32_t|unlock_windows::protocol::Sha256Digest)\s+(\w+);')
-            if (!$field.Success) { throw "Unsupported package schema field in $Type." }
-            [pscustomobject]@{ Type=$field.Groups[1].Value; Name=$field.Groups[2].Value }
-            $offset += $field.Length
-        }
-    }
-    $headerFields = @(& $readFields 'PackageManifestHeader')
-    $recordFields = @(& $readFields 'PackageRecord')
-    $crypto = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'Protocol/UnlockCrypto.h'))
-    $digestDefinition = [regex]::Matches($crypto, 'using Sha256Digest = std::array<std::uint8_t, (\d+)>;')
-    if (!$headerFields.Count -or !$recordFields.Count -or $constants.Count -ne 5 -or $digestDefinition.Count -ne 1) {
-        throw 'Invalid package manifest schema.'
-    }
-    $digestSize = [int]$digestDefinition[0].Groups[1].Value
-    $resourceLines = @('// Created by Rui MA on 09 Oct 2026', '', '#pragma code_page(65001)', '#include <windows.h>')
-    $memory = [IO.MemoryStream]::new()
-    $writer = [IO.BinaryWriter]::new($memory)
-    $writeRecord = {
-        param([object[]]$Fields, [hashtable]$Values)
-        foreach ($field in $Fields) {
-            if (!$Values.ContainsKey($field.Name)) { throw "Missing package field value: $($field.Name)" }
-            switch ($field.Type) {
-                'std::uint32_t' { $writer.Write([uint32]$Values[$field.Name]) }
-                'unlock_windows::protocol::Sha256Digest' {
-                    $digest = [byte[]]$Values[$field.Name]
-                    if ($digest.Length -ne $digestSize) { throw 'Invalid package digest size.' }
-                    $writer.Write($digest)
-                }
-                default { throw "Unsupported package field type: $($field.Type)" }
-            }
-        }
-    }
-    try {
-        & $writeRecord $headerFields @{magic=$constants.kPackageManifestMagic;
-            version=$constants.kPackageManifestVersion; count=($entries.Count + 1)}
-        $id = 1
-        foreach ($entry in $entries) {
-            if ($id -ge $constants.kPackageManifestResourceId) { throw 'Too many package files.' }
-            $item = Get-Item -LiteralPath $entry.Path -Force
-            if ($item.PSIsContainer -or $item.Length -eq 0 -or $item.Length -gt [uint32]::MaxValue) {
-                throw "Invalid package file: $($entry.Path)"
-            }
-            $parent = $item
-            while ($parent) {
-                if ($parent.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Unsafe package source: $($parent.FullName)" }
-                $parent = if ($parent -is [IO.FileInfo]) { $parent.Directory } else { $parent.Parent }
-            }
-            $data = [IO.File]::ReadAllBytes($item.FullName)
-            $machine = 0
-            if ($data.Length -ge 2 -and [BitConverter]::ToUInt16($data,0) -eq 0x5a4d) {
-                if ($data.Length -lt 64) { throw "Incomplete PE header: $($item.FullName)" }
-                $offset = [BitConverter]::ToInt32($data,60)
-                if ($offset -lt 64 -or $offset -gt $data.Length-6 -or [BitConverter]::ToUInt32($data,$offset) -ne 0x4550) {
-                    throw "Invalid PE header: $($item.FullName)"
-                }
-                $machine = [BitConverter]::ToUInt16($data,$offset+4)
-            }
-            $hash = (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash
-            if ($hash.Length -ne $digestSize * 2) { throw 'SHA-256 output disagrees with the digest contract.' }
-            $digest = [byte[]]::new($digestSize)
-            for ($i=0; $i -lt $digestSize; ++$i) { $digest[$i] = [Convert]::ToByte($hash.Substring($i*2,2),16) }
-            $resourceLines += "$id RCDATA ""$($item.FullName.Replace('\','/'))"""
-            $flags = 0
-            if ($entry.Desktop) { $flags = $flags -bor $constants.kPackageDesktopFlag }
-            if ($entry.Product) { $flags = $flags -bor $constants.kPackageProductFlag }
-            & $writeRecord $recordFields @{resourceId=$id; flags=$flags; machine=$machine;
-                size=$item.Length; nameLength=$entry.Name.Length; digest=$digest}
-            $writer.Write([Text.Encoding]::Unicode.GetBytes($entry.Name))
-            ++$id
-        }
-        & $writeRecord $recordFields @{resourceId=0; flags=($constants.kPackageDesktopFlag -bor $constants.kPackageProductFlag);
-            machine=0; size=0; nameLength=$names.kInstallerFile.Length; digest=[byte[]]::new($digestSize)}
-        $writer.Write([Text.Encoding]::Unicode.GetBytes($names.kInstallerFile))
-        $writer.Flush()
-        [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($ResourcePath)) | Out-Null
-        $resourceLines += "$($constants.kPackageManifestResourceId) RCDATA ""$($ManifestPath.Replace('\','/'))"""
-        [IO.File]::WriteAllLines($ResourcePath,$resourceLines,[Text.UTF8Encoding]::new($false))
-        [IO.File]::WriteAllBytes($ManifestPath,$memory.ToArray())
-
-    } finally { $writer.Dispose(); $memory.Dispose() }
-}
-
 
 function Invoke-WindowsBuild {
     [CmdletBinding()]
@@ -498,8 +399,6 @@ if ($MyInvocation.InvocationName -ne '.') {
     } elseif ($WriteBuildResources) {
         if (!$OutputDirectory -or !$TargetArchitecture -or $TargetArchitecture -ieq 'auto') { throw 'OutputDirectory and an explicit TargetArchitecture are required with WriteBuildResources.' }
         Write-BuildResources -Directory $OutputDirectory -Architecture $TargetArchitecture
-    } elseif ($PackageVersion) {
-        Write-EmbeddedPackage -Version $PackageVersion -ResourcePath $PackageResourcePath -ManifestPath $PackageManifestPath -DesktopFileList $DesktopFileList -Files $PackageFiles
     } else {
         Get-NativeWindowsArchitecture
     }

@@ -6,6 +6,7 @@ No iPhone app is used. Windows system pairing identifies the selected phone; the
 
 ## Shared contracts
 
+- [ProductIdentity.h](windows/ProductIdentity.h): durable configured-user SID shared by MSI, service and CP, independent of installation transactions.
 - [SystemBleContract.h](windows/Bluetooth/SystemBleContract.h): ANCS/Notification Source UUIDs, binding record layout, RSSI range −100…−20 dBm, 1 dBm step, −60 dBm default, 15-second BLE deadline and 3-second evidence lifetime.
 - [SavedCredentialIpc.h](windows/SavedCredential/SavedCredentialIpc.h): IPC version **3**, operations, status/failure enums, binding and packet codecs. Unsupported versions and operations are rejected.
 - [SystemBleSession](windows/Bluetooth/SystemBleSession.cpp): reusable paired BLE endpoint and protected GATT operations. [PresenceAuthorization](windows/Bluetooth/PresenceAuthorization.h) combines communication with request-local RSSI from [RssiSampler](windows/Bluetooth/RssiSampler.h), shared with the independent diagnostic.
@@ -24,11 +25,11 @@ The read-only `serviceDiagnostics` IPC operation returns the latest request's ve
 
 ## Registration storage
 
-`%ProgramData%\UnlockWindowsWithIPhone\enrollment.dat` retains machine-bound DPAPI encryption, protected pending-file creation, flushing and atomic replacement. SYSTEM and Administrators alone can write the file and its parent directory. The service owns storage; ordinary desktop clients read non-sensitive status over IPC.
+`%ProgramData%\UnlockWithIPhone\binding.dat` retains machine-bound DPAPI encryption, protected pending-file creation, flushing and atomic replacement. SYSTEM and Administrators alone can write the file and its parent directory. The service owns storage; ordinary desktop clients read non-sensitive status over IPC.
 
 The encrypted version-2 record retains its byte layout. It stores target SID, BLE endpoint ID, display name and threshold; legacy Classic ID and ContainerId slots are unused for identity verification. New bindings write empty/zero legacy values; old records remain readable without migration, and threshold edits preserve their values.
 
-Deploy matching desktop/service binaries; older software cannot read new bindings. Unsupported formats, corruption and permission failures remain errors, distinct from an absent record. Password storage is unchanged.
+Deploy matching desktop/service binaries; older software cannot read new bindings. Unsupported formats, corruption and permission failures remain errors, distinct from an absent record.
 
 ## Request and one-time approval
 

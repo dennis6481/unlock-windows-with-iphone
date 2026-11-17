@@ -2,7 +2,7 @@
 
 # Windows developer guide
 
-The Windows side contains four installed components: the desktop app, LocalSystem credential service, Credential Provider DLL and maintenance installer. [PROTOCOL.md](../PROTOCOL.md) defines authentication; [SECURITY.md](../SECURITY.md) explains credential protection.
+The Windows side contains three installed components: the desktop app, LocalSystem credential service and Credential Provider DLL, deployed by MSI to `%ProgramFiles%\Unlock Windows with iPhone` alongside desktop runtime files. [PROTOCOL.md](../PROTOCOL.md) defines authentication; [SECURITY.md](../SECURITY.md) explains credential protection.
 
 ## Compatibility
 
@@ -15,6 +15,7 @@ The Windows side contains four installed components: the desktop app, LocalSyste
 - Windows and Visual Studio 2022 / 2026 or matching Build Tools with **Desktop development with C++**, **C++ WinUI app development tools**, MSVC C++20 support and the target architecture's tools. The WinUI tools supply native XAML MSBuild targets. ARM64 requires the ARM64 C++ tools component.
 - Windows SDK **10.0.22621.0 or newer** with C++/WinRT headers and `cppwinrt.exe`; a recent SDK is recommended. The C++/WinRT NuGet package supplies the MSBuild integration.
 - **GNU Make** available on `PATH`, plus the Visual Studio `MSBuild.exe` and Windows SDK tools supplied by the installation above. `make` remains the public entry point; it invokes the checked-in MSBuild solution and projects directly.
+- WiX SDK and UI extension **7.0.1**, restored by the MSI project. Review the [WiX EULA and build prerequisites](https://docs.firegiant.com/wix/). No .NET runtime is required on target PCs by the native custom actions.
 - Run from a native Windows PowerShell or command prompt. The Makefile uses Windows commands and is not a WSL build workflow.
 
 From the repository root:
@@ -25,11 +26,11 @@ make -C windows test
 make -C windows build-release
 ```
 
-`test` builds first and then runs the four native test programs in their existing order. `make -C windows` builds and runs tests; `build-release` builds Release targets without executing them. The shared [WindowsBuild.ps1](WindowsBuild.ps1) helper finds Visual Studio with `vswhere`, selects native `x64` or `arm64`, initializes the MSBuild environment and validates the Windows SDK tools.
+`test` builds first and then runs the three native test programs in their existing order. `make -C windows` builds and runs tests; `build-release` builds Release targets without executing them. The shared [WindowsBuild.ps1](WindowsBuild.ps1) helper finds Visual Studio with `vswhere`, selects native `x64` or `arm64`, initializes the MSBuild environment and validates the Windows SDK tools.
 
 Product versions use `major.minor.patch.build` from [ProductVersion.h](ProductVersion.h); About displays `Version X.Y.Z (Build B)`. A complete local solution Build/Rebuild uses one fixed version, then advances the header's build once for the next invocation after success. `make` and `make test` wait for tests to pass too.
 
-Failed/cancelled builds, configure, clean, standalone tests and subprojects do not advance it. CI keeps the committed version. Parts range from 0 to 65535; set the next release/build manually before incrementing would overflow. Build one invocation at a time per checkout.
+Failed/cancelled builds, configure, clean, standalone tests and subprojects do not advance it. CI keeps the committed version. MSI major/minor range from 0 to 255; patch/build range from 0 to 65535. Out-of-range fields are rejected without truncation; set the next release/build manually before incrementing would overflow. Build one invocation at a time per checkout.
 
 To select a target and separate build directories explicitly:
 
@@ -39,24 +40,24 @@ make -C windows build-release TARGET_ARCH=arm64 BUILD_DIR=build/arm64-release
 ```
 
 
-The installer is generated at `dist/UnlockWithIPhone_<version>_<architecture>_setup.exe` in the repository root, with `x64` or `arm64` matching the compiler target and the first three version parts read from [ProductVersion.h](ProductVersion.h). Distribute only the **Release** setup EXE; it embeds the desktop app and its runtime files, service and Credential Provider. Static libraries are isolated under `lib/<architecture>/<configuration>` to prevent Debug/Release runtime mixing. Use separate build directories per architecture/configuration; the active desktop EXE remains at the build root for existing make commands.
+The installer is generated at `dist/UnlockWithIPhone_<version>_<architecture>_setup.msi` in the repository root, with `x64` or `arm64` matching the compiler target and the first three version parts read from [ProductVersion.h](ProductVersion.h). Distribute only the **Release** MSI; it embeds the desktop app and its runtime files, service and Credential Provider. Static libraries are isolated under `lib/<architecture>/<configuration>` to prevent Debug/Release runtime mixing. Use separate build directories per architecture/configuration; the active desktop EXE remains at the build root for existing make commands.
 
-The desktop build follows make → MSBuild Solution/.vcxproj. Native libraries, the service, Credential Provider, desktop WinUI app and installer are separate projects with explicit dependencies and outputs. Pinned Windows App SDK packages and Hybrid CRT remain in use; local NuGet caches and Visual Studio user settings are ignored by Git. XAML generation and `DesktopApp.files` preserve the pages' relative directories. `DesktopApp.files` comes from the WinUI project; packaging embeds one dependency manifest for paths, sizes, SHA-256 and PE machine types. Third-party files retain their versions.
+The desktop build follows make → MSBuild Solution/.vcxproj. Native libraries, the service, Credential Provider, desktop WinUI app and installer are separate projects with explicit dependencies and outputs. Pinned Windows App SDK packages and Hybrid CRT remain in use; local NuGet caches and Visual Studio user settings are ignored by Git. XAML generation and `DesktopApp.files` preserve the pages' relative directories. `DesktopApp.files` comes from the WinUI project; MSI payload authoring is generated from `ComponentFiles.h` and `DesktopApp.files`. CI extracts embedded cabinets without installation and checks payload hashes, PE architectures and four-part product versions. Third-party files retain their versions.
 
 ## Install and configure
 
 For installation and setup, see the [main guide](../README.md#installation).
 
-Open **Unlock with iPhone** from the Start Menu to show the main window. Install/update creates the all-users shortcut; uninstall removes it.
+The standard welcome page identifies the product and its full four-part version. Click **Next**, then **Install** to install; no license-acceptance page is shown. After installation, update or Repair, clicking **Finish** on the standard completion page launches the app with ordinary user privileges; uninstall does not launch it. When a restart is required, launch the app after restarting. Silent installation does not launch it. Open **Unlock with iPhone** from the Start Menu at any time. Install/update creates the all-users shortcut; uninstall removes it.
 
 - Save your Windows account password (MSA or local), not your PIN. Empty passwords are unsupported. Update the saved copy whenever the password or complete account identity changes; see [password management](SavedCredential/README.md#password-management).
 - Remove the paired iPhone on **Status**, or delete the saved password on **Password**; these are separate actions.
 
 ## Update and uninstall
 
-Run a newer installer to **Update**, or the same version to **Reinstall**. All four version parts participate in this comparison; three-part installed versions default to build `0`. Downgrades are rejected. Updates preserve your saved password and pairing information.
+Run a newer installer to **Update**, or the same version to **Reinstall**. All four version parts participate in this comparison, including the fourth-part check in the execute sequence. Running the same MSI opens maintenance; Repair replaces equal-version files. Downgrades are rejected. MSI manages service stop/start and file replacement; updates and repairs preserve your saved password, binding, configured SID and existing login startup setting. EXE installations must first be uninstalled with their original installer; installing MSI afterward requires saving your password and binding your iPhone again.
 
-For uninstall instructions, see the [main guide](../README.md#uninstall). For installation compatibility and failure recovery, see the [installer guide](Setup/README.md).
+For uninstall instructions, see the [main guide](../README.md#uninstall).
 
 ## Troubleshooting
 
@@ -74,13 +75,12 @@ windows/
 ├── Enrollment/         Binding client, UAC helper and protected binding store.
 ├── SavedCredential/    Credential service, IPC, encrypted password storage and management UI.
 ├── CredentialProvider/ Windows sign-in tile and native credential submission.
-├── Protocol/           SHA-256 hashing for installer package integrity.
-├── Setup/              Installation, updates, removal and restart continuation.
+├── Msi/                WiX package and native lifecycle actions.
 ├── Resources/          Win32 appearance, manifests, icons and version resources.
 └── *Tests/             C++ regression tests orchestrated by UnlockWindowsTests.proj.
 ```
 
-Module guides: [SavedCredential](SavedCredential/README.md), [CredentialProvider](CredentialProvider/README.md) and [Setup](Setup/README.md). See [PROTOCOL.md](../PROTOCOL.md) for the shared protocol.
+Module guides: [SavedCredential](SavedCredential/README.md) and [CredentialProvider](CredentialProvider/README.md). See [PROTOCOL.md](../PROTOCOL.md) for the shared protocol.
 
 ## Desktop app roles
 
@@ -110,7 +110,7 @@ The main window uses Mica and system theme colors; Windows 10 uses the framework
 
 Pushing `v1.0.0` publishes a Release; `v1.0.0-rc` or numbered RC tags such as `v1.0.0-rc1` publish a Pre-release without marking it Latest. The numeric tag must match the first three parts in [ProductVersion.h](ProductVersion.h); installer versions retain all four committed parts, while Release download filenames use three parts. About checks public updates using the first three parts only. The RC suffix is GitHub release metadata only, so RC and final installers with the same four-part version use Reinstall.
 
-CI uses `WindowsBuild.ps1` without GNU Make. [PR builds](../.github/workflows/pr.yml) compile the Release solution for x64 and ARM64 when targeting `dev` or `main`, without running tests or publishing a release. Each uploads an installer with a three-part version filename in an artifact named `UnlockWithIPhone_<version>_<architecture>_setup-SNAPSHOT(<build>)`, using the product version's fourth part in parentheses; require **Build x64** and **Build arm64** in the target branch ruleset to block failed builds from merging. [Release CI](../.github/workflows/release.yml) runs all four native test programs on both architectures before building and verifying installers; any failure blocks publication.
+CI uses `WindowsBuild.ps1` without GNU Make. [PR builds](../.github/workflows/pr.yml) compile the Release solution for x64 and ARM64 when targeting `dev` or `main`, without running native tests or publishing a release; MSI structure and extracted payload checks run before upload. Each uploads an installer with a three-part version filename in an artifact named `UnlockWithIPhone_<version>_<architecture>_setup-SNAPSHOT(<build>)`, using the product version's fourth part in parentheses; require **Build x64** and **Build arm64** in the target branch ruleset to block failed builds from merging. [Release CI](../.github/workflows/release.yml) runs all three native test programs on both architectures before building and verifying installers; any failure blocks publication.
 
 ## Local-account validation
 

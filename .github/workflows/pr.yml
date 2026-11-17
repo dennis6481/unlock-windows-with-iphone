@@ -45,6 +45,12 @@ jobs:
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File WindowsBuild.ps1 -InvokeMSBuild "UnlockWindows.sln" /restore /m /nologo "/p:Configuration=Release" "/p:UnlockBuildDirectory=%CD%\build" "/p:BuildTesting=OFF"
           if errorlevel 1 exit /b %errorlevel%
 
+      - name: Verify MSI database and embedded payload
+        shell: pwsh
+        run: |
+          . .\WindowsBuild.ps1
+          $metadata = Get-ProductBuildMetadata -Architecture $env:UNLOCK_TARGET_ARCH
+          .\Msi\Build.ps1 -Validate -PackagePath "..\dist\$($metadata.SetupFile)" -BuildDirectory build -Architecture $env:UNLOCK_TARGET_ARCH
       - name: Determine snapshot artifact name
         id: snapshot
         shell: pwsh

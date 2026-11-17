@@ -3,6 +3,7 @@
 #include "EnrollmentStore.h"
 #include "../SavedCredential/SavedCredentialIpc.h"
 #include "../ProtectedStorage.h"
+#include "../ProductIdentity.h"
 
 #include <Windows.h>
 #include <aclapi.h>
@@ -22,6 +23,8 @@ namespace {
 
 constexpr std::uint32_t kFileMagic = 0x324B4E45; // "ENK2" in little-endian memory
 constexpr std::uint16_t kFileVersion = 2;
+constexpr std::size_t kPendingNonceSize = 16;
+constexpr wchar_t kHexAlphabet[] = L"0123456789abcdef";
 #pragma pack(push, 1)
 struct FileHeader final {
     std::uint32_t magic;
@@ -237,7 +240,7 @@ std::wstring EnrollmentStore::defaultPath() {
         throw std::runtime_error(win32Error("GetEnvironmentVariableW(ProgramData)"));
     }
     programData.resize(length);
-    return programData + L"\\" + kEnrollmentDataDirectoryName + L"\\" + kEnrollmentFileName;
+    return programData + L"\\" + unlock::components::kProductDataDirectoryName + L"\\" + kEnrollmentFileName;
 }
 
 EnrollmentStore::EnrollmentStore(std::wstring path) : path_(std::move(path)) {
@@ -315,14 +318,13 @@ void EnrollmentStore::save(const BindingRecord& record, const std::function<void
         kFileVersion,
         static_cast<std::uint16_t>(encrypted.size())
     };
-    std::array<std::uint8_t, 16> nonce{};
+    std::array<std::uint8_t, kPendingNonceSize> nonce{};
     requireNtStatus(BCryptGenRandom(nullptr, nonce.data(), static_cast<ULONG>(nonce.size()),
         BCRYPT_USE_SYSTEM_PREFERRED_RNG), "BCryptGenRandom(enrollment temporary file)");
     std::wstring temporary = path_ + kEnrollmentPendingSuffix;
-    constexpr wchar_t alphabet[] = L"0123456789abcdef";
     for (const auto value : nonce) {
-        temporary += alphabet[value >> 4];
-        temporary += alphabet[value & 15];
+        temporary += kHexAlphabet[value >> 4];
+        temporary += kHexAlphabet[value & 15];
     }
     PSECURITY_DESCRIPTOR descriptor = nullptr;
     auto attributes = protectedFileAttributes(descriptor);
@@ -368,12 +370,33 @@ void EnrollmentStore::save(const BindingRecord& record, const std::function<void
 
 void EnrollmentStore::remove() const {
     WriterLock writer;
-    if (DeleteFileW(path_.c_str()) == FALSE) {
-        const DWORD error = GetLastError();
-        if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) {
-            return;
-        }
-        throw std::runtime_error(win32Error("DeleteFile(enrollment)"));
+    const auto directory = std::filesystem::path(path_).parent_path();
+    if (GetFileAttributesW(directory.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        const auto error = GetLastError();
+        if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) return;
+        throw winrt::hresult_error(HRESULT_FROM_WIN32(error));
+    }
+    storage::verifyProtectedPath(directory, true);
+    const auto filename = std::filesystem::path(path_).filename().wstring();
+    const auto pendingPrefix = filename + kEnrollmentPendingSuffix;
+    // Validate all binding files before deleting any ciphertext, including orphaned writes.
+    std::vector<std::filesystem::path> files;
+    for (const auto& entry : std::filesystem::directory_iterator(directory)) {
+        const auto name = entry.path().filename().wstring();
+        const bool pending = name.size() == pendingPrefix.size() + 2 * kPendingNonceSize &&
+            name.compare(0, pendingPrefix.size(), pendingPrefix) == 0 &&
+            name.find_first_not_of(kHexAlphabet, pendingPrefix.size()) == std::wstring::npos;
+        if (name != filename && !pending) continue;
+        storage::verifyProtectedPath(entry.path(), false);
+        files.push_back(entry.path());
+    }
+    for (const auto& file : files) {
+        requireWin32(DeleteFileW(file.c_str()), "DeleteFile(enrollment)");
+        if (GetFileAttributesW(file.c_str()) != INVALID_FILE_ATTRIBUTES)
+            throw std::runtime_error("Binding deletion unconfirmed");
+        const auto error = GetLastError();
+        if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND)
+            throw winrt::hresult_error(HRESULT_FROM_WIN32(error));
     }
 }
 

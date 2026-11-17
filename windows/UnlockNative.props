@@ -7,8 +7,6 @@
     <LibraryPath Condition="!Exists('$(VCToolsInstallDir)atlmfc\lib\$(Platform)')">$([System.String]::Copy('$(LibraryPath)').Replace('$(VCToolsInstallDir)atlmfc\lib\$(Platform);', ''))</LibraryPath>
     <OutDir Condition="'$(OutDir)' == ''">$(UnlockBuildDirectory)\</OutDir>
     <IntDir Condition="'$(IntDir)' == ''">$(UnlockBuildDirectory)\obj\$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
-    <PlatformToolset Condition="'$(PlatformToolset)' == ''">v145</PlatformToolset>
-    <PlatformToolset Condition="'$(VisualStudioVersion)' == '17.0'">v143</PlatformToolset>
     <WindowsTargetPlatformVersion Condition="'$(WindowsTargetPlatformVersion)' == ''">$(WindowsSDKVersion)</WindowsTargetPlatformVersion>
     <UseDebugLibraries Condition="'$(Configuration)' == 'Debug'">true</UseDebugLibraries>
     <UseDebugLibraries Condition="'$(Configuration)' == 'Release'">false</UseDebugLibraries>

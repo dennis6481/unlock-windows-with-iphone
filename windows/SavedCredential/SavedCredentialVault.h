@@ -9,7 +9,7 @@
 
 namespace unlock_windows::saved_credential {
 
-inline constexpr wchar_t kVaultDirectoryName[] = L"UnlockWindowsSavedCredential";
+inline constexpr wchar_t kVaultDirectoryName[] = L"Credentials";
 
 class Vault final {
 public:
@@ -19,8 +19,10 @@ public:
               std::size_t passwordBytes, bool replace);
     [[nodiscard]] SensitiveBytes release(const Identity& expected) const;
     void clear();
+    static void clearStored();
 
 private:
+    static void clearDirectory(const std::filesystem::path& directory);
     std::filesystem::path directory_;
     std::filesystem::path file_;
 };

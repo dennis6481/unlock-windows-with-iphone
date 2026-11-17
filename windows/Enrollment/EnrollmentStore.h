@@ -9,10 +9,9 @@
 
 namespace unlock_windows::system_ble {
 
-inline constexpr wchar_t kEnrollmentDataDirectoryName[] = L"UnlockWindowsWithIPhone";
-inline constexpr wchar_t kEnrollmentFileName[] = L"enrollment.dat";
+inline constexpr wchar_t kEnrollmentFileName[] = L"binding.dat";
 inline constexpr wchar_t kEnrollmentPendingSuffix[] = L".pending-";
-inline constexpr wchar_t kEnrollmentWriterMutex[] = L"Global\\UnlockWindowsWithIPhone-EnrollmentWriter";
+inline constexpr wchar_t kEnrollmentWriterMutex[] = L"Global\\UnlockWithIPhone-EnrollmentWriter";
 
 class EnrollmentStore final {
 public:

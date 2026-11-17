@@ -51,7 +51,6 @@ test: configure
 clean:
 	set "UNLOCK_VS_DEV_CMD=$(VS_DEV_CMD)" && set "UNLOCK_TARGET_ARCH=$(TARGET_ARCH)" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(WINDOWS_BUILD_SCRIPT)" -InvokeMSBuild "$(SOLUTION)" /t:Clean /m /nologo "/p:Configuration=$(CONFIG)" "/p:UnlockBuildDirectory=$(ABS_BUILD_DIR)"
 	if exist "$(BUILD_DIR)\generated" rmdir /s /q "$(BUILD_DIR)\generated"
-	if exist "$(BUILD_DIR)\package" rmdir /s /q "$(BUILD_DIR)\package"
 
 run-app: build
 	"$(BUILD_DIR)\UnlockWithIPhone.exe"
